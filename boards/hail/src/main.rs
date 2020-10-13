@@ -1,3 +1,4 @@
+
 //! Board file for Hail development platform.
 //!
 //! - <https://github.com/tock/tock/tree/master/boards/hail>
@@ -13,6 +14,8 @@
 use capsules::virtual_alarm::VirtualMuxAlarm;
 use capsules::virtual_i2c::{I2CDevice, MuxI2C};
 use capsules::virtual_spi::VirtualSpiMasterDevice;
+use capsules::rfm69::Rfm69;
+use components::spi::SpiComponent;
 use kernel::capabilities;
 use kernel::common::dynamic_deferred_call::{DynamicDeferredCall, DynamicDeferredCallClientState};
 use kernel::component::Component;
@@ -61,7 +64,7 @@ struct Hail {
     spi: &'static capsules::spi_controller::Spi<
         'static,
         VirtualSpiMasterDevice<'static, sam4l::spi::SpiHw>,
-    >,
+        >,
     nrf51822: &'static capsules::nrf51822_serialization::Nrf51822Serialization<'static>,
     adc: &'static capsules::adc::AdcDedicated<'static, sam4l::adc::Adc>,
     led: &'static capsules::led::LED<'static, sam4l::gpio::GPIOPin<'static>>,
@@ -70,6 +73,7 @@ struct Hail {
     ipc: kernel::ipc::IPC,
     crc: &'static capsules::crc::Crc<'static, sam4l::crccu::Crccu<'static>>,
     dac: &'static capsules::dac::Dac<'static>,
+    radio: &'static capsules::rfm69::Rfm69<'static>,
 }
 
 /// Mapping of integer syscalls to objects that implement syscalls.
@@ -381,6 +385,13 @@ pub unsafe fn reset_handler() {
         capsules::dac::Dac::new(&sam4l::dac::DAC)
     );
 
+    // Radio
+    let radio_spi = SpiComponent::new(mux_spi, 0)
+        .finalize(components::spi_component_helper!(sam4l::spi::SpiHw));
+    let radio = static_init!(
+        capsules::rfm69::Rfm69<'static>,
+        capsules::rfm69::Rfm69::new(radio_spi));
+
     // // DEBUG Restart All Apps
     // //
     // // Uncomment to enable a button press to restart all apps.
@@ -425,6 +436,7 @@ pub unsafe fn reset_handler() {
         ipc: kernel::ipc::IPC::new(board_kernel, &memory_allocation_capability),
         crc: crc,
         dac: dac,
+        radio: radio,
     };
 
     // Setup the UART bus for nRF51 serialization..
