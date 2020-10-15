@@ -1,7 +1,9 @@
 use kernel::hil::spi;
 use kernel::{AppId, Driver, ReturnCode};
 
-use core::convert::Into;
+use core::convert::From;
+
+pub const DRIVER_NUM: usize = crate::driver::NUM::Ism as usize;
 
 enum OpMode {
     Sleep = 0,
@@ -49,7 +51,7 @@ impl<'a> Driver for Rfm69<'a> {
     fn command(&self, minor_num: usize, r2: usize, r3: usize, caller_id: AppId) -> ReturnCode {
         match minor_num {
             0 => ReturnCode::SUCCESS,
-            1 => self.setup(),
+            1 => self.reset(),
             2 => {
                 let (mode, _) = (r2, r3);
                 self.set_mode(OpMode::from(mode))
