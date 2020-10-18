@@ -14,7 +14,6 @@
 use capsules::virtual_alarm::VirtualMuxAlarm;
 use capsules::virtual_i2c::{I2CDevice, MuxI2C};
 use capsules::virtual_spi::VirtualSpiMasterDevice;
-use capsules::rfm69::Rfm69;
 use components::spi::SpiComponent;
 use kernel::capabilities;
 use kernel::common::dynamic_deferred_call::{DynamicDeferredCall, DynamicDeferredCallClientState};
@@ -47,6 +46,9 @@ static mut CHIP: Option<&'static sam4l::chip::Sam4l> = None;
 #[no_mangle]
 #[link_section = ".stack_buffer"]
 pub static mut STACK_MEMORY: [u8; 0x1000] = [0; 0x1000];
+
+/// Radio buffer
+static mut RFM69_BUFFER: [u8; 66] = [0; 66];
 
 /// A structure representing this platform that holds references to all
 /// capsules for this platform.
@@ -96,6 +98,7 @@ impl Platform for Hail {
             capsules::humidity::DRIVER_NUM => f(Some(self.humidity)),
             capsules::temperature::DRIVER_NUM => f(Some(self.temp)),
             capsules::ninedof::DRIVER_NUM => f(Some(self.ninedof)),
+            capsules::rfm69::DRIVER_NUM => f(Some(self.radio)),
 
             capsules::rng::DRIVER_NUM => f(Some(self.rng)),
 
@@ -390,7 +393,8 @@ pub unsafe fn reset_handler() {
         .finalize(components::spi_component_helper!(sam4l::spi::SpiHw));
     let radio = static_init!(
         capsules::rfm69::Rfm69<'static>,
-        capsules::rfm69::Rfm69::new(radio_spi));
+        capsules::rfm69::Rfm69::new(radio_spi, &mut RFM69_BUFFER));
+    radio_spi.set_client(radio);
 
     // // DEBUG Restart All Apps
     // //

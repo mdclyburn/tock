@@ -1,3 +1,4 @@
+use kernel::common::cells::TakeCell;
 use kernel::hil::spi;
 use kernel::{AppId, Driver, ReturnCode};
 
@@ -28,12 +29,14 @@ impl From<usize> for OpMode {
 
 pub struct Rfm69<'a> {
     spi: &'a dyn spi::SpiMasterDevice,
+    buffer: TakeCell<'static, [u8]>,
 }
 
 impl<'a> Rfm69<'a> {
-    pub fn new(s: &'a dyn spi::SpiMasterDevice) -> Rfm69 {
+    pub fn new(s: &'a dyn spi::SpiMasterDevice, buffer: &'static mut [u8]) -> Rfm69<'a> {
         Rfm69 {
             spi: s,
+            buffer: TakeCell::new(buffer),
         }
     }
 
@@ -42,8 +45,29 @@ impl<'a> Rfm69<'a> {
         ReturnCode::SUCCESS
     }
 
-    fn set_mode(&self, _mode: OpMode) -> ReturnCode {
-        ReturnCode::SUCCESS
+    fn set_mode(&self, mode: OpMode) -> ReturnCode {
+        if let Some(buffer) = self.buffer.take() {
+            buffer[0] = 0x01 | 128;
+            buffer[1] = match mode {
+                OpMode::Sleep => 0,
+                OpMode::Receive => 4 << 2,
+                _ => 0,
+            };
+
+            self.spi.read_write_bytes(buffer, None, 2)
+        } else {
+            ReturnCode::EBUSY
+        }
+    }
+}
+
+impl<'a> spi::SpiMasterClient for Rfm69<'a> {
+    fn read_write_done(
+        &self,
+        write_buffer: &'static mut [u8],
+        _read_buffer: Option<&'static mut [u8]>,
+        _len: usize) {
+        self.buffer.put(Some(write_buffer));
     }
 }
 
