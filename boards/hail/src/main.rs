@@ -50,6 +50,9 @@ pub static mut STACK_MEMORY: [u8; 0x1000] = [0; 0x1000];
 /// Radio buffer
 static mut RFM69_BUFFER: [u8; 66] = [0; 66];
 
+/// Energy accounting data
+static mut EACCT_ACC: [usize; NUM_PROCS] = [0; NUM_PROCS];
+
 /// A structure representing this platform that holds references to all
 /// capsules for this platform.
 struct Hail {
@@ -68,7 +71,7 @@ struct Hail {
         VirtualSpiMasterDevice<'static, sam4l::spi::SpiHw>,
         >,
     nrf51822: &'static capsules::nrf51822_serialization::Nrf51822Serialization<'static>,
-    adc: &'static capsules::adc::AdcDedicated<'static, sam4l::adc::Adc>,
+    // adc: &'static capsules::adc::AdcDedicated<'static, sam4l::adc::Adc>,
     led: &'static capsules::led::LED<'static, sam4l::gpio::GPIOPin<'static>>,
     button: &'static capsules::button::Button<'static, sam4l::gpio::GPIOPin<'static>>,
     rng: &'static capsules::rng::RngDriver<'static>,
@@ -76,6 +79,7 @@ struct Hail {
     crc: &'static capsules::crc::Crc<'static, sam4l::crccu::Crccu<'static>>,
     dac: &'static capsules::dac::Dac<'static>,
     radio: &'static capsules::rfm69::Rfm69<'static>,
+    eacct: &'static capsules::eacct::EnergyAccount<'static, sam4l::adc::Adc>,
 }
 
 /// Mapping of integer syscalls to objects that implement syscalls.
@@ -92,13 +96,15 @@ impl Platform for Hail {
             capsules::spi_controller::DRIVER_NUM => f(Some(self.spi)),
             capsules::nrf51822_serialization::DRIVER_NUM => f(Some(self.nrf51822)),
             capsules::ambient_light::DRIVER_NUM => f(Some(self.ambient_light)),
-            capsules::adc::DRIVER_NUM => f(Some(self.adc)),
+            // capsules::adc::DRIVER_NUM => f(Some(self.adc)),
             capsules::led::DRIVER_NUM => f(Some(self.led)),
             capsules::button::DRIVER_NUM => f(Some(self.button)),
             capsules::humidity::DRIVER_NUM => f(Some(self.humidity)),
             capsules::temperature::DRIVER_NUM => f(Some(self.temp)),
             capsules::ninedof::DRIVER_NUM => f(Some(self.ninedof)),
             capsules::rfm69::DRIVER_NUM => f(Some(self.radio)),
+
+            capsules::eacct::DRIVER_NUM => f(Some(self.eacct)),
 
             capsules::rng::DRIVER_NUM => f(Some(self.rng)),
 
@@ -338,29 +344,29 @@ pub unsafe fn reset_handler() {
     .finalize(components::button_component_buf!(sam4l::gpio::GPIOPin));
 
     // Setup ADC
-    let adc_channels = static_init!(
-        [&'static sam4l::adc::AdcChannel; 6],
-        [
-            &sam4l::adc::CHANNEL_AD0, // A0
-            &sam4l::adc::CHANNEL_AD1, // A1
-            &sam4l::adc::CHANNEL_AD3, // A2
-            &sam4l::adc::CHANNEL_AD4, // A3
-            &sam4l::adc::CHANNEL_AD5, // A4
-            &sam4l::adc::CHANNEL_AD6, // A5
-        ]
-    );
-    let adc = static_init!(
-        capsules::adc::AdcDedicated<'static, sam4l::adc::Adc>,
-        capsules::adc::AdcDedicated::new(
-            &sam4l::adc::ADC0,
-            board_kernel.create_grant(&memory_allocation_capability),
-            adc_channels,
-            &mut capsules::adc::ADC_BUFFER1,
-            &mut capsules::adc::ADC_BUFFER2,
-            &mut capsules::adc::ADC_BUFFER3
-        )
-    );
-    sam4l::adc::ADC0.set_client(adc);
+    // let adc_channels = static_init!(
+    //     [&'static sam4l::adc::AdcChannel; 6],
+    //     [
+    //         &sam4l::adc::CHANNEL_AD0, // A0
+    //         &sam4l::adc::CHANNEL_AD1, // A1
+    //         &sam4l::adc::CHANNEL_AD3, // A2
+    //         &sam4l::adc::CHANNEL_AD4, // A3
+    //         &sam4l::adc::CHANNEL_AD5, // A4
+    //         &sam4l::adc::CHANNEL_AD6, // A5
+    //     ]
+    // );
+    // let adc = static_init!(
+    //     capsules::adc::AdcDedicated<'static, sam4l::adc::Adc>,
+    //     capsules::adc::AdcDedicated::new(
+    //         &sam4l::adc::ADC0,
+    //         board_kernel.create_grant(&memory_allocation_capability),
+    //         adc_channels,
+    //         &mut capsules::adc::ADC_BUFFER1,
+    //         &mut capsules::adc::ADC_BUFFER2,
+    //         &mut capsules::adc::ADC_BUFFER3
+    //     )
+    // );
+    // sam4l::adc::ADC0.set_client(adc);
 
     // Setup RNG
     let rng = components::rng::RngComponent::new(board_kernel, &sam4l::trng::TRNG).finalize(());
@@ -395,6 +401,11 @@ pub unsafe fn reset_handler() {
         capsules::rfm69::Rfm69<'static>,
         capsules::rfm69::Rfm69::new(radio_spi, &mut RFM69_BUFFER));
     radio_spi.set_client(radio);
+
+    // Setup energy accounting.
+    let eacct = static_init!(
+        capsules::eacct::EnergyAccount<'static, sam4l::adc::Adc>,
+        capsules::eacct::EnergyAccount::new(&sam4l::adc::ADC0, &mut EACCT_ACC));
 
     // // DEBUG Restart All Apps
     // //
@@ -433,7 +444,7 @@ pub unsafe fn reset_handler() {
         ninedof: ninedof,
         spi: spi_syscalls,
         nrf51822: nrf_serialization,
-        adc: adc,
+        // adc: adc,
         led: led,
         button: button,
         rng: rng,
@@ -441,6 +452,7 @@ pub unsafe fn reset_handler() {
         crc: crc,
         dac: dac,
         radio: radio,
+        eacct: eacct,
     };
 
     // Setup the UART bus for nRF51 serialization..
