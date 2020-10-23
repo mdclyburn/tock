@@ -250,7 +250,7 @@ impl<'a, A: hil::adc::Adc + hil::adc::AdcHighSpeed> AdcDedicated<'a, A> {
     /// Collect a single analog sample on a channel.
     ///
     /// - `channel` - index into `channels` array, which channel to sample
-    fn sample(&self, channel: usize) -> ReturnCode {
+    pub fn sample(&self, channel: usize) -> ReturnCode {
         // only one sample at a time
         if self.active.get() {
             return ReturnCode::EBUSY;
