@@ -6,6 +6,7 @@ use core::convert::From;
 
 pub const DRIVER_NUM: usize = crate::driver::NUM::Ism as usize;
 
+/// Radio operating mode.
 enum OpMode {
     Sleep = 0,
     Standby = 1,
@@ -27,6 +28,7 @@ impl From<usize> for OpMode {
     }
 }
 
+/// Driver for communicating with the RFM69HCW radio over SPI.
 pub struct Rfm69<'a> {
     spi: &'a dyn spi::SpiMasterDevice,
     buffer: TakeCell<'static, [u8]>,
@@ -40,11 +42,13 @@ impl<'a> Rfm69<'a> {
         }
     }
 
+    /// Reset and configure the radio.
     fn reset(&self) -> ReturnCode {
         self.spi.configure(spi::ClockPolarity::IdleLow, spi::ClockPhase::SampleLeading, 5000);
         ReturnCode::SUCCESS
     }
 
+    /// Change the radio operating mode.
     fn set_mode(&self, mode: OpMode) -> ReturnCode {
         if let Some(buffer) = self.buffer.take() {
             buffer[0] = 0x01 | 128;
