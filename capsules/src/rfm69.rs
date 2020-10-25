@@ -53,8 +53,11 @@ impl<'a> Rfm69<'a> {
         if let Some(buffer) = self.buffer.take() {
             buffer[0] = 0x01 | 128;
             buffer[1] = match mode {
-                OpMode::Sleep => 0,
-                OpMode::Receive => 4 << 2,
+                OpMode::Sleep => 0b000,
+                OpMode::Standby => 0b001,
+                OpMode::FrequencySynthesizer => 0b010,
+                OpMode::Transmit => 0b011,
+                OpMode::Receive => 0b100,
                 _ => 0,
             };
 
