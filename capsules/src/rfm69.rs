@@ -48,6 +48,18 @@ impl<'a> Rfm69<'a> {
         ReturnCode::SUCCESS
     }
 
+    /// Write to a single register.
+    fn write(&self, address: u8, value: u8) -> ReturnCode {
+        if let Some(buffer) = self.buffer.take() {
+            buffer[0] = 0b10000000 | address;
+            buffer[1] = value;
+
+            self.spi.read_write_bytes(buffer, None, 2)
+        } else {
+            ReturnCode::EBUSY
+        }
+    }
+
     /// Change the radio operating mode.
     fn set_mode(&self, mode: OpMode) -> ReturnCode {
         if let Some(buffer) = self.buffer.take() {
