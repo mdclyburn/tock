@@ -71,16 +71,18 @@ impl From<usize> for OpMode {
     }
 }
 
-enum NextOp {
+enum Status {
+    Idle,
+    Access,
     Modify(u8, u8, u8),
 }
 
 /// Driver for communicating with the RFM69HCW radio over SPI.
 pub struct Rfm69<'a> {
+    status: MapCell<Status>,
     spi: &'a dyn spi::SpiMasterDevice,
     tx_buffer: TakeCell<'static, [u8]>,
     rx_buffer: TakeCell<'static, [u8]>,
-    next_op: MapCell<NextOp>,
 }
 
 impl<'a> Rfm69<'a> {
@@ -88,10 +90,18 @@ impl<'a> Rfm69<'a> {
                tx_buffer: &'static mut [u8],
                rx_buffer: &'static mut [u8]) -> Rfm69<'a> {
         Rfm69 {
+            status: MapCell::new(Status::Idle),
             spi: s,
             tx_buffer: TakeCell::new(tx_buffer),
             rx_buffer: TakeCell::new(rx_buffer),
-            next_op: MapCell::empty(),
+        }
+    }
+
+    fn ready(&self) -> ReturnCode {
+        if self.tx_buffer.is_some() && self.rx_buffer.is_some() {
+            ReturnCode::SUCCESS
+        } else {
+            ReturnCode::EBUSY
         }
     }
 
@@ -106,6 +116,7 @@ impl<'a> Rfm69<'a> {
         if let Some(tx_buffer) = self.tx_buffer.take() {
             if let Some(rx_buffer) = self.rx_buffer.take() {
                 tx_buffer[0] = 0b01111111 & address;
+                self.status.put(Status::Access);
                 self.spi.read_write_bytes(tx_buffer, Some(rx_buffer), 2)
             } else {
                 ReturnCode::EBUSY
@@ -121,6 +132,7 @@ impl<'a> Rfm69<'a> {
             tx_buffer[0] = 0b10000000 | address;
             tx_buffer[1] = value;
 
+            self.status.put(Status::Access);
             self.spi.read_write_bytes(tx_buffer, None, 2)
         } else {
             ReturnCode::EBUSY
@@ -140,11 +152,16 @@ impl<'a> Rfm69<'a> {
             value = value << 1;
         }
 
-        if self.read(address) == ReturnCode::SUCCESS {
-            self.next_op.put(NextOp::Modify(address, mask, value));
-            ReturnCode::SUCCESS
+        if let Some(tx_buffer) = self.tx_buffer.take() {
+            if let Some(rx_buffer) = self.rx_buffer.take() {
+                tx_buffer[0] = 0b01111111 & address;
+                self.status.put(Status::Modify(address, mask, value));
+                self.spi.read_write_bytes(tx_buffer, Some(rx_buffer), 2)
+            } else {
+                ReturnCode::EBUSY
+            }
         } else {
-            ReturnCode::FAIL
+            ReturnCode::EBUSY
         }
     }
 
@@ -176,6 +193,18 @@ impl<'a> Rfm69<'a> {
             ReturnCode::EBUSY
         }
     }
+
+    fn fill(&self) -> ReturnCode {
+        if let Some(buffer) = self.tx_buffer.take() {
+            for i in 0..=55 {
+                buffer[i] = 0x7a;
+            }
+
+            ReturnCode::SUCCESS
+        } else {
+            ReturnCode::EBUSY
+        }
+    }
 }
 
 impl<'a> spi::SpiMasterClient for Rfm69<'a> {
@@ -187,9 +216,9 @@ impl<'a> spi::SpiMasterClient for Rfm69<'a> {
         self.tx_buffer.put(Some(write_buffer));
         self.rx_buffer.put(read_buffer);
 
-        if let Some(next) = self.next_op.take() {
+        if let Some(next) = self.status.take() {
             match next {
-                NextOp::Modify(address, mask, ins_val) => {
+                Status::Modify(address, mask, ins_val) => {
                     self.complete_modify(address, mask, ins_val);
                 },
                 _ => {  },
@@ -202,22 +231,42 @@ impl<'a> Driver for Rfm69<'a> {
     fn command(&self, minor_num: usize, r2: usize, r3: usize, _caller_id: AppId) -> ReturnCode {
         match minor_num {
             0 => ReturnCode::SUCCESS,
+
+            // Configure SPI, reset the device.
             1 => self.reset(),
 
-            // Set the operating mode.
+            // Current status.
             2 => {
+                let x = self.status.map_or(0, |current_status| {
+                    match current_status {
+                        Status::Idle => 0,
+                        Status::Access => 1,
+                        Status::Modify(_, _, _) => 2,
+                    }
+                });
+
+                ReturnCode::SuccessWithValue { value: x }
+            },
+
+            // Register read.
+            3 => {
+                let (address, _) = (r2 as u8, r3 as u8);
+                self.read(r2 as u8)
+            },
+
+            // Register write.
+            4 => {
+                let (address, value) = (r2 as u8, r3 as u8);
+                self.write(address, value)
+            },
+
+            // Set the operating mode.
+            5 => {
                 let (mode, _) = (r2, r3);
                 self.set_mode(OpMode::from(mode))
             },
 
-            // Read a register.
-            10 => ReturnCode::ENOSUPPORT,
-
-            // Write a register.
-            11 => {
-                let (address, value) = (r2 as u8, r3 as u8);
-                self.write(address, value)
-            },
+            50 => self.fill(),
 
             _ => ReturnCode::ENOSUPPORT,
         }
