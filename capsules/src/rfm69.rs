@@ -1,4 +1,4 @@
-use kernel::common::cells::TakeCell;
+use kernel::common::cells::{MapCell, TakeCell};
 use kernel::hil::spi;
 use kernel::{AppId, Driver, ReturnCode};
 
@@ -71,17 +71,27 @@ impl From<usize> for OpMode {
     }
 }
 
+enum NextOp {
+    Modify(u8, u8, u8),
+}
+
 /// Driver for communicating with the RFM69HCW radio over SPI.
 pub struct Rfm69<'a> {
     spi: &'a dyn spi::SpiMasterDevice,
-    buffer: TakeCell<'static, [u8]>,
+    tx_buffer: TakeCell<'static, [u8]>,
+    rx_buffer: TakeCell<'static, [u8]>,
+    next_op: MapCell<NextOp>,
 }
 
 impl<'a> Rfm69<'a> {
-    pub fn new(s: &'a dyn spi::SpiMasterDevice, buffer: &'static mut [u8]) -> Rfm69<'a> {
+    pub fn new(s: &'a dyn spi::SpiMasterDevice,
+               tx_buffer: &'static mut [u8],
+               rx_buffer: &'static mut [u8]) -> Rfm69<'a> {
         Rfm69 {
             spi: s,
-            buffer: TakeCell::new(buffer),
+            tx_buffer: TakeCell::new(tx_buffer),
+            rx_buffer: TakeCell::new(rx_buffer),
+            next_op: MapCell::empty(),
         }
     }
 
@@ -91,21 +101,67 @@ impl<'a> Rfm69<'a> {
         ReturnCode::SUCCESS
     }
 
-    /// Write to a single register.
-    fn write(&self, address: u8, value: u8) -> ReturnCode {
-        if let Some(buffer) = self.buffer.take() {
-            buffer[0] = 0b10000000 | address;
-            buffer[1] = value;
-
-            self.spi.read_write_bytes(buffer, None, 2)
+    /// Read from a single register.
+    fn read(&self, address: u8) -> ReturnCode {
+        if let Some(tx_buffer) = self.tx_buffer.take() {
+            if let Some(rx_buffer) = self.rx_buffer.take() {
+                tx_buffer[0] = 0b01111111 & address;
+                self.spi.read_write_bytes(tx_buffer, Some(rx_buffer), 2)
+            } else {
+                ReturnCode::EBUSY
+            }
         } else {
             ReturnCode::EBUSY
         }
     }
 
+    /// Write to a single register.
+    fn write(&self, address: u8, value: u8) -> ReturnCode {
+        if let Some(tx_buffer) = self.tx_buffer.take() {
+            tx_buffer[0] = 0b10000000 | address;
+            tx_buffer[1] = value;
+
+            self.spi.read_write_bytes(tx_buffer, None, 2)
+        } else {
+            ReturnCode::EBUSY
+        }
+    }
+
+    /// Modify a part of a register.
+    ///
+    /// Note: assumes the mask contains one group of contiguous ones.
+    fn modify(&self, address: u8, mut mask: u8, mut value: u8) -> ReturnCode {
+        if mask == 0 {
+            return ReturnCode::EINVAL;
+        }
+
+        while mask & 1 == 0 {
+            mask = mask >> 1;
+            value = value << 1;
+        }
+
+        if self.read(address) == ReturnCode::SUCCESS {
+            self.next_op.put(NextOp::Modify(address, mask, value));
+            ReturnCode::SUCCESS
+        } else {
+            ReturnCode::FAIL
+        }
+    }
+
+    // Complete a modify in-progress.
+    fn complete_modify(&self, address: u8, mask: u8, to_insert: u8) -> ReturnCode {
+        self.rx_buffer.map_or(
+            ReturnCode::FAIL,
+            |rxb| {
+                let cval = rxb[1];
+                let new_value = (cval ^ mask) | to_insert;
+                self.write(address, new_value)
+            })
+    }
+
     /// Change the radio operating mode.
     fn set_mode(&self, mode: OpMode) -> ReturnCode {
-        if let Some(buffer) = self.buffer.take() {
+        if let Some(tx_buffer) = self.tx_buffer.take() {
             self.write(
                 register::OpMode,
                 match mode {
@@ -126,9 +182,19 @@ impl<'a> spi::SpiMasterClient for Rfm69<'a> {
     fn read_write_done(
         &self,
         write_buffer: &'static mut [u8],
-        _read_buffer: Option<&'static mut [u8]>,
+        read_buffer: Option<&'static mut [u8]>,
         _len: usize) {
-        self.buffer.put(Some(write_buffer));
+        self.tx_buffer.put(Some(write_buffer));
+        self.rx_buffer.put(read_buffer);
+
+        if let Some(next) = self.next_op.take() {
+            match next {
+                NextOp::Modify(address, mask, ins_val) => {
+                    self.complete_modify(address, mask, ins_val);
+                },
+                _ => {  },
+            }
+        }
     }
 }
 
@@ -137,10 +203,22 @@ impl<'a> Driver for Rfm69<'a> {
         match minor_num {
             0 => ReturnCode::SUCCESS,
             1 => self.reset(),
+
+            // Set the operating mode.
             2 => {
                 let (mode, _) = (r2, r3);
                 self.set_mode(OpMode::from(mode))
             },
+
+            // Read a register.
+            10 => ReturnCode::ENOSUPPORT,
+
+            // Write a register.
+            11 => {
+                let (address, value) = (r2 as u8, r3 as u8);
+                self.write(address, value)
+            },
+
             _ => ReturnCode::ENOSUPPORT,
         }
     }
