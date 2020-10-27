@@ -226,7 +226,7 @@ impl<'a, A: Alarm<'a>> spi::SpiMasterClient for Rfm69<'a, A> {
         self.tx_buffer.put(Some(write_buffer));
         self.rx_buffer.put(read_buffer);
 
-        if let Some(next) = self.status.take() {
+        if let Some(next) = self.status.replace(Status::Idle) {
             match next {
                 Status::Modify(address, mask, ins_val) => {
                     self.complete_modify(address, mask, ins_val);
