@@ -108,20 +108,24 @@ impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
         }
     }
 
-    fn ready(&self) -> ReturnCode {
-        if self.tx_buffer.is_some() && self.rx_buffer.is_some() {
-            ReturnCode::SUCCESS
-        } else {
-            ReturnCode::EBUSY
-        }
-    }
-
     /// Reset and configure the radio.
     fn reset(&self) -> ReturnCode {
         self.spi.configure(spi::ClockPolarity::IdleLow, spi::ClockPhase::SampleLeading, 5000);
 
         self.reset_pin.set();
         ReturnCode::SUCCESS
+    }
+
+    fn status(&self) -> ReturnCode {
+        let x = self.status.map_or(99, |status| {
+            match status {
+                Status::Idle => 0,
+                Status::Access => 1,
+                Status::Modify(_, _, _) => 2,
+            }
+        });
+
+        ReturnCode::SuccessWithValue { value: x }
     }
 
     /// Read from a single register.
@@ -246,17 +250,7 @@ impl<'a, A: Alarm<'a>> Driver for Rfm69<'a, A> {
             1 => self.reset(),
 
             // Current status.
-            2 => {
-                let x = self.status.map_or(0, |current_status| {
-                    match current_status {
-                        Status::Idle => 0,
-                        Status::Access => 1,
-                        Status::Modify(_, _, _) => 2,
-                    }
-                });
-
-                ReturnCode::SuccessWithValue { value: x }
-            },
+            2 => self.status(),
 
             // Register read.
             3 => {
