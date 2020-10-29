@@ -1,8 +1,12 @@
 use kernel::common::cells::{MapCell, TakeCell};
 use kernel::hil::spi;
+use kernel::hil::time::{Alarm, AlarmClient};
+use kernel::hil::gpio::Output;
 use kernel::{AppId, Driver, ReturnCode};
 
 use core::convert::From;
+
+use crate::virtual_alarm::VirtualMuxAlarm;
 
 pub const DRIVER_NUM: usize = crate::driver::NUM::Ism as usize;
 
@@ -78,19 +82,26 @@ enum Status {
 }
 
 /// Driver for communicating with the RFM69HCW radio over SPI.
-pub struct Rfm69<'a> {
+pub struct Rfm69<'a, A: Alarm<'a>> {
     status: MapCell<Status>,
+    reset_pin: &'a Output,
+    alarm: &'a VirtualMuxAlarm<'a, A>,
     spi: &'a dyn spi::SpiMasterDevice,
     tx_buffer: TakeCell<'static, [u8]>,
     rx_buffer: TakeCell<'static, [u8]>,
 }
 
-impl<'a> Rfm69<'a> {
+impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
     pub fn new(s: &'a dyn spi::SpiMasterDevice,
+               rst: &'a Output,
+               alarm: &'a VirtualMuxAlarm<'a, A>,
                tx_buffer: &'static mut [u8],
-               rx_buffer: &'static mut [u8]) -> Rfm69<'a> {
+               rx_buffer: &'static mut [u8]) -> Rfm69<'a, A> {
+
         Rfm69 {
             status: MapCell::new(Status::Idle),
+            reset_pin: rst,
+            alarm: alarm,
             spi: s,
             tx_buffer: TakeCell::new(tx_buffer),
             rx_buffer: TakeCell::new(rx_buffer),
@@ -108,6 +119,8 @@ impl<'a> Rfm69<'a> {
     /// Reset and configure the radio.
     fn reset(&self) -> ReturnCode {
         self.spi.configure(spi::ClockPolarity::IdleLow, spi::ClockPhase::SampleLeading, 5000);
+
+        self.reset_pin.set();
         ReturnCode::SUCCESS
     }
 
@@ -178,20 +191,16 @@ impl<'a> Rfm69<'a> {
 
     /// Change the radio operating mode.
     fn set_mode(&self, mode: OpMode) -> ReturnCode {
-        if let Some(tx_buffer) = self.tx_buffer.take() {
-            self.write(
-                register::OpMode,
-                match mode {
-                    OpMode::Sleep => 0b000,
-                    OpMode::Standby => 0b001,
-                    OpMode::FrequencySynthesizer => 0b010,
-                    OpMode::Transmit => 0b011,
-                    OpMode::Receive => 0b100,
-                    _ => 0,
-                })
-        } else {
-            ReturnCode::EBUSY
-        }
+        self.write(
+            register::OpMode,
+            match mode {
+                OpMode::Sleep => 0b000,
+                OpMode::Standby => 0b001,
+                OpMode::FrequencySynthesizer => 0b010,
+                OpMode::Transmit => 0b011,
+                OpMode::Receive => 0b100,
+                _ => 0,
+            })
     }
 
     fn fill(&self) -> ReturnCode {
@@ -207,7 +216,7 @@ impl<'a> Rfm69<'a> {
     }
 }
 
-impl<'a> spi::SpiMasterClient for Rfm69<'a> {
+impl<'a, A: Alarm<'a>> spi::SpiMasterClient for Rfm69<'a, A> {
     fn read_write_done(
         &self,
         write_buffer: &'static mut [u8],
@@ -227,7 +236,7 @@ impl<'a> spi::SpiMasterClient for Rfm69<'a> {
     }
 }
 
-impl<'a> Driver for Rfm69<'a> {
+impl<'a, A: Alarm<'a>> Driver for Rfm69<'a, A> {
     fn command(&self, minor_num: usize, r2: usize, r3: usize, _caller_id: AppId) -> ReturnCode {
         match minor_num {
             0 => ReturnCode::SUCCESS,
@@ -251,7 +260,7 @@ impl<'a> Driver for Rfm69<'a> {
             // Register read.
             3 => {
                 let (address, _) = (r2 as u8, r3 as u8);
-                self.read(r2 as u8)
+                self.read(address as u8)
             },
 
             // Register write.
@@ -270,5 +279,10 @@ impl<'a> Driver for Rfm69<'a> {
 
             _ => ReturnCode::ENOSUPPORT,
         }
+    }
+}
+
+impl<'a, A: Alarm<'a>> AlarmClient for Rfm69<'a, A> {
+    fn alarm(&self) {
     }
 }

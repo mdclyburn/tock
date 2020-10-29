@@ -79,7 +79,7 @@ struct Hail {
     ipc: kernel::ipc::IPC,
     crc: &'static capsules::crc::Crc<'static, sam4l::crccu::Crccu<'static>>,
     dac: &'static capsules::dac::Dac<'static>,
-    radio: &'static capsules::rfm69::Rfm69<'static>,
+    radio: &'static capsules::rfm69::Rfm69<'static, sam4l::ast::Ast<'static>>,
     eacct: &'static capsules::eacct::EnergyAccount<'static, sam4l::adc::Adc>,
 }
 
@@ -398,10 +398,22 @@ pub unsafe fn reset_handler() {
     // Radio
     let radio_spi = SpiComponent::new(mux_spi, 0)
         .finalize(components::spi_component_helper!(sam4l::spi::SpiHw));
+    let radio_alarm = static_init!(
+        VirtualMuxAlarm<'static, sam4l::ast::Ast<'static>>,
+        VirtualMuxAlarm::new(mux_alarm));
     let radio = static_init!(
-        capsules::rfm69::Rfm69<'static>,
-        capsules::rfm69::Rfm69::new(radio_spi, &mut RFM69_TX_BUFFER, &mut RFM69_RX_BUFFER));
+        capsules::rfm69::Rfm69<'static, sam4l::ast::Ast<'static>>,
+        capsules::rfm69::Rfm69::new(
+            radio_spi,
+            &sam4l::gpio::PB[14],
+            radio_alarm,
+            &mut RFM69_TX_BUFFER,
+            &mut RFM69_RX_BUFFER));
     radio_spi.set_client(radio);
+    {
+        use kernel::hil::time::Alarm;
+        radio_alarm.set_alarm_client(radio);
+    }
 
     // Setup energy accounting.
     let eacct = static_init!(
