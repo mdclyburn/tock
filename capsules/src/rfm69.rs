@@ -77,7 +77,8 @@ impl From<usize> for OpMode {
 
 enum Status {
     Idle,
-    Access,
+    Reading,
+    Writing,
     Modify(u8, u8, u8),
 }
 
@@ -89,6 +90,7 @@ pub struct Rfm69<'a, A: Alarm<'a>> {
     spi: &'a dyn spi::SpiMasterDevice,
     tx_buffer: TakeCell<'static, [u8]>,
     rx_buffer: TakeCell<'static, [u8]>,
+    last_read: MapCell<u8>,
 }
 
 impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
@@ -98,6 +100,14 @@ impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
                tx_buffer: &'static mut [u8],
                rx_buffer: &'static mut [u8]) -> Rfm69<'a, A> {
 
+        for i in 0..tx_buffer.len() {
+            tx_buffer[i] = 0;
+        }
+
+        for i in 0..rx_buffer.len() {
+            rx_buffer[i] = 0;
+        }
+
         Rfm69 {
             status: MapCell::new(Status::Idle),
             reset_pin: rst,
@@ -105,12 +115,13 @@ impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
             spi: s,
             tx_buffer: TakeCell::new(tx_buffer),
             rx_buffer: TakeCell::new(rx_buffer),
+            last_read: MapCell::new(0),
         }
     }
 
     /// Reset and configure the radio.
     fn reset(&self) -> ReturnCode {
-        self.spi.configure(spi::ClockPolarity::IdleLow, spi::ClockPhase::SampleLeading, 5000);
+        self.spi.configure(spi::ClockPolarity::IdleLow, spi::ClockPhase::SampleLeading, 1000);
 
         self.reset_pin.set();
         ReturnCode::SUCCESS
@@ -120,8 +131,9 @@ impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
         let x = self.status.map_or(99, |status| {
             match status {
                 Status::Idle => 0,
-                Status::Access => 1,
-                Status::Modify(_, _, _) => 2,
+                Status::Reading => 1,
+                Status::Writing => 2,
+                Status::Modify(_, _, _) => 3,
             }
         });
 
@@ -133,7 +145,7 @@ impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
         if let Some(tx_buffer) = self.tx_buffer.take() {
             if let Some(rx_buffer) = self.rx_buffer.take() {
                 tx_buffer[0] = 0b01111111 & address;
-                self.status.put(Status::Access);
+                self.status.put(Status::Reading);
                 self.spi.read_write_bytes(tx_buffer, Some(rx_buffer), 2)
             } else {
                 ReturnCode::EBUSY
@@ -149,7 +161,7 @@ impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
             tx_buffer[0] = 0b10000000 | address;
             tx_buffer[1] = value;
 
-            self.status.put(Status::Access);
+            self.status.put(Status::Writing);
             self.spi.read_write_bytes(tx_buffer, None, 2)
         } else {
             ReturnCode::EBUSY
@@ -214,6 +226,7 @@ impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
                 buffer[i] = 0x7a;
             }
 
+            self.status.put(Status::Writing);
             self.spi.read_write_bytes(buffer, None, 56)
         } else {
             ReturnCode::EBUSY
@@ -228,10 +241,18 @@ impl<'a, A: Alarm<'a>> spi::SpiMasterClient for Rfm69<'a, A> {
         read_buffer: Option<&'static mut [u8]>,
         _len: usize) {
         self.tx_buffer.put(Some(write_buffer));
-        self.rx_buffer.put(read_buffer);
+        if read_buffer.is_some() {
+            self.rx_buffer.put(read_buffer);
+        }
 
         if let Some(next) = self.status.replace(Status::Idle) {
             match next {
+                Status::Reading => {
+                    self.rx_buffer.map(|rxb| {
+                        self.last_read.put(rxb[1])
+                    });
+                },
+
                 Status::Modify(address, mask, ins_val) => {
                     self.complete_modify(address, mask, ins_val);
                 },
@@ -272,9 +293,11 @@ impl<'a, A: Alarm<'a>> Driver for Rfm69<'a, A> {
 
             // Last read.
             6 => {
-                self.rx_buffer.map_or(ReturnCode::EBUSY, |buffer| {
-                    ReturnCode::SuccessWithValue { value: buffer[1] as usize }
-                })
+                self.last_read.map_or(
+                    ReturnCode::SuccessWithValue { value: 0x1FF },
+                    |val| {
+                        ReturnCode::SuccessWithValue { value: *val as usize }
+                    })
             },
 
             50 => self.fill(),
