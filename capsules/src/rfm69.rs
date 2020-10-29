@@ -204,13 +204,16 @@ impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
     }
 
     fn fill(&self) -> ReturnCode {
-        self.tx_buffer.map_or(ReturnCode::EBUSY, |buffer| {
-            for i in 0..=55 {
+        if let Some(buffer) = self.tx_buffer.take() {
+            buffer[0] = 0b10000000;
+            for i in 1..=0x40 {
                 buffer[i] = 0x7a;
             }
 
-            ReturnCode::SUCCESS
-        })
+            self.spi.read_write_bytes(buffer, None, 56)
+        } else {
+            ReturnCode::EBUSY
+        }
     }
 }
 
@@ -271,6 +274,13 @@ impl<'a, A: Alarm<'a>> Driver for Rfm69<'a, A> {
             5 => {
                 let (mode, _) = (r2, r3);
                 self.set_mode(OpMode::from(mode))
+            },
+
+            // Last read.
+            6 => {
+                self.rx_buffer.map_or(ReturnCode::EBUSY, |buffer| {
+                    ReturnCode::SuccessWithValue { value: buffer[1] as usize }
+                })
             },
 
             50 => self.fill(),
