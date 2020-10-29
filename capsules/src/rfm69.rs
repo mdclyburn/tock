@@ -204,15 +204,13 @@ impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
     }
 
     fn fill(&self) -> ReturnCode {
-        if let Some(buffer) = self.tx_buffer.take() {
+        self.tx_buffer.map_or(ReturnCode::EBUSY, |buffer| {
             for i in 0..=55 {
                 buffer[i] = 0x7a;
             }
 
             ReturnCode::SUCCESS
-        } else {
-            ReturnCode::EBUSY
-        }
+        })
     }
 }
 
