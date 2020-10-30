@@ -158,11 +158,15 @@ impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
     /// Write to a single register.
     fn write(&self, address: u8, value: u8) -> ReturnCode {
         if let Some(tx_buffer) = self.tx_buffer.take() {
-            tx_buffer[0] = 0b10000000 | address;
-            tx_buffer[1] = value;
+            if let Some(rx_buffer) = self.rx_buffer.take() {
+                tx_buffer[0] = 0b10000000 | address;
+                tx_buffer[1] = value;
 
-            self.status.put(Status::Writing);
-            self.spi.read_write_bytes(tx_buffer, None, 2)
+                self.status.put(Status::Writing);
+                self.spi.read_write_bytes(tx_buffer, Some(rx_buffer), 2)
+            } else {
+                ReturnCode::EBUSY
+            }
         } else {
             ReturnCode::EBUSY
         }
