@@ -214,24 +214,34 @@ impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
         self.write(
             register::OpMode,
             match mode {
-                OpMode::Sleep => 0b000,
-                OpMode::Standby => 0b001,
-                OpMode::FrequencySynthesizer => 0b010,
-                OpMode::Transmit => 0b011,
-                OpMode::Receive => 0b100,
+                OpMode::Sleep => 0b000 << 2,
+                OpMode::Standby => 0b001 << 2,
+                OpMode::FrequencySynthesizer => 0b010 << 2,
+                OpMode::Transmit => 0b011 << 2,
+                OpMode::Receive => 0b100 << 2,
                 _ => 0,
             })
     }
 
-    fn fill(&self) -> ReturnCode {
+    fn fill(&self, byte: u8, len: u8) -> ReturnCode {
         if let Some(buffer) = self.tx_buffer.take() {
-            buffer[0] = 0b10000000;
-            for i in 1..=0x40 {
-                buffer[i] = 0x7a;
-            }
+            if let Some(rb) = self.rx_buffer.take() {
+                buffer[0] = 0b10000000 | 0x00;
+                let end = if len > 64 {
+                    64
+                } else {
+                    len
+                };
 
-            self.status.put(Status::Writing);
-            self.spi.read_write_bytes(buffer, None, 56)
+                for i in 1..end+1 {
+                    buffer[i as usize] = byte;
+                }
+
+                self.status.put(Status::Writing);
+                self.spi.read_write_bytes(buffer, Some(rb), len as usize)
+            } else {
+                ReturnCode::EBUSY
+            }
         } else {
             ReturnCode::EBUSY
         }
@@ -304,7 +314,10 @@ impl<'a, A: Alarm<'a>> Driver for Rfm69<'a, A> {
                     })
             },
 
-            50 => self.fill(),
+            50 => {
+                let (val, len) = (r2 as u8, r3 as u8);
+                self.fill(val, len)
+            },
 
             _ => ReturnCode::ENOSUPPORT,
         }
