@@ -78,6 +78,7 @@ impl From<usize> for OpMode {
 
 enum Status {
     Idle,
+    Reset,
     Reading,
     Writing,
 }
@@ -127,6 +128,7 @@ impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
         let x = self.status.map_or(99, |status| {
             match status {
                 Status::Idle => 0,
+                Status::Reset => 3,
                 Status::Reading => 1,
                 Status::Writing => 2,
             }
@@ -281,5 +283,17 @@ impl<'a, A: Alarm<'a>> Driver for Rfm69<'a, A> {
 
 impl<'a, A: Alarm<'a>> AlarmClient for Rfm69<'a, A> {
     fn alarm(&self) {
+        // What did this alarm go off for?
+        self.status.map(|current_status| {
+            match current_status {
+                // Time to release the radio's reset pin.
+                Reset => {
+                    self.reset_pin.clear();
+                },
+
+                // Not good if we get here.
+                _ => {  }
+            }
+        });
     }
 }
