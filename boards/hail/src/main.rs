@@ -51,9 +51,6 @@ pub static mut STACK_MEMORY: [u8; 0x1000] = [0; 0x1000];
 static mut RFM69_TX_BUFFER: [u8; 66] = [0; 66];
 static mut RFM69_RX_BUFFER: [u8; 66] = [0; 66];
 
-/// Energy accounting data
-static mut EACCT_ACC: [usize; NUM_PROCS] = [0; NUM_PROCS];
-
 /// A structure representing this platform that holds references to all
 /// capsules for this platform.
 struct Hail {
