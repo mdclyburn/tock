@@ -36,18 +36,16 @@ pub struct EnergyAccount<'a, Adc, A: Alarm<'a>>
     where Adc: kernel::hil::adc::Adc + kernel::hil::adc::AdcHighSpeed {
     adc: &'a Adc,
     alarm: &'a VirtualMuxAlarm<'a, A>,
-    acc: TakeCell<'a, [usize]>,
     stats: List<'a, Entry<'a>>,
 }
 
 impl<'a, Adc, A: Alarm<'a>> EnergyAccount<'a, Adc, A>
     where Adc: kernel::hil::adc::Adc + kernel::hil::adc::AdcHighSpeed {
-    pub fn new(adc: &'a Adc, alarm: &'a VirtualMuxAlarm<'a, A>, acc: &'static mut [usize])
+    pub fn new(adc: &'a Adc, alarm: &'a VirtualMuxAlarm<'a, A>)
                -> EnergyAccount<'a, Adc, A> {
         EnergyAccount {
             adc: adc,
             alarm: alarm,
-            acc: TakeCell::new(acc),
             stats: List::new(),
         }
     }
@@ -71,7 +69,5 @@ impl<'a, Adc, A: Alarm<'a>> AlarmClient for EnergyAccount<'a, Adc, A>
 impl<'a, Adc, A: Alarm<'a>> EnergyAccounting for EnergyAccount<'a, Adc, A>
 where Adc: kernel::hil::adc::Adc + kernel::hil::adc::AdcHighSpeed {
     fn measure(&self, _t: usize) {
-        self.acc.map(|account| {
-        });
     }
 }

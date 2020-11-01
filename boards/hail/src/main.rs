@@ -403,8 +403,7 @@ pub unsafe fn reset_handler() {
         capsules::eacct::EnergyAccount<'static, sam4l::adc::Adc, sam4l::ast::Ast<'static>>,
         capsules::eacct::EnergyAccount::new(
             &sam4l::adc::ADC0,
-            eacct_alarm,
-            &mut EACCT_ACC));
+            eacct_alarm));
     {
         use kernel::hil::time::Alarm;
         eacct_alarm.set_alarm_client(eacct);
