@@ -1,6 +1,10 @@
 //! Interface for energy accounting.
 
-// use crate::returncode::ReturnCode;
+pub enum Heuristic {
+    Instant,
+    After(usize),
+}
 
 pub trait EnergyAccounting {
+    fn measure(&self, ticks: usize);
 }

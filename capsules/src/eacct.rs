@@ -45,4 +45,8 @@ impl<'a, Adc, A: Alarm<'a>> AlarmClient for EnergyAccount<'a, Adc, A>
 
 impl<'a, Adc, A: Alarm<'a>> EnergyAccounting for EnergyAccount<'a, Adc, A>
 where Adc: kernel::hil::adc::Adc + kernel::hil::adc::AdcHighSpeed {
+    fn measure(&self, t: usize) {
+        self.acc.map(|account| {
+        });
+    }
 }
