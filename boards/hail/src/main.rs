@@ -400,11 +400,13 @@ pub unsafe fn reset_handler() {
         capsules::eacct::EnergyAccount<'static, sam4l::adc::Adc, sam4l::ast::Ast<'static>>,
         capsules::eacct::EnergyAccount::new(
             &sam4l::adc::ADC0,
+            &sam4l::adc::CHANNEL_AD0,
             eacct_alarm));
     {
         use kernel::hil::time::Alarm;
         eacct_alarm.set_alarm_client(eacct);
     }
+    sam4l::adc::ADC0.set_client(eacct);
 
     // Radio
     let radio_spi = SpiComponent::new(mux_spi, 0)
