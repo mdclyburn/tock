@@ -6,5 +6,5 @@ pub enum Heuristic {
 }
 
 pub trait EnergyAccounting {
-    fn measure(&self, ticks: usize);
+    fn measure(&self, how: Heuristic);
 }

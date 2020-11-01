@@ -3,7 +3,7 @@
 use kernel::{AppId, Driver, ReturnCode};
 use kernel::common::cells::TakeCell;
 use kernel::common::list::{List, ListLink, ListNode};
-use kernel::hil::eacct::EnergyAccounting;
+use kernel::hil::eacct::{EnergyAccounting, Heuristic};
 use kernel::hil::time::{Alarm, AlarmClient};
 
 use crate::virtual_alarm::VirtualMuxAlarm;
@@ -68,6 +68,10 @@ impl<'a, Adc, A: Alarm<'a>> AlarmClient for EnergyAccount<'a, Adc, A>
 
 impl<'a, Adc, A: Alarm<'a>> EnergyAccounting for EnergyAccount<'a, Adc, A>
 where Adc: kernel::hil::adc::Adc + kernel::hil::adc::AdcHighSpeed {
-    fn measure(&self, _t: usize) {
+    fn measure(&self, how: Heuristic) {
+        match how {
+            Heuristic::Instant => {  },
+            Heuristic::After(_delay) => {  },
+        }
     }
 }
