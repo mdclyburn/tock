@@ -80,7 +80,6 @@ enum Status {
     Idle,
     Reading,
     Writing,
-    Modify(u8, u8, u8),
 }
 
 /// Driver for communicating with the RFM69HCW radio over SPI.
@@ -130,7 +129,6 @@ impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
                 Status::Idle => 0,
                 Status::Reading => 1,
                 Status::Writing => 2,
-                Status::Modify(_, _, _) => 3,
             }
         });
 
@@ -167,43 +165,6 @@ impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
         } else {
             ReturnCode::EBUSY
         }
-    }
-
-    /// Modify a part of a register.
-    ///
-    /// Note: assumes the mask contains one group of contiguous ones.
-    fn modify(&self, address: u8, mut mask: u8, mut value: u8) -> ReturnCode {
-        if mask == 0 {
-            return ReturnCode::EINVAL;
-        }
-
-        while mask & 1 == 0 {
-            mask = mask >> 1;
-            value = value << 1;
-        }
-
-        if let Some(tx_buffer) = self.tx_buffer.take() {
-            if let Some(rx_buffer) = self.rx_buffer.take() {
-                tx_buffer[0] = 0b01111111 & address;
-                self.status.put(Status::Modify(address, mask, value));
-                self.spi.read_write_bytes(tx_buffer, Some(rx_buffer), 2)
-            } else {
-                ReturnCode::EBUSY
-            }
-        } else {
-            ReturnCode::EBUSY
-        }
-    }
-
-    // Complete a modify in-progress.
-    fn complete_modify(&self, address: u8, mask: u8, to_insert: u8) -> ReturnCode {
-        self.rx_buffer.map_or(
-            ReturnCode::FAIL,
-            |rxb| {
-                let cval = rxb[1];
-                let new_value = (cval ^ mask) | to_insert;
-                self.write(address, new_value)
-            })
     }
 
     /// Change the radio operating mode.
@@ -264,9 +225,6 @@ impl<'a, A: Alarm<'a>> spi::SpiMasterClient for Rfm69<'a, A> {
                     });
                 },
 
-                Status::Modify(address, mask, ins_val) => {
-                    self.complete_modify(address, mask, ins_val);
-                },
                 _ => {  },
             }
         }
