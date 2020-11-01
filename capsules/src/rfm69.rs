@@ -287,7 +287,7 @@ impl<'a, A: Alarm<'a>> AlarmClient for Rfm69<'a, A> {
         self.status.map(|current_status| {
             match current_status {
                 // Time to release the radio's reset pin.
-                Reset => {
+                Status::Reset => {
                     self.reset_pin.clear();
                 },
 
