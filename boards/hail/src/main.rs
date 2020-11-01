@@ -80,7 +80,7 @@ struct Hail {
     crc: &'static capsules::crc::Crc<'static, sam4l::crccu::Crccu<'static>>,
     dac: &'static capsules::dac::Dac<'static>,
     radio: &'static capsules::rfm69::Rfm69<'static, sam4l::ast::Ast<'static>>,
-    eacct: &'static capsules::eacct::EnergyAccount<'static, sam4l::adc::Adc>,
+    eacct: &'static capsules::eacct::EnergyAccount<'static, sam4l::adc::Adc, sam4l::ast::Ast<'static>>,
 }
 
 /// Mapping of integer syscalls to objects that implement syscalls.
@@ -416,9 +416,19 @@ pub unsafe fn reset_handler() {
     }
 
     // Setup energy accounting.
+    let eacct_alarm = static_init!(
+        VirtualMuxAlarm<'static, sam4l::ast::Ast<'static>>,
+        VirtualMuxAlarm::new(mux_alarm));
     let eacct = static_init!(
-        capsules::eacct::EnergyAccount<'static, sam4l::adc::Adc>,
-        capsules::eacct::EnergyAccount::new(&sam4l::adc::ADC0, &mut EACCT_ACC));
+        capsules::eacct::EnergyAccount<'static, sam4l::adc::Adc, sam4l::ast::Ast<'static>>,
+        capsules::eacct::EnergyAccount::new(
+            &sam4l::adc::ADC0,
+            eacct_alarm,
+            &mut EACCT_ACC));
+    {
+        use kernel::hil::time::Alarm;
+        eacct_alarm.set_alarm_client(eacct);
+    }
 
     // // DEBUG Restart All Apps
     // //
