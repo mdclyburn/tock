@@ -395,26 +395,6 @@ pub unsafe fn reset_handler() {
         capsules::dac::Dac::new(&sam4l::dac::DAC)
     );
 
-    // Radio
-    let radio_spi = SpiComponent::new(mux_spi, 0)
-        .finalize(components::spi_component_helper!(sam4l::spi::SpiHw));
-    let radio_alarm = static_init!(
-        VirtualMuxAlarm<'static, sam4l::ast::Ast<'static>>,
-        VirtualMuxAlarm::new(mux_alarm));
-    let radio = static_init!(
-        capsules::rfm69::Rfm69<'static, sam4l::ast::Ast<'static>>,
-        capsules::rfm69::Rfm69::new(
-            radio_spi,
-            &sam4l::gpio::PB[14],
-            radio_alarm,
-            &mut RFM69_TX_BUFFER,
-            &mut RFM69_RX_BUFFER));
-    radio_spi.set_client(radio);
-    {
-        use kernel::hil::time::Alarm;
-        radio_alarm.set_alarm_client(radio);
-    }
-
     // Setup energy accounting.
     let eacct_alarm = static_init!(
         VirtualMuxAlarm<'static, sam4l::ast::Ast<'static>>,
@@ -428,6 +408,27 @@ pub unsafe fn reset_handler() {
     {
         use kernel::hil::time::Alarm;
         eacct_alarm.set_alarm_client(eacct);
+    }
+
+    // Radio
+    let radio_spi = SpiComponent::new(mux_spi, 0)
+        .finalize(components::spi_component_helper!(sam4l::spi::SpiHw));
+    let radio_alarm = static_init!(
+        VirtualMuxAlarm<'static, sam4l::ast::Ast<'static>>,
+        VirtualMuxAlarm::new(mux_alarm));
+    let radio = static_init!(
+        capsules::rfm69::Rfm69<'static, sam4l::ast::Ast<'static>>,
+        capsules::rfm69::Rfm69::new(
+            radio_spi,
+            &sam4l::gpio::PB[14],
+            radio_alarm,
+            eacct,
+            &mut RFM69_TX_BUFFER,
+            &mut RFM69_RX_BUFFER));
+    radio_spi.set_client(radio);
+    {
+        use kernel::hil::time::Alarm;
+        radio_alarm.set_alarm_client(radio);
     }
 
     // // DEBUG Restart All Apps

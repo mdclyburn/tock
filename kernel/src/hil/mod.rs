@@ -6,6 +6,7 @@ pub mod ble_advertising;
 pub mod crc;
 pub mod dac;
 pub mod digest;
+pub mod eacct;
 pub mod eic;
 pub mod entropy;
 pub mod flash;

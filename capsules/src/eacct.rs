@@ -1,7 +1,8 @@
-/// Energy accounting in Tock
+/// Energy accounting capsule in Tock
 
 use kernel::{AppId, Driver, ReturnCode};
 use kernel::common::cells::TakeCell;
+use kernel::hil::eacct::EnergyAccounting;
 use kernel::hil::time::{Alarm, AlarmClient};
 
 use crate::virtual_alarm::VirtualMuxAlarm;
@@ -40,4 +41,8 @@ impl<'a, Adc, A: Alarm<'a>> AlarmClient for EnergyAccount<'a, Adc, A>
     where Adc: kernel::hil::adc::Adc + kernel::hil::adc::AdcHighSpeed {
     fn alarm(&self) {
     }
+}
+
+impl<'a, Adc, A: Alarm<'a>> EnergyAccounting for EnergyAccount<'a, Adc, A>
+where Adc: kernel::hil::adc::Adc + kernel::hil::adc::AdcHighSpeed {
 }

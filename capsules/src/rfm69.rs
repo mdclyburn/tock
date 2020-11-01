@@ -1,5 +1,6 @@
 use kernel::common::cells::{MapCell, TakeCell};
 use kernel::hil::spi;
+use kernel::hil::eacct::EnergyAccounting;
 use kernel::hil::time::{Alarm, AlarmClient};
 use kernel::hil::gpio::Output;
 use kernel::{AppId, Driver, ReturnCode};
@@ -84,12 +85,14 @@ enum Status {
 
 /// Driver for communicating with the RFM69HCW radio over SPI.
 pub struct Rfm69<'a, A: Alarm<'a>> {
-    status: MapCell<Status>,
+    spi: &'a dyn spi::SpiMasterDevice,
     reset_pin: &'a Output,
     alarm: &'a VirtualMuxAlarm<'a, A>,
-    spi: &'a dyn spi::SpiMasterDevice,
+    eacct: &'a EnergyAccounting,
     tx_buffer: TakeCell<'static, [u8]>,
     rx_buffer: TakeCell<'static, [u8]>,
+
+    status: MapCell<Status>,
     last_read: MapCell<u8>,
 }
 
@@ -97,24 +100,18 @@ impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
     pub fn new(s: &'a dyn spi::SpiMasterDevice,
                rst: &'a Output,
                alarm: &'a VirtualMuxAlarm<'a, A>,
+               eacct: &'a EnergyAccounting,
                tx_buffer: &'static mut [u8],
                rx_buffer: &'static mut [u8]) -> Rfm69<'a, A> {
 
-        for i in 0..tx_buffer.len() {
-            tx_buffer[i] = 0;
-        }
-
-        for i in 0..rx_buffer.len() {
-            rx_buffer[i] = 0;
-        }
-
         Rfm69 {
-            status: MapCell::new(Status::Idle),
+            spi: s,
             reset_pin: rst,
             alarm: alarm,
-            spi: s,
+            eacct: eacct,
             tx_buffer: TakeCell::new(tx_buffer),
             rx_buffer: TakeCell::new(rx_buffer),
+            status: MapCell::new(Status::Idle),
             last_read: MapCell::new(0),
         }
     }
