@@ -15,6 +15,9 @@ use crate::virtual_alarm::VirtualMuxAlarm;
 
 pub const DRIVER_NUM: usize = crate::driver::NUM::EnergyAccounting as usize;
 
+pub trait CombinedAdc: kernel::hil::adc::Adc + kernel::hil::adc::AdcHighSpeed {  }
+impl<T: kernel::hil::adc::Adc + kernel::hil::adc::AdcHighSpeed> CombinedAdc for T {  }
+
 struct Entry<'a> {
     app_id: AppId,
     used: MapCell<usize>,
@@ -37,17 +40,15 @@ impl<'a> ListNode<'a, Entry<'a>> for Entry<'a> {
     }
 }
 
-pub struct EnergyAccount<'a, Adc, A: Alarm<'a>>
-    where Adc: kernel::hil::adc::Adc + kernel::hil::adc::AdcHighSpeed {
+pub struct EnergyAccount<'a, Adc: CombinedAdc, A: Alarm<'a>> {
     adc: &'a Adc,
-    adc_channel: &'a Adc::Channel,
+    adc_channel: &'a <Adc as kernel::hil::adc::Adc>::Channel,
     alarm: &'a VirtualMuxAlarm<'a, A>,
     stats: List<'a, Entry<'a>>,
     status: MapCell<Heuristic>,
 }
 
-impl<'a, Adc, A: Alarm<'a>> EnergyAccount<'a, Adc, A>
-    where Adc: kernel::hil::adc::Adc + kernel::hil::adc::AdcHighSpeed {
+impl<'a, Adc: CombinedAdc, A: Alarm<'a>> EnergyAccount<'a, Adc, A> {
     pub fn new(adc: &'a Adc, adc_channel: &'a Adc::Channel, alarm: &'a VirtualMuxAlarm<'a, A>)
                -> EnergyAccount<'a, Adc, A> {
         EnergyAccount {
@@ -60,8 +61,7 @@ impl<'a, Adc, A: Alarm<'a>> EnergyAccount<'a, Adc, A>
     }
 }
 
-impl<'a, Adc, A: Alarm<'a>> Driver for EnergyAccount<'a, Adc, A>
-    where Adc: kernel::hil::adc::Adc + kernel::hil::adc::AdcHighSpeed {
+impl<'a, Adc: CombinedAdc, A: Alarm<'a>> Driver for EnergyAccount<'a, Adc, A> {
     fn command(&self, minor_num: usize, r2: usize, r3: usize, caller_id: AppId) -> ReturnCode {
         match minor_num {
             0 => ReturnCode::SUCCESS,
@@ -70,8 +70,7 @@ impl<'a, Adc, A: Alarm<'a>> Driver for EnergyAccount<'a, Adc, A>
     }
 }
 
-impl<'a, Adc, A: Alarm<'a>> AlarmClient for EnergyAccount<'a, Adc, A>
-    where Adc: kernel::hil::adc::Adc + kernel::hil::adc::AdcHighSpeed {
+impl<'a, Adc: CombinedAdc, A: Alarm<'a>> AlarmClient for EnergyAccount<'a, Adc, A> {
     /// Handle time-delayed samples.
     fn alarm(&self) {
         self.alarm.disarm(); // Not handling this return code.
@@ -89,8 +88,7 @@ impl<'a, Adc, A: Alarm<'a>> AlarmClient for EnergyAccount<'a, Adc, A>
     }
 }
 
-impl<'a, Adc, A: Alarm<'a>> AdcClient for EnergyAccount<'a, Adc, A>
-    where Adc: kernel::hil::adc::Adc + kernel::hil::adc::AdcHighSpeed {
+impl<'a, Adc: CombinedAdc, A: Alarm<'a>> AdcClient for EnergyAccount<'a, Adc, A> {
     /// Handle current sensor sample coming back from the ADC.
     fn sample_ready(&self, sample: u16) {
         // Finally take the status since we will be done with it (except as not needed, like with Recurrent).
@@ -106,15 +104,13 @@ impl<'a, Adc, A: Alarm<'a>> AdcClient for EnergyAccount<'a, Adc, A>
     }
 }
 
-impl<'a, Adc, A: Alarm<'a>> AdcHighSpeedClient for EnergyAccount<'a, Adc, A>
-    where Adc: kernel::hil::adc::Adc + kernel::hil::adc::AdcHighSpeed {
+impl<'a, Adc: CombinedAdc, A: Alarm<'a>> AdcHighSpeedClient for EnergyAccount<'a, Adc, A> {
     fn samples_ready(&self, samples: &'static mut [u16], length: usize) {
         //  Use samples to attribute energy usage.
     }
 }
 
-impl<'a, Adc, A: Alarm<'a>> EnergyAccounting for EnergyAccount<'a, Adc, A>
-where Adc: kernel::hil::adc::Adc + kernel::hil::adc::AdcHighSpeed {
+impl<'a, Adc: CombinedAdc, A: Alarm<'a>> EnergyAccounting for EnergyAccount<'a, Adc, A> {
     fn measure(&self, how: Heuristic) -> ReturnCode {
         if self.status.is_some() {
             // Something is already in progress.
