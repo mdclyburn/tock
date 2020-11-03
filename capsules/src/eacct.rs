@@ -15,6 +15,7 @@ use crate::virtual_alarm::VirtualMuxAlarm;
 
 pub const DRIVER_NUM: usize = crate::driver::NUM::EnergyAccounting as usize;
 
+// Short-hand for ADC traits.
 pub trait CombinedAdc: kernel::hil::adc::Adc + kernel::hil::adc::AdcHighSpeed {  }
 impl<T: kernel::hil::adc::Adc + kernel::hil::adc::AdcHighSpeed> CombinedAdc for T {  }
 
@@ -59,6 +60,18 @@ impl<'a, Adc: CombinedAdc, A: Alarm<'a>> EnergyAccount<'a, Adc, A> {
             status: MapCell::empty(),
         }
     }
+
+    fn account(&self, app_id: AppId, sample: u16) {
+        let find_res = self.stats.iter().find(|entry| {
+            entry.app_id == app_id
+        });
+
+        if let Some(entry) = find_res {
+            entry.used.replace(sample as usize);
+        } else {
+            // Need to add app ID entry to the list.
+        }
+    }
 }
 
 impl<'a, Adc: CombinedAdc, A: Alarm<'a>> Driver for EnergyAccount<'a, Adc, A> {
@@ -91,13 +104,16 @@ impl<'a, Adc: CombinedAdc, A: Alarm<'a>> AlarmClient for EnergyAccount<'a, Adc, 
 impl<'a, Adc: CombinedAdc, A: Alarm<'a>> AdcClient for EnergyAccount<'a, Adc, A> {
     /// Handle current sensor sample coming back from the ADC.
     fn sample_ready(&self, sample: u16) {
-        // Finally take the status since we will be done with it (except as not needed, like with Recurrent).
+        // Finally take the status since we will be done with it
+        // (except as not needed, like with Recurrent).
         if let Some(status) = self.status.take() {
             match status {
-                Heuristic::Instant(_app_id) => {  },
-                Heuristic::After(_app_id, _delay) => {  },
+                Heuristic::Instant(app_id) => self.account(app_id, sample),
+                Heuristic::After(app_id, _delay) => self.account(app_id, sample),
                 Heuristic::Recurrent(app_id, interval) => {
+                    // Put this back to happen again.
                     self.status.put(Heuristic::Recurrent(app_id, interval));
+                    self.account(app_id, sample);
                 }
             }
         }
