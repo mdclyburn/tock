@@ -16,5 +16,9 @@ pub enum Heuristic {
 }
 
 pub trait EnergyAccounting {
+    /// Initiate a measurment with a given heuristic to inform measurement.
     fn measure(&self, how: Heuristic) -> ReturnCode;
+
+    /// Stop a recurrent measurement.
+    fn stop(&self, app_id: AppId) -> ReturnCode;
 }

@@ -182,4 +182,21 @@ impl<'a, Adc: CombinedAdc, A: Alarm<'a>> EnergyAccounting for EnergyAccount<'a, 
             }
         }
     }
+
+    fn stop(&self, app_id: AppId) -> ReturnCode {
+        let valid = self.status.map_or(false, |how| {
+            if let Heuristic::Recurrent(current_app_id, _interval) = how {
+                *current_app_id == app_id
+            } else {
+                false
+            }
+        });
+
+        if valid {
+            self.status.take();
+            self.alarm.disarm()
+        } else {
+            ReturnCode::FAIL
+        }
+    }
 }
