@@ -1,12 +1,13 @@
 use kernel::common::cells::{MapCell, TakeCell};
 use kernel::hil::spi;
 use kernel::hil::eacct::EnergyAccounting;
-use kernel::hil::time::{Alarm, AlarmClient};
 use kernel::hil::gpio::Output;
+use kernel::hil::time::{Alarm, AlarmClient, Time};
 use kernel::{AppId, Driver, ReturnCode};
 
 use core::convert::From;
 
+use crate::virtual_alarm;
 use crate::virtual_alarm::VirtualMuxAlarm;
 
 pub const DRIVER_NUM: usize = crate::driver::NUM::Ism as usize;
@@ -86,9 +87,9 @@ enum Status {
 /// Driver for communicating with the RFM69HCW radio over SPI.
 pub struct Rfm69<'a, A: Alarm<'a>> {
     spi: &'a dyn spi::SpiMasterDevice,
-    reset_pin: &'a Output,
+    reset_pin: &'a dyn Output,
     alarm: &'a VirtualMuxAlarm<'a, A>,
-    eacct: &'a EnergyAccounting,
+    eacct: &'a dyn EnergyAccounting,
     tx_buffer: TakeCell<'static, [u8]>,
     rx_buffer: TakeCell<'static, [u8]>,
 
@@ -98,9 +99,9 @@ pub struct Rfm69<'a, A: Alarm<'a>> {
 
 impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
     pub fn new(s: &'a dyn spi::SpiMasterDevice,
-               rst: &'a Output,
+               rst: &'a dyn Output,
                alarm: &'a VirtualMuxAlarm<'a, A>,
-               eacct: &'a EnergyAccounting,
+               eacct: &'a dyn EnergyAccounting,
                tx_buffer: &'static mut [u8],
                rx_buffer: &'static mut [u8]) -> Rfm69<'a, A> {
 
@@ -121,6 +122,10 @@ impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
         self.spi.configure(spi::ClockPolarity::IdleLow, spi::ClockPhase::SampleLeading, 1000);
 
         self.reset_pin.set();
+        self.alarm.set_alarm(self.alarm.now(),
+                             virtual_alarm::VirtualMuxAlarm::<'a, A>::ticks_from_ms(250));
+        self.status.put(Status::Reset);
+
         ReturnCode::SUCCESS
     }
 
@@ -179,7 +184,6 @@ impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
                 OpMode::FrequencySynthesizer => 0b010 << 2,
                 OpMode::Transmit => 0b011 << 2,
                 OpMode::Receive => 0b100 << 2,
-                _ => 0,
             })
     }
 
@@ -289,6 +293,7 @@ impl<'a, A: Alarm<'a>> AlarmClient for Rfm69<'a, A> {
                 // Time to release the radio's reset pin.
                 Status::Reset => {
                     self.reset_pin.clear();
+                    self.status.put(Status::Idle);
                 },
 
                 // Not good if we get here.

@@ -96,7 +96,7 @@ impl<'a, Adc: CombinedAdc, A: Alarm<'a>> EnergyAccount<'a, Adc, A> {
 }
 
 impl<'a, Adc: CombinedAdc, A: Alarm<'a>> Driver for EnergyAccount<'a, Adc, A> {
-    fn command(&self, minor_num: usize, r2: usize, r3: usize, caller_id: AppId) -> ReturnCode {
+    fn command(&self, minor_num: usize, _r2: usize, _r3: usize, caller_id: AppId) -> ReturnCode {
         match minor_num {
             // It exists.
             0 => ReturnCode::SUCCESS,
@@ -151,7 +151,7 @@ impl<'a, Adc: CombinedAdc, A: Alarm<'a>> AdcClient for EnergyAccount<'a, Adc, A>
 }
 
 impl<'a, Adc: CombinedAdc, A: Alarm<'a>> AdcHighSpeedClient for EnergyAccount<'a, Adc, A> {
-    fn samples_ready(&self, samples: &'static mut [u16], length: usize) {
+    fn samples_ready(&self, _samples: &'static mut [u16], _length: usize) {
         //  Use samples to attribute energy usage.
     }
 }
@@ -176,7 +176,7 @@ impl<'a, Adc: CombinedAdc, A: Alarm<'a>> EnergyAccounting for EnergyAccount<'a, 
 
                 // Set the timer instead and we'll come back here later... and again... and again...
                 Heuristic::Recurrent(_app_id, interval) => {
-                    // self.alarm.set_alarm(self.alarm.now(), self.alarm.now().wrapping_add(interval));
+                    self.alarm.set_alarm(self.alarm.now(), virtual_alarm::VirtualMuxAlarm::<'a, A>::ticks_from_ms(interval));
                     ReturnCode::SUCCESS
                 },
             }
