@@ -19,8 +19,17 @@ pub trait CombinedAdc: kernel::hil::adc::Adc + kernel::hil::adc::AdcHighSpeed { 
 impl<T: kernel::hil::adc::Adc + kernel::hil::adc::AdcHighSpeed> CombinedAdc for T {  }
 
 pub struct Entry {
-    app_id: Option<AppId>,
+    app_id: AppId,
     used: MapCell<usize>,
+}
+
+impl Entry {
+    fn new(id: AppId, used: usize) -> Entry {
+        Entry {
+            app_id: id,
+            used: MapCell::new(used),
+        }
+    }
 }
 
 pub struct EnergyAccount<'a, Adc: CombinedAdc, A: Alarm<'a>> {
@@ -28,7 +37,7 @@ pub struct EnergyAccount<'a, Adc: CombinedAdc, A: Alarm<'a>> {
     adc_channel: &'a <Adc as kernel::hil::adc::Adc>::Channel,
     alarm: &'a VirtualMuxAlarm<'a, A>,
     no_entries: usize,
-    entries: &'a mut [Option<Entry>],
+    entries: TakeCell<'a, [Option<Entry>]>,
     status: MapCell<Heuristic>,
 }
 
@@ -44,21 +53,29 @@ impl<'a, Adc: CombinedAdc, A: Alarm<'a>> EnergyAccount<'a, Adc, A> {
             adc_channel: adc_channel,
             alarm: alarm,
             no_entries: no_entries,
-            entries: entries,
+            entries: TakeCell::new(entries),
             status: MapCell::empty(),
         }
     }
 
+    /// Add data to the running statistics.
     fn account(&self, app_id: AppId, sample: u16) {
-        // let find_res = self.stats.iter().find(|entry| {
-        //     entry.app_id == app_id
-        // });
+        self.entries.map(|entries| {
+            let find_res = entries.iter()
+                .filter(|opt| opt.is_some())
+                .map(|opt| opt.as_ref().unwrap())
+                .find(|entry| entry.app_id == app_id);
 
-        // if let Some(entry) = find_res {
-        //     entry.used.replace(sample as usize);
-        // } else {
-        //     // Need to add app ID entry to the list.
-        // }
+            if let Some(entry) = find_res {
+                entry.used.replace(sample as usize);
+            } else {
+                for i in 0..self.no_entries {
+                    if entries[i].is_none() {
+                        entries[i] = Some(Entry::new(app_id, sample as usize));
+                    }
+                }
+            }
+        });
     }
 }
 
