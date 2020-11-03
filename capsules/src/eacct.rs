@@ -60,6 +60,9 @@ impl<'a, Adc: CombinedAdc, A: Alarm<'a>> EnergyAccount<'a, Adc, A> {
 
     /// Add data to the running statistics.
     fn account(&self, app_id: AppId, sample: u16) {
+        let shift_offset = 16 - self.adc.get_resolution_bits();
+        let value: usize = (sample as usize) >> shift_offset;
+
         self.entries.map(|entries| {
             let find_res = entries.iter()
                 .filter(|opt| opt.is_some())
@@ -67,11 +70,11 @@ impl<'a, Adc: CombinedAdc, A: Alarm<'a>> EnergyAccount<'a, Adc, A> {
                 .find(|entry| entry.app_id == app_id);
 
             if let Some(entry) = find_res {
-                entry.used.replace(sample as usize);
+                entry.used.replace(value);
             } else {
                 for i in 0..self.no_entries {
                     if entries[i].is_none() {
-                        entries[i] = Some(Entry::new(app_id, sample as usize));
+                        entries[i] = Some(Entry::new(app_id, value));
                     }
                 }
             }
