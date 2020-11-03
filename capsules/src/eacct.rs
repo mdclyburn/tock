@@ -77,12 +77,37 @@ impl<'a, Adc: CombinedAdc, A: Alarm<'a>> EnergyAccount<'a, Adc, A> {
             }
         });
     }
+
+    /// Retrieve the usage for a given application.
+    fn usage_of(&self, app_id: AppId) -> Option<usize> {
+        self.entries.map_or(None, |entries| {
+            let find_res = entries.iter()
+                .filter(|opt| opt.is_some())
+                .map(|opt| opt.as_ref().unwrap())
+                .find(|entry| entry.app_id == app_id);
+
+            if let Some(entry) = find_res {
+                entry.used.map(|used| *used)
+            } else {
+                None
+            }
+        })
+    }
 }
 
 impl<'a, Adc: CombinedAdc, A: Alarm<'a>> Driver for EnergyAccount<'a, Adc, A> {
     fn command(&self, minor_num: usize, r2: usize, r3: usize, caller_id: AppId) -> ReturnCode {
         match minor_num {
+            // It exists.
             0 => ReturnCode::SUCCESS,
+
+            // Usage for given app ID.
+            5 => if let Some(usage) = self.usage_of(caller_id) {
+                ReturnCode::SuccessWithValue { value: usage }
+            } else {
+                ReturnCode::SuccessWithValue { value: 0 }
+            },
+
             _ => ReturnCode::ENOSUPPORT
         }
     }
