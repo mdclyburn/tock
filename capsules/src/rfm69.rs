@@ -1,6 +1,6 @@
 use kernel::common::cells::{MapCell, TakeCell};
 use kernel::hil::spi;
-use kernel::hil::eacct::EnergyAccounting;
+use kernel::hil::eacct::{EnergyAccounting, Heuristic};
 use kernel::hil::gpio::Output;
 use kernel::hil::time::{Alarm, AlarmClient, Time};
 use kernel::{AppId, Driver, ReturnCode};
@@ -238,7 +238,7 @@ impl<'a, A: Alarm<'a>> spi::SpiMasterClient for Rfm69<'a, A> {
 }
 
 impl<'a, A: Alarm<'a>> Driver for Rfm69<'a, A> {
-    fn command(&self, minor_num: usize, r2: usize, r3: usize, _caller_id: AppId) -> ReturnCode {
+    fn command(&self, minor_num: usize, r2: usize, r3: usize, caller_id: AppId) -> ReturnCode {
         match minor_num {
             0 => ReturnCode::SUCCESS,
 
@@ -263,6 +263,7 @@ impl<'a, A: Alarm<'a>> Driver for Rfm69<'a, A> {
             // Set the operating mode.
             5 => {
                 let (mode, _) = (r2, r3);
+                self.eacct.measure(Heuristic::After(caller_id, 50));
                 self.set_mode(OpMode::from(mode))
             },
 
