@@ -1,8 +1,7 @@
 /// Energy accounting capsule in Tock
 
 use kernel::{AppId, Driver, ReturnCode};
-use kernel::common::cells::MapCell;
-use kernel::common::list::{List, ListLink, ListNode};
+use kernel::common::cells::{MapCell, TakeCell};
 use kernel::hil::adc::{
     Client as AdcClient,
     HighSpeedClient as AdcHighSpeedClient,
@@ -19,58 +18,47 @@ pub const DRIVER_NUM: usize = crate::driver::NUM::EnergyAccounting as usize;
 pub trait CombinedAdc: kernel::hil::adc::Adc + kernel::hil::adc::AdcHighSpeed {  }
 impl<T: kernel::hil::adc::Adc + kernel::hil::adc::AdcHighSpeed> CombinedAdc for T {  }
 
-struct Entry<'a> {
-    app_id: AppId,
+pub struct Entry {
+    app_id: Option<AppId>,
     used: MapCell<usize>,
-    next: ListLink<'a, Entry<'a>>,
-}
-
-impl<'a> Entry<'a> {
-    pub fn new(id: AppId) -> Entry<'a> {
-        Entry {
-            app_id: id,
-            used: MapCell::new(0),
-            next: ListLink::empty(),
-        }
-    }
-}
-
-impl<'a> ListNode<'a, Entry<'a>> for Entry<'a> {
-    fn next(&self) -> &ListLink<'a, Entry<'a>> {
-        &self.next
-    }
 }
 
 pub struct EnergyAccount<'a, Adc: CombinedAdc, A: Alarm<'a>> {
     adc: &'a Adc,
     adc_channel: &'a <Adc as kernel::hil::adc::Adc>::Channel,
     alarm: &'a VirtualMuxAlarm<'a, A>,
-    stats: List<'a, Entry<'a>>,
+    no_entries: usize,
+    entries: &'a mut [Option<Entry>],
     status: MapCell<Heuristic>,
 }
 
 impl<'a, Adc: CombinedAdc, A: Alarm<'a>> EnergyAccount<'a, Adc, A> {
-    pub fn new(adc: &'a Adc, adc_channel: &'a Adc::Channel, alarm: &'a VirtualMuxAlarm<'a, A>)
+    pub fn new(adc: &'a Adc,
+               adc_channel: &'a Adc::Channel,
+               alarm: &'a VirtualMuxAlarm<'a, A>,
+               entries: &'a mut [Option<Entry>],
+               no_entries: usize)
                -> EnergyAccount<'a, Adc, A> {
         EnergyAccount {
             adc: adc,
             adc_channel: adc_channel,
             alarm: alarm,
-            stats: List::new(),
+            no_entries: no_entries,
+            entries: entries,
             status: MapCell::empty(),
         }
     }
 
     fn account(&self, app_id: AppId, sample: u16) {
-        let find_res = self.stats.iter().find(|entry| {
-            entry.app_id == app_id
-        });
+        // let find_res = self.stats.iter().find(|entry| {
+        //     entry.app_id == app_id
+        // });
 
-        if let Some(entry) = find_res {
-            entry.used.replace(sample as usize);
-        } else {
-            // Need to add app ID entry to the list.
-        }
+        // if let Some(entry) = find_res {
+        //     entry.used.replace(sample as usize);
+        // } else {
+        //     // Need to add app ID entry to the list.
+        // }
     }
 }
 

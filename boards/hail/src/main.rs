@@ -51,6 +51,9 @@ pub static mut STACK_MEMORY: [u8; 0x1000] = [0; 0x1000];
 static mut RFM69_TX_BUFFER: [u8; 66] = [0; 66];
 static mut RFM69_RX_BUFFER: [u8; 66] = [0; 66];
 
+// Energy accounting
+static mut EACCT_ENTRIES: [Option<capsules::eacct::Entry>; NUM_PROCS] = [None; NUM_PROCS];
+
 /// A structure representing this platform that holds references to all
 /// capsules for this platform.
 struct Hail {
@@ -401,7 +404,9 @@ pub unsafe fn reset_handler() {
         capsules::eacct::EnergyAccount::new(
             &sam4l::adc::ADC0,
             &sam4l::adc::CHANNEL_AD0,
-            eacct_alarm));
+            eacct_alarm,
+            &mut EACCT_ENTRIES,
+            EACCT_ENTRIES.len()));
     {
         use kernel::hil::time::Alarm;
         eacct_alarm.set_alarm_client(eacct);
