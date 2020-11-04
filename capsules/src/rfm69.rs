@@ -185,10 +185,12 @@ impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
                 },
                 OpMode::Standby => {
                     self.eacct.stop(app_id);
+                    self.eacct.measure(Heuristic::Recurrent(app_id, 100));
                     0b001 << 2
                 },
                 OpMode::FrequencySynthesizer => 0b010 << 2,
                 OpMode::Transmit => {
+                    self.eacct.stop(app_id);
                     self.eacct.measure(Heuristic::Recurrent(app_id, 100));
                     0b011 << 2
                 },

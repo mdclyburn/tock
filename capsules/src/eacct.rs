@@ -32,6 +32,11 @@ impl Entry {
     }
 }
 
+mod parameter {
+    pub const REFERENCE: u16 = 630;
+    pub const VAL_PER_MILLIAMP: u16 = 13;
+}
+
 pub struct EnergyAccount<'a, Adc: CombinedAdc, A: Alarm<'a>> {
     adc: &'a Adc,
     adc_channel: &'a <Adc as kernel::hil::adc::Adc>::Channel,
@@ -59,10 +64,7 @@ impl<'a, Adc: CombinedAdc, A: Alarm<'a>> EnergyAccount<'a, Adc, A> {
     }
 
     /// Add data to the running statistics.
-    fn account(&self, app_id: AppId, sample: u16) {
-        let shift_offset = 16 - self.adc.get_resolution_bits();
-        let value: usize = (sample as usize) >> shift_offset;
-
+    fn account(&self, app_id: AppId, mws: usize) {
         self.entries.map(|entries| {
             let find_res = entries.iter()
                 .filter(|opt| opt.is_some())
@@ -70,11 +72,11 @@ impl<'a, Adc: CombinedAdc, A: Alarm<'a>> EnergyAccount<'a, Adc, A> {
                 .find(|entry| entry.app_id == app_id);
 
             if let Some(entry) = find_res {
-                entry.used.replace(value);
+                entry.used.replace(mws);
             } else {
                 for i in 0..self.no_entries {
                     if entries[i].is_none() {
-                        entries[i] = Some(Entry::new(app_id, value));
+                        entries[i] = Some(Entry::new(app_id, mws));
                     }
                 }
             }
@@ -140,12 +142,28 @@ impl<'a, Adc: CombinedAdc, A: Alarm<'a>> AdcClient for EnergyAccount<'a, Adc, A>
         // Finally take the status since we will be done with it
         // (except as not needed, like with Recurrent).
         if let Some(status) = self.status.take() {
+            let offset = 16 - self.adc.get_resolution_bits();
+            let adc_value = sample >> offset;
+            let milliamps: usize = if adc_value >= parameter::REFERENCE {
+                (adc_value - parameter::REFERENCE) as usize / parameter::VAL_PER_MILLIAMP as usize
+            } else {
+                0
+            };
+            let milliwatts: usize = (milliamps * 3) + (milliamps / 3);
+
             match status {
-                Heuristic::Instant(app_id) => self.account(app_id, sample),
-                Heuristic::After(app_id, _delay) => self.account(app_id, sample),
+                Heuristic::Instant(app_id) => self.account(app_id, milliwatts as usize), // Hey: not valid; need additional information.
+                Heuristic::After(app_id, _delay) => self.account(app_id, milliwatts as usize), // Hey: not valid; need additional information.
                 Heuristic::Recurrent(app_id, interval) => {
+                    if interval <= 1000 {
+                        let estimate_div: usize = 1000 / (interval as usize);
+                        self.account(app_id, milliwatts / estimate_div);
+                    } else {
+                        let estimate_fac: usize = (interval as usize) / 1000;
+                        self.account(app_id, milliwatts * estimate_fac);
+                    }
+
                     // Put this back to happen again.
-                    self.account(app_id, sample);
                     self.measure(Heuristic::Recurrent(app_id, interval));
                 }
             }
