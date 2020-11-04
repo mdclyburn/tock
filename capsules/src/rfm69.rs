@@ -175,14 +175,23 @@ impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
     }
 
     /// Change the radio operating mode.
-    fn set_mode(&self, mode: OpMode) -> ReturnCode {
+    fn set_mode(&self, app_id: AppId, mode: OpMode) -> ReturnCode {
         self.write(
             register::OpMode,
             match mode {
-                OpMode::Sleep => 0b000 << 2,
-                OpMode::Standby => 0b001 << 2,
+                OpMode::Sleep => {
+                    self.eacct.stop(app_id);
+                    0b000 << 2
+                },
+                OpMode::Standby => {
+                    self.eacct.stop(app_id);
+                    0b001 << 2
+                },
                 OpMode::FrequencySynthesizer => 0b010 << 2,
-                OpMode::Transmit => 0b011 << 2,
+                OpMode::Transmit => {
+                    self.eacct.measure(Heuristic::Recurrent(app_id, 100));
+                    0b011 << 2
+                },
                 OpMode::Receive => 0b100 << 2,
             })
     }
@@ -263,8 +272,7 @@ impl<'a, A: Alarm<'a>> Driver for Rfm69<'a, A> {
             // Set the operating mode.
             5 => {
                 let (mode, _) = (r2, r3);
-                self.eacct.measure(Heuristic::After(caller_id, 50));
-                self.set_mode(OpMode::from(mode))
+                self.set_mode(caller_id, OpMode::from(mode))
             },
 
             // Last read.
