@@ -145,8 +145,8 @@ impl<'a, Adc: CombinedAdc, A: Alarm<'a>> AdcClient for EnergyAccount<'a, Adc, A>
                 Heuristic::After(app_id, _delay) => self.account(app_id, sample),
                 Heuristic::Recurrent(app_id, interval) => {
                     // Put this back to happen again.
-                    self.status.put(Heuristic::Recurrent(app_id, interval));
                     self.account(app_id, sample);
+                    self.measure(Heuristic::Recurrent(app_id, interval));
                 }
             }
         }
