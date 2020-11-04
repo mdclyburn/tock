@@ -72,7 +72,8 @@ impl<'a, Adc: CombinedAdc, A: Alarm<'a>> EnergyAccount<'a, Adc, A> {
                 .find(|entry| entry.app_id == app_id);
 
             if let Some(entry) = find_res {
-                entry.used.replace(mws);
+                let new_total = entry.used.map_or(mws, |x| *x + mws);
+                entry.used.replace(new_total);
             } else {
                 for i in 0..self.no_entries {
                     if entries[i].is_none() {
