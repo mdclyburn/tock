@@ -56,6 +56,7 @@ mod register {
 }
 
 /// Radio operating mode.
+#[derive(PartialEq)]
 enum OpMode {
     Sleep = 0,
     Standby = 1,
@@ -121,28 +122,16 @@ impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
         }
     }
 
-    fn lock_app_operator(&self, calling_app: AppId) -> bool {
+    fn with_lock<F>(&self, calling_app: AppId, f: F) -> ReturnCode where
+        F: FnOnce(bool) -> ReturnCode {
         if self.operator.is_none() {
             self.operator.put(calling_app);
-            true
-        } else {
-            self.operator.map(|current_operator| {
-                *current_operator == calling_app
-            }).unwrap()
-        }
-    }
-
-    fn with_lock<F>(&self, calling_app: AppId, f: F) -> ReturnCode where
-        F: FnOnce() -> ReturnCode {
-        if self.lock_app_operator(calling_app) {
-            f()
+            f(true)
+        } else if self.operator.map(|x| *x == calling_app).unwrap() {
+            f(false)
         } else {
             ReturnCode::EBUSY
         }
-    }
-
-    fn release_app_operator(&self) {
-        self.operator.take();
     }
 
     /// Reset and configure the radio.
@@ -203,41 +192,16 @@ impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
     }
 
     /// Change the radio operating mode.
-    fn set_mode(&self, app_id: AppId, mode: OpMode) -> ReturnCode {
-        let return_code = self.with_lock(app_id, || {
-            self.write(
-                register::OpMode,
-                match mode {
-                    OpMode::Sleep => {
-                        self.eacct.stop(app_id);
-                        0b000 << 2
-                    },
-                    OpMode::Standby => {
-                        self.eacct.stop(app_id);
-                        self.eacct.measure(Heuristic::Recurrent(app_id, 100));
-                        0b001 << 2
-                    },
-                    OpMode::FrequencySynthesizer => 0b010 << 2,
-                    OpMode::Transmit => {
-                        self.eacct.stop(app_id);
-                        self.eacct.measure(Heuristic::Recurrent(app_id, 100));
-                        0b011 << 2
-                    },
-                    OpMode::Receive => 0b100 << 2,
-                })
-        });
-
-        let unlock = match return_code {
-            ReturnCode::SuccessWithValue { value: _ } => true,
-            ReturnCode::SUCCESS => true,
-            _ => false,
-        };
-
-        if unlock {
-            self.release_app_operator();
-        }
-
-        return_code
+    fn set_mode(&self, mode: OpMode) -> ReturnCode {
+        self.write(
+            register::OpMode,
+            match mode {
+                OpMode::Sleep => 0b000 << 2,
+                OpMode::Standby => 0b001 << 2,
+                OpMode::FrequencySynthesizer => 0b010 << 2,
+                OpMode::Transmit => 0b011 << 2,
+                OpMode::Receive => 0b100 << 2,
+            })
     }
 }
 
@@ -275,7 +239,9 @@ impl<'a, A: Alarm<'a>> Driver for Rfm69<'a, A> {
             1 => self.reset(),
 
             // Current status.
-            2 => self.status(),
+            2 => self.with_lock(caller_id, |_| {
+                self.status()
+            }),
 
             // Register read.
             3 => {
@@ -291,8 +257,22 @@ impl<'a, A: Alarm<'a>> Driver for Rfm69<'a, A> {
 
             // Set the operating mode.
             5 => {
-                let (mode, _) = (r2, r3);
-                self.set_mode(caller_id, OpMode::from(mode))
+                let (mode, _) = (OpMode::from(r2), r3);
+                self.with_lock(caller_id, |new_acq| {
+                    if !new_acq {
+                        assert!(self.eacct.stop(caller_id)
+                                == ReturnCode::SUCCESS);
+                    }
+
+                    if mode == OpMode::Sleep {
+                        self.operator.take();
+                    } else {
+                        assert!(self.eacct.measure(Heuristic::Recurrent(caller_id, 100))
+                                == ReturnCode::SUCCESS);
+                    }
+
+                    self.set_mode(mode)
+                })
             },
 
             // Last read.
