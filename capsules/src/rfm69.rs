@@ -90,6 +90,9 @@ pub struct Rfm69<'a, A: Alarm<'a>> {
     reset_pin: &'a dyn Output,
     alarm: &'a VirtualMuxAlarm<'a, A>,
     eacct: &'a dyn EnergyAccounting,
+
+    operator: MapCell<AppId>,
+
     tx_buffer: TakeCell<'static, [u8]>,
     rx_buffer: TakeCell<'static, [u8]>,
 
@@ -110,11 +113,36 @@ impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
             reset_pin: rst,
             alarm: alarm,
             eacct: eacct,
+            operator: MapCell::empty(),
             tx_buffer: TakeCell::new(tx_buffer),
             rx_buffer: TakeCell::new(rx_buffer),
             status: MapCell::new(Status::Idle),
             last_read: MapCell::new(0),
         }
+    }
+
+    fn lock_app_operator(&self, calling_app: AppId) -> bool {
+        if self.operator.is_none() {
+            self.operator.put(calling_app);
+            true
+        } else {
+            self.operator.map(|current_operator| {
+                *current_operator == calling_app
+            }).unwrap()
+        }
+    }
+
+    fn with_lock<F>(&self, calling_app: AppId, f: F) -> ReturnCode where
+        F: FnOnce() -> ReturnCode {
+        if self.lock_app_operator(calling_app) {
+            f()
+        } else {
+            ReturnCode::EBUSY
+        }
+    }
+
+    fn release_app_operator(&self) {
+        self.operator.take();
     }
 
     /// Reset and configure the radio.
@@ -176,26 +204,40 @@ impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
 
     /// Change the radio operating mode.
     fn set_mode(&self, app_id: AppId, mode: OpMode) -> ReturnCode {
-        self.write(
-            register::OpMode,
-            match mode {
-                OpMode::Sleep => {
-                    self.eacct.stop(app_id);
-                    0b000 << 2
-                },
-                OpMode::Standby => {
-                    self.eacct.stop(app_id);
-                    self.eacct.measure(Heuristic::Recurrent(app_id, 100));
-                    0b001 << 2
-                },
-                OpMode::FrequencySynthesizer => 0b010 << 2,
-                OpMode::Transmit => {
-                    self.eacct.stop(app_id);
-                    self.eacct.measure(Heuristic::Recurrent(app_id, 100));
-                    0b011 << 2
-                },
-                OpMode::Receive => 0b100 << 2,
-            })
+        let return_code = self.with_lock(app_id, || {
+            self.write(
+                register::OpMode,
+                match mode {
+                    OpMode::Sleep => {
+                        self.eacct.stop(app_id);
+                        0b000 << 2
+                    },
+                    OpMode::Standby => {
+                        self.eacct.stop(app_id);
+                        self.eacct.measure(Heuristic::Recurrent(app_id, 100));
+                        0b001 << 2
+                    },
+                    OpMode::FrequencySynthesizer => 0b010 << 2,
+                    OpMode::Transmit => {
+                        self.eacct.stop(app_id);
+                        self.eacct.measure(Heuristic::Recurrent(app_id, 100));
+                        0b011 << 2
+                    },
+                    OpMode::Receive => 0b100 << 2,
+                })
+        });
+
+        let unlock = match return_code {
+            ReturnCode::SuccessWithValue { value: _ } => true,
+            ReturnCode::SUCCESS => true,
+            _ => false,
+        };
+
+        if unlock {
+            self.release_app_operator();
+        }
+
+        return_code
     }
 
     fn fill(&self, byte: u8, len: u8) -> ReturnCode {
