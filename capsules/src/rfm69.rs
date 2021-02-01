@@ -239,30 +239,6 @@ impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
 
         return_code
     }
-
-    fn fill(&self, byte: u8, len: u8) -> ReturnCode {
-        if let Some(buffer) = self.tx_buffer.take() {
-            if let Some(rb) = self.rx_buffer.take() {
-                buffer[0] = 0b10000000 | 0x00;
-                let end = if len > 64 {
-                    64
-                } else {
-                    len
-                };
-
-                for i in 1..end+1 {
-                    buffer[i as usize] = byte;
-                }
-
-                self.status.put(Status::Writing);
-                self.spi.read_write_bytes(buffer, Some(rb), len as usize)
-            } else {
-                ReturnCode::EBUSY
-            }
-        } else {
-            ReturnCode::EBUSY
-        }
-    }
 }
 
 impl<'a, A: Alarm<'a>> spi::SpiMasterClient for Rfm69<'a, A> {
@@ -326,11 +302,6 @@ impl<'a, A: Alarm<'a>> Driver for Rfm69<'a, A> {
                     |val| {
                         ReturnCode::SuccessWithValue { value: *val as usize }
                     })
-            },
-
-            50 => {
-                let (val, len) = (r2 as u8, r3 as u8);
-                self.fill(val, len)
             },
 
             _ => ReturnCode::ENOSUPPORT,
