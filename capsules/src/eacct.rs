@@ -78,6 +78,7 @@ impl<'a, Adc: CombinedAdc, A: Alarm<'a>> EnergyAccount<'a, Adc, A> {
                 for i in 0..self.no_entries {
                     if entries[i].is_none() {
                         entries[i] = Some(Entry::new(app_id, mws));
+                        break;
                     }
                 }
             }
