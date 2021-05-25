@@ -67,6 +67,7 @@ pub mod st7735;
 pub mod temperature;
 pub mod temperature_stm;
 pub mod touch;
+pub mod trace;
 pub mod tsl2561;
 pub mod usb;
 pub mod virtual_adc;
