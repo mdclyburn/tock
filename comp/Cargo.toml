@@ -1,0 +1,11 @@
+[package]
+name = "comp"
+version = "0.1.0"
+authors = ["Marshall Clyburn <mardev2013@gmail.com>"]
+edition = "2018"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+json = "^0.12"
