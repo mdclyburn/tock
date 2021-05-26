@@ -23,6 +23,8 @@ use kernel::Platform;
 #[allow(unused_imports)]
 use kernel::{create_capability, debug, debug_gpio, static_init};
 
+use comp;
+
 /// Support routines for debugging I/O.
 ///
 /// Note: Use of this module will trample any other USART0 configuration.
@@ -370,6 +372,11 @@ pub unsafe fn reset_handler() {
         ),
     )
     .finalize(components::gpio_component_buf!(sam4l::gpio::GPIOPin));
+
+    comp::trace_init!(
+        [&peripherals.pb[14],
+         &peripherals.pb[15]]
+    );
 
     // CRC
     let crc = components::crc::CrcComponent::new(board_kernel, &sam4l::crccu::CRCCU)
