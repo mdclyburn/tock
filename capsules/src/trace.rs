@@ -1,51 +1,29 @@
-use kernel::hil::gpio::Output;
 use kernel::hil::gpio_trace::GPIOTrace;
+use kernel::hil::gpio::InterruptPin;
 
-pub struct Trace<'a> {
-    out_pins: &'a [&'a dyn Output],
+use crate::gpio::GPIO;
+
+pub struct Trace<'a, IP: InterruptPin<'a>> {
+    gpio: &'a GPIO<'a, IP>,
+    pin_nos: &'a [u8],
     id_len: u8,
 }
 
-impl<'a> Trace<'a> {
-    pub fn new(
-        out_pins: &'a [&'a dyn Output],
-        id_len: u8) -> Trace<'a>
+impl<'a, IP: InterruptPin<'a>> Trace<'a, IP> {
+    pub fn new(gpio: &'a GPIO<'a, IP>,
+               pin_nos: &'a [u8],
+               id_len: u8)
+               -> Trace<'a, IP>
     {
         Trace {
-            out_pins,
+            gpio,
+            pin_nos,
             id_len,
         }
     }
 }
 
-impl<'a> GPIOTrace for Trace<'a> {
-    fn signal(&self, id: u8, other_data: Option<u8>) {
-        // When id >> self.id_len != 0, id is out of range.
-        // Could that be problematic during runtime?
-        for offset in 0..self.id_len {
-            if (id >> offset) & 1 == 1 {
-                self.out_pins[offset as usize].set();
-            } else {
-                self.out_pins[offset as usize].clear();
-            }
-        }
-
-        // Set upper pins according to other supplied data.
-        // Always clear them if no data is provided.
-        let out_pin_count: u8 = self.out_pins.len() as u8;
-        if let Some(val) = other_data {
-            for offset in self.id_len..out_pin_count {
-                let val_bit_offset = offset - self.id_len;
-                if (val >> val_bit_offset) & 1 == 1{
-                    self.out_pins[offset as usize].set();
-                } else {
-                    self.out_pins[offset as usize].clear();
-                }
-            }
-        } else {
-            for offset in self.id_len..out_pin_count {
-                self.out_pins[offset as usize].clear();
-            }
-        }
+impl<'a, IP: InterruptPin<'a>> GPIOTrace for Trace<'a, IP> {
+    fn signal(&self, _id: u8, _other_data: Option<u8>) {
     }
 }

@@ -373,9 +373,10 @@ pub unsafe fn reset_handler() {
     )
     .finalize(components::gpio_component_buf!(sam4l::gpio::GPIOPin));
 
-    comp::trace_init!(
-        [&peripherals.pb[14],
-         &peripherals.pb[15]]
+    // Tracing
+    let tracing: Option<&mut capsules::trace::Trace<'static, sam4l::gpio::GPIOPin>> = comp::trace_init!(
+        [0, 1, 2, 3],
+        &gpio
     );
 
     // CRC
