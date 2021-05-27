@@ -29,6 +29,7 @@ pub fn trace_init(input: TokenStream) -> TokenStream {
 
     // Argument #1: available GPIO pins for tracing.
     // Literal slice needs to be kept around and we need to get pin count.
+    // TODO: empty brackets case.
     let gpio_slice = token_iter.next()
         .expect("Argument #1 of invocation, slice of GPIO, is required.");
     let (slice_code, trace_pin_count) = match gpio_slice {
@@ -49,15 +50,25 @@ pub fn trace_init(input: TokenStream) -> TokenStream {
     // Check total state count vs. what's possible.
     let (req_states, possible_states) = (mapping.len() as u32,
                                          2u32.pow(trace_pin_count as u32) - 1);
-    println!("Trace pins:      {:2}", trace_pin_count);
-    println!("Needed states:   {:2}", req_states);
-    println!("Possible states: {:2}", possible_states);
+    // Number of pins needed for state is ceiling of log_2 of number of states plus one
+    // since all pins set to low is the default that I'm not counting as a state.
+    let state_pins = ((req_states + 1) as f32)
+        .log2()
+        .ceil() as usize;
+    println!("Trace pins:  {:2}", trace_pin_count);
+    println!("States used: {:2} / {:2}", req_states, possible_states);
+    println!("State pins:  {:2} / {:2}", state_pins, trace_pin_count);
+
     if possible_states < req_states {
         let e = format!(r#"compile_error!("Not enough states available. Need to represent {} but can only represent {}.")"#,
                         req_states,
                         possible_states);
         return e.parse().unwrap();
     }
+
+    // Remaining pins can be used for transmitting additional information.
+    let data_pins = trace_pin_count - state_pins;
+    println!("Data pins:   {:2}", data_pins);
 
     "".parse().unwrap()
 }
