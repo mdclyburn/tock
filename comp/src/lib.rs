@@ -123,8 +123,37 @@ trace pin count: {}
 }
 
 #[proc_macro]
-pub fn trace(_input: TokenStream) -> TokenStream {
-    "".parse().unwrap()
+pub fn trace(input: TokenStream) -> TokenStream {
+    let load_result = load_json();
+    if let Err(e) = load_result {
+        return format!(r#"compile_error!("Failed to parse JSON: {}")"#, e)
+            .parse()
+            .unwrap();
+    }
+
+    let opt_json = load_result.unwrap();
+    if opt_json.is_none() {
+        return "None".parse().unwrap();
+    }
+
+    let macro_args = stream_to_args(input);
+    println!("Generating tracing code for '{}'.", macro_args[0]);
+
+    match macro_args.len() {
+        1 => {
+            "".parse().unwrap()
+        },
+
+        2 => {
+            "".parse().unwrap()
+        },
+
+        _ => {
+            r#"compile_error!("Macro accepts one or two arguments: name, extra data")"#
+                .parse()
+                .unwrap()
+        }
+    }
 }
 
 fn load_json() -> Result<Option<JsonValue>, String> {
