@@ -55,6 +55,7 @@ static mut RFM69_RX_BUFFER: [u8; 66] = [0; 66];
 
 // Energy accounting
 static mut EACCT_ENTRIES: [Option<capsules::eacct::Entry>; NUM_PROCS] = [None; NUM_PROCS];
+type Trace = capsules::trace::Trace<'static, sam4l::gpio::GPIOPin<'static>>;
 
 /// A structure representing this platform that holds references to all
 /// capsules for this platform.
@@ -388,9 +389,10 @@ pub unsafe fn reset_handler() {
     .finalize(components::gpio_component_buf!(sam4l::gpio::GPIOPin));
 
     // Tracing
-    let tracing: Option<&mut capsules::trace::Trace<'static, sam4l::gpio::GPIOPin>> = comp::trace_init!(
+    let tracing: Option<&mut Trace> = comp::trace_init!(
+        sam4l::gpio::GPIOPin<'static>,
         [0, 1, 2, 3],
-        &gpio
+        &gpio,
     );
 
     // CRC
