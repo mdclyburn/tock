@@ -60,7 +60,7 @@ pub fn trace_init(input: TokenStream) -> TokenStream {
         println!("Argument #{}: {}", no, arg);
     }
     if macro_args.len() != 3 {
-        return r#"compile_error!("Macro takes three arguments: pin type, pin numbers, and GPIO capsule.");"#
+        return r#"compile_error!("Macro takes three arguments: pin type, pin numbers, and GPIO capsule.")"#
             .parse()
             .unwrap();
     }
