@@ -74,6 +74,7 @@ struct Hail {
     ipc: kernel::ipc::IPC,
     crc: &'static capsules::crc::Crc<'static, sam4l::crccu::Crccu<'static>>,
     dac: &'static capsules::dac::Dac<'static>,
+    trace: Option<&'static capsules::trace::Trace<'static, sam4l::gpio::GPIOPin<'static>>>,
 }
 
 /// Mapping of integer syscalls to objects that implement syscalls.
@@ -96,6 +97,7 @@ impl Platform for Hail {
             capsules::humidity::DRIVER_NUM => f(Some(self.humidity)),
             capsules::temperature::DRIVER_NUM => f(Some(self.temp)),
             capsules::ninedof::DRIVER_NUM => f(Some(self.ninedof)),
+            capsules::trace::DRIVER_NUM => f(self.trace.map(|x| x as &dyn kernel::Driver)),
 
             capsules::rng::DRIVER_NUM => f(Some(self.rng)),
 
@@ -376,7 +378,7 @@ pub unsafe fn reset_handler() {
     .finalize(components::gpio_component_buf!(sam4l::gpio::GPIOPin));
 
     // Tracing
-    let tracing: Option<&mut Trace> = comp::trace_init!(
+    let trace: Option<&'static Trace> = comp::trace_init!(
         sam4l::gpio::GPIOPin<'static>,
         [0, 1, 2, 3],
         &gpio,
@@ -434,8 +436,9 @@ pub unsafe fn reset_handler() {
         button: button,
         rng: rng,
         ipc: kernel::ipc::IPC::new(board_kernel, &memory_allocation_capability),
-        crc: crc,
-        dac: dac,
+        crc,
+        dac,
+        trace,
     };
 
     // Setup the UART bus for nRF51 serialization..

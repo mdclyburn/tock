@@ -37,24 +37,7 @@ pub fn trace_init(input: TokenStream) -> TokenStream {
         mapping.push((name, value));
     }
 
-    let mut macro_args: Vec<TokenStream> = Vec::new();
-    let mut token_iter = input.into_iter();
-    loop {
-        let arg_tokens = token_iter
-            .by_ref()
-            .take_while(|token| {
-                match token {
-                    TokenTree::Punct(punct) => punct.as_char() != ',',
-                    _ => true,
-                }
-            });
-        let arg_token_stream = TokenStream::from_iter(arg_tokens);
-        if arg_token_stream.is_empty() {
-            break;
-        } else {
-            macro_args.push(arg_token_stream);
-        }
-    }
+    let macro_args = stream_to_args(input);
 
     for (arg, no) in macro_args.iter().zip(1..) {
         println!("Argument #{}: {}", no, arg);
@@ -125,11 +108,13 @@ trace pin count: {}
 
     let generated_code = format!(r#"
 {{
-  let ___macro__trace = static_init!(
+  let ___macro__trace_capsule = static_init!(
         capsules::trace::Trace<'static, {}>,
         capsules::trace::Trace::new({}, &{}, {}));
 
-  Some(___macro__trace)
+  capsules::trace::INSTANCE.put(___macro__trace_capsule);
+
+  Some(___macro__trace_capsule)
 }}
     "#, pin_type.to_string(), gpio.to_string(), slice_code, trace_pin_count);
     println!("generated code:\n{}", generated_code);
@@ -138,7 +123,7 @@ trace pin count: {}
 }
 
 #[proc_macro]
-pub fn trace(input: TokenStream) -> TokenStream {
+pub fn trace(_input: TokenStream) -> TokenStream {
     "".parse().unwrap()
 }
 
@@ -157,4 +142,27 @@ fn load_json() -> Result<Option<JsonValue>, String> {
     } else {
         Ok(None)
     }
+}
+
+fn stream_to_args(stream: TokenStream) -> Vec<TokenStream> {
+    let mut stream_args = Vec::new();
+    let mut token_stream_iter = stream.into_iter();
+    loop {
+        let arg_tokens = token_stream_iter
+            .by_ref()
+            .take_while(|token| {
+                match token {
+                    TokenTree::Punct(p) => p.as_char() != ',',
+                    _ => true,
+                }
+            });
+        let arg_token_stream = TokenStream::from_iter(arg_tokens);
+        if arg_token_stream.is_empty() {
+            break;
+        } else {
+            stream_args.push(arg_token_stream);
+        }
+    }
+
+    stream_args
 }
