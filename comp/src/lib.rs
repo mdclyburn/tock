@@ -1,4 +1,3 @@
-use std::env;
 use std::fs::File;
 use std::io::Read;
 use std::iter::FromIterator;
@@ -12,7 +11,7 @@ use proc_macro::{
 
 #[proc_macro]
 pub fn trace_init(input: TokenStream) -> TokenStream {
-    let mut load_result = load_json();
+    let load_result = load_json();
     if let Err(e) = load_result {
         return format!(r#"compile_error!("Failed to parse JSON: {}")"#, e)
             .parse()
@@ -20,7 +19,6 @@ pub fn trace_init(input: TokenStream) -> TokenStream {
     }
 
     let opt_json = load_result.unwrap();
-
     if opt_json.is_none() {
         return "None".parse().unwrap();
     } else {
@@ -38,15 +36,46 @@ pub fn trace_init(input: TokenStream) -> TokenStream {
 
         mapping.push((name, value));
     }
-    let req_cardinality = mapping.len();
 
+    let mut macro_args: Vec<TokenStream> = Vec::new();
     let mut token_iter = input.into_iter();
+    loop {
+        let arg_tokens = token_iter
+            .by_ref()
+            .take_while(|token| {
+                match token {
+                    TokenTree::Punct(punct) => punct.as_char() != ',',
+                    _ => true,
+                }
+            });
+        let arg_token_stream = TokenStream::from_iter(arg_tokens);
+        if arg_token_stream.is_empty() {
+            break;
+        } else {
+            macro_args.push(arg_token_stream);
+        }
+    }
 
-    // Argument #1: available GPIO pins for tracing.
+    for (arg, no) in macro_args.iter().zip(1..) {
+        println!("Argument #{}: {}", no, arg);
+    }
+    if macro_args.len() != 3 {
+        return r#"compile_error!("Macro takes three arguments: pin type, pin numbers, and GPIO capsule.");"#
+            .parse()
+            .unwrap();
+    }
+
+    // Argument #1: chip pin type.
+    let pin_type = &macro_args[0];
+
+    // Argument #2: available GPIO pins for tracing.
     // Literal slice needs to be kept around and we need to get pin count.
     // TODO: empty brackets case.
-    let gpio_slice = token_iter.next()
-        .expect("Argument #1 of invocation, slice of GPIO pin #s, is required.");
+    let gpio_slice = macro_args[1]
+        .clone()
+        .into_iter()
+        .nth(0)
+        .unwrap();
     let (slice_code, trace_pin_count) = match gpio_slice {
         TokenTree::Group(slice) => {
             let slice_code = slice.to_string();
@@ -85,11 +114,8 @@ pub fn trace_init(input: TokenStream) -> TokenStream {
     let data_pins = trace_pin_count - state_pins;
     println!("Data pins:   {:2}", data_pins);
 
-    // Argument #2: GPIO capsule.
-    let sep = token_iter.next()
-        .expect("Missing argument separator.");
-    let gpio = TokenStream::from_iter(token_iter)
-        .to_string();
+    // Argument #3: GPIO capsule.
+    let gpio = &macro_args[2];
 
     println!(r#"GPIO code: {}
 slice code: {}
@@ -100,12 +126,12 @@ trace pin count: {}
     let generated_code = format!(r#"
 {{
   let ___macro__trace = static_init!(
-        capsules::trace::Trace<'static, sam4l::gpio::GPIOPin>,
+        capsules::trace::Trace<'static, {}>,
         capsules::trace::Trace::new({}, &{}, {}));
 
   Some(___macro__trace)
 }}
-    "#, gpio, slice_code, trace_pin_count);
+    "#, pin_type.to_string(), gpio.to_string(), slice_code, trace_pin_count);
     println!("generated code:\n{}", generated_code);
 
     generated_code.parse().unwrap()
@@ -119,10 +145,11 @@ pub fn trace(input: TokenStream) -> TokenStream {
 fn load_json() -> Result<Option<JsonValue>, String> {
     if let Some(path) = option_env!("TRACE_SPEC_PATH") {
         let mut trace_spec_file = File::open(path)
-            .map_err(|err| format!("Could not open trace spec file: {}", err))?;
+            .map_err(|err| format!("Failed to open trace spec file: {}", err))?;
 
         let mut json_text = String::new();
-        trace_spec_file.read_to_string(&mut json_text);
+        trace_spec_file.read_to_string(&mut json_text)
+            .map_err(|err| format!("Failed to read trace spec file: {}", err))?;
         let trace_json = json::parse(&json_text)
             .map_err(|err| format!("Failed to parse trace spec file: {}", err))?;
 

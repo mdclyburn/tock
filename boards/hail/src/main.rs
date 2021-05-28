@@ -47,6 +47,8 @@ static mut CHIP: Option<&'static sam4l::chip::Sam4l> = None;
 #[link_section = ".stack_buffer"]
 pub static mut STACK_MEMORY: [u8; 0x1000] = [0; 0x1000];
 
+type Trace = capsules::trace::Trace<'static, sam4l::gpio::GPIOPin<'static>>;
+
 /// A structure representing this platform that holds references to all
 /// capsules for this platform.
 struct Hail {
@@ -374,9 +376,10 @@ pub unsafe fn reset_handler() {
     .finalize(components::gpio_component_buf!(sam4l::gpio::GPIOPin));
 
     // Tracing
-    let tracing: Option<&mut capsules::trace::Trace<'static, sam4l::gpio::GPIOPin>> = comp::trace_init!(
+    let tracing: Option<&mut Trace> = comp::trace_init!(
+        sam4l::gpio::GPIOPin<'static>,
         [0, 1, 2, 3],
-        &gpio
+        &gpio,
     );
 
     // CRC
