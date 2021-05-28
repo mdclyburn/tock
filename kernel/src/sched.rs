@@ -28,6 +28,8 @@ use crate::process::{self, Task};
 use crate::returncode::ReturnCode;
 use crate::syscall::{ContextSwitchReason, Syscall};
 
+use comp;
+
 /// Threshold in microseconds to consider a process's timeslice to be exhausted.
 /// That is, Tock will skip re-scheduling a process if its remaining timeslice
 /// is less than this threshold.
@@ -478,6 +480,7 @@ impl Kernel {
                     }
                     false => {
                         // No kernel work ready, so ask scheduler for a process.
+                        comp::trace!("scheduler/enter");
                         match scheduler.next(self) {
                             SchedulingDecision::RunProcess((appid, timeslice_us)) => {
                                 self.process_map_or((), appid, |process| {
