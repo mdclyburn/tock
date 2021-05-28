@@ -84,6 +84,7 @@ struct Hail {
     dac: &'static capsules::dac::Dac<'static>,
     radio: &'static capsules::rfm69::Rfm69<'static, sam4l::ast::Ast<'static>>,
     eacct: &'static capsules::eacct::EnergyAccount<'static, sam4l::adc::Adc, sam4l::ast::Ast<'static>>,
+    trace: Option<&'static capsules::trace::Trace<'static, sam4l::gpio::GPIOPin<'static>>>,
 }
 
 /// Mapping of integer syscalls to objects that implement syscalls.
@@ -107,8 +108,9 @@ impl Platform for Hail {
             capsules::temperature::DRIVER_NUM => f(Some(self.temp)),
             capsules::ninedof::DRIVER_NUM => f(Some(self.ninedof)),
             capsules::rfm69::DRIVER_NUM => f(Some(self.radio)),
-
             capsules::eacct::DRIVER_NUM => f(Some(self.eacct)),
+
+            capsules::trace::DRIVER_NUM => f(self.trace.map(|x| x as &dyn kernel::Driver)),
 
             capsules::rng::DRIVER_NUM => f(Some(self.rng)),
 
@@ -389,7 +391,7 @@ pub unsafe fn reset_handler() {
     .finalize(components::gpio_component_buf!(sam4l::gpio::GPIOPin));
 
     // Tracing
-    let tracing: Option<&mut Trace> = comp::trace_init!(
+    let trace: Option<&'static Trace> = comp::trace_init!(
         sam4l::gpio::GPIOPin<'static>,
         [0, 1, 2, 3],
         &gpio,
@@ -490,6 +492,9 @@ pub unsafe fn reset_handler() {
         dac: dac,
         radio: radio,
         eacct: eacct,
+        crc,
+        dac,
+        trace,
     };
 
     // Setup the UART bus for nRF51 serialization..

@@ -1,7 +1,13 @@
+use kernel::Driver;
+use kernel::common::cells::MapCell;
 use kernel::hil::gpio_trace::GPIOTrace;
 use kernel::hil::gpio::InterruptPin;
 
+use crate::driver;
 use crate::gpio::GPIO;
+
+pub const DRIVER_NUM: usize = driver::NUM::Trace as usize;
+pub static mut INSTANCE: MapCell<&dyn GPIOTrace> = MapCell::empty();
 
 pub struct Trace<'a, IP: InterruptPin<'a>> {
     gpio: &'a GPIO<'a, IP>,
@@ -27,3 +33,5 @@ impl<'a, IP: InterruptPin<'a>> GPIOTrace for Trace<'a, IP> {
     fn signal(&self, _id: u8, _other_data: Option<u8>) {
     }
 }
+
+impl<'a, IP: InterruptPin<'a>> Driver for Trace<'a, IP> {  }
