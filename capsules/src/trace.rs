@@ -7,7 +7,6 @@ use crate::driver;
 use crate::gpio::GPIO;
 
 pub const DRIVER_NUM: usize = driver::NUM::Trace as usize;
-pub static mut INSTANCE: MapCell<&dyn GPIOTrace> = MapCell::empty();
 
 pub struct Trace<'a, IP: InterruptPin<'a>> {
     gpio: &'a GPIO<'a, IP>,
