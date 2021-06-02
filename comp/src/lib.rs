@@ -110,10 +110,10 @@ trace pin count: {}
     let generated_code = format!(r#"
 {{
   let ___macro__trace_capsule = static_init!(
-        capsules::trace::Trace<'static, {}>,
-        capsules::trace::Trace::new({}, &{}, {}));
+        capsules::trace::ParallelGPIOTrace<'static, {}>,
+        capsules::trace::ParallelGPIOTrace::new({}, &{}, {}));
 
-  hil::gpio_trace::INSTANCE.put(___macro__trace_capsule);
+  hil::trace::INSTANCE.put(___macro__trace_capsule);
 
   Some(___macro__trace_capsule)
 }}
@@ -179,8 +179,8 @@ pub fn trace(input: TokenStream) -> TokenStream {
         };
         let code = format!(r#"
 {{
-  use crate::hil::gpio_trace;
-  gpio_trace::INSTANCE.map(|trace| trace.signal({}, {}));
+  use crate::hil::trace;
+  trace::INSTANCE.map(|trace| trace.signal({}, {}));
 }}"#, val, optional_data_code);
         println!("Emitting code for {}:\n{}", trace_point_name, code);
 

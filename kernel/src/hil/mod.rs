@@ -11,7 +11,7 @@ pub mod entropy;
 pub mod flash;
 pub mod gpio;
 pub mod gpio_async;
-pub mod gpio_trace;
+pub mod trace;
 pub mod i2c;
 pub mod led;
 pub mod log;

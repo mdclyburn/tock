@@ -47,8 +47,6 @@ static mut CHIP: Option<&'static sam4l::chip::Sam4l> = None;
 #[link_section = ".stack_buffer"]
 pub static mut STACK_MEMORY: [u8; 0x1000] = [0; 0x1000];
 
-type Trace = capsules::trace::Trace<'static, sam4l::gpio::GPIOPin<'static>>;
-
 /// A structure representing this platform that holds references to all
 /// capsules for this platform.
 struct Hail {
@@ -74,7 +72,6 @@ struct Hail {
     ipc: kernel::ipc::IPC,
     crc: &'static capsules::crc::Crc<'static, sam4l::crccu::Crccu<'static>>,
     dac: &'static capsules::dac::Dac<'static>,
-    trace: Option<&'static capsules::trace::Trace<'static, sam4l::gpio::GPIOPin<'static>>>,
 }
 
 /// Mapping of integer syscalls to objects that implement syscalls.
@@ -97,7 +94,6 @@ impl Platform for Hail {
             capsules::humidity::DRIVER_NUM => f(Some(self.humidity)),
             capsules::temperature::DRIVER_NUM => f(Some(self.temp)),
             capsules::ninedof::DRIVER_NUM => f(Some(self.ninedof)),
-            capsules::trace::DRIVER_NUM => f(self.trace.map(|x| x as &dyn kernel::Driver)),
 
             capsules::rng::DRIVER_NUM => f(Some(self.rng)),
 
@@ -378,7 +374,8 @@ pub unsafe fn reset_handler() {
     .finalize(components::gpio_component_buf!(sam4l::gpio::GPIOPin));
 
     // Tracing
-    let trace: Option<&'static Trace> = comp::trace_init!(
+    type Trace = capsules::trace::ParallelGPIOTrace<'static, sam4l::gpio::GPIOPin<'static>>;
+    let _trace: Option<&'static Trace> = comp::trace_init!(
         sam4l::gpio::GPIOPin<'static>,
         [0, 1, 2, 3],
         &gpio,
@@ -438,7 +435,6 @@ pub unsafe fn reset_handler() {
         ipc: kernel::ipc::IPC::new(board_kernel, &memory_allocation_capability),
         crc,
         dac,
-        trace,
     };
 
     // Setup the UART bus for nRF51 serialization..
