@@ -159,7 +159,7 @@ pub fn trace(input: TokenStream) -> TokenStream {
 
     let mut json = opt_json.unwrap();
     // Uh... for each invocation?
-    let mut mapping: HashMap<String, u8> = json.members_mut()
+    let mapping: HashMap<String, u8> = json.members_mut()
         .map(|obj| {
             let name = obj.remove("name").as_str()
                 .expect("Expected 'name' property as a string.")

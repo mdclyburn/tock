@@ -1,5 +1,4 @@
 use kernel::Driver;
-use kernel::common::cells::MapCell;
 use kernel::hil::trace::Trace;
 use kernel::hil::gpio::InterruptPin;
 
@@ -29,7 +28,17 @@ impl<'a, IP: InterruptPin<'a>> ParallelGPIOTrace<'a, IP> {
 }
 
 impl<'a, IP: InterruptPin<'a>> Trace for ParallelGPIOTrace<'a, IP> {
-    fn signal(&self, _id: u8, _other_data: Option<u8>) {
+    fn signal(&self, id: u8, other_data: Option<u8>) {
+        let out: u16 =
+            (id as u16)
+            | ((other_data.unwrap_or(0) as u16) << self.id_len);
+        for offset in 0..self.pin_nos.len() {
+            if (out >> offset) == 1 {
+                // Set the pin to high.
+            } else {
+                // Set the pin to low.
+            }
+        }
     }
 }
 
