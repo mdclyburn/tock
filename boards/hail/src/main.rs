@@ -391,7 +391,8 @@ pub unsafe fn reset_handler() {
     .finalize(components::gpio_component_buf!(sam4l::gpio::GPIOPin));
 
     // Tracing
-    let trace: Option<&'static Trace> = comp::trace_init!(
+    type Trace = capsules::trace::ParallelGPIOTrace<'static, sam4l::gpio::GPIOPin<'static>>;
+    let _trace: Option<&'static Trace> = comp::trace_init!(
         sam4l::gpio::GPIOPin<'static>,
         [0, 1, 2, 3],
         &gpio,
@@ -494,7 +495,6 @@ pub unsafe fn reset_handler() {
         eacct: eacct,
         crc,
         dac,
-        trace,
     };
 
     // Setup the UART bus for nRF51 serialization..

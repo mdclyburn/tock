@@ -12,6 +12,10 @@ pub mod entropy;
 pub mod flash;
 pub mod gpio;
 pub mod gpio_async;
+<<<<<<< HEAD
+=======
+pub mod trace;
+>>>>>>> 805f8e7b1 (Name shuffling)
 pub mod i2c;
 pub mod led;
 pub mod log;
