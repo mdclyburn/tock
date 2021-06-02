@@ -146,11 +146,16 @@ pub fn trace(input: TokenStream) -> TokenStream {
     }
     println!("Generating tracing code for '{}'.", macro_args[0]);
 
-    println!("DEBUG: {:?}", macro_args[0]);
     let trace_point_name = trace_point_name(macro_args[0].clone())
         .unwrap();
     println!("Trace point name: {}", trace_point_name);
 
+    let trace_point_data = if macro_args.len() == 2 {
+        Some(macro_args[1].to_string())
+    } else {
+        None
+    };
+    println!("Trace point other data: {:?}", trace_point_data);
 
     let mut json = opt_json.unwrap();
     // Uh... for each invocation?
@@ -167,11 +172,16 @@ pub fn trace(input: TokenStream) -> TokenStream {
         .collect();
 
     if let Some(val) = mapping.get(&trace_point_name) {
+        let optional_data_code = if let Some(data) = trace_point_data {
+            format!("Some({})", data)
+        } else {
+            "None".to_string()
+        };
         let code = format!(r#"
 {{
   use crate::hil::gpio_trace;
-  gpio_trace::INSTANCE.map(|trace| trace.signal({}, None));
-}}"#, val);
+  gpio_trace::INSTANCE.map(|trace| trace.signal({}, {}));
+}}"#, val, optional_data_code);
         println!("Emitting code for {}:\n{}", trace_point_name, code);
 
         code
