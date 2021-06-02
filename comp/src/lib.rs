@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::iter::FromIterator;
@@ -112,7 +113,7 @@ trace pin count: {}
         capsules::trace::Trace<'static, {}>,
         capsules::trace::Trace::new({}, &{}, {}));
 
-  capsules::trace::INSTANCE.put(___macro__trace_capsule);
+  hil::gpio_trace::INSTANCE.put(___macro__trace_capsule);
 
   Some(___macro__trace_capsule)
 }}
@@ -137,22 +138,50 @@ pub fn trace(input: TokenStream) -> TokenStream {
     }
 
     let macro_args = stream_to_args(input);
+    if macro_args.len() == 0 || macro_args.len() > 2 {
+        return
+            r#"compile_error!("Macro accepts one or two arguments: name, [ extra data ]")"#
+            .parse()
+            .unwrap()
+    }
     println!("Generating tracing code for '{}'.", macro_args[0]);
 
-    match macro_args.len() {
-        1 => {
-            "".parse().unwrap()
-        },
+    println!("DEBUG: {:?}", macro_args[0]);
+    let trace_point_name = trace_point_name(macro_args[0].clone())
+        .unwrap();
+    println!("Trace point name: {}", trace_point_name);
 
-        2 => {
-            "".parse().unwrap()
-        },
 
-        _ => {
-            r#"compile_error!("Macro accepts one or two arguments: name, extra data")"#
-                .parse()
-                .unwrap()
-        }
+    let mut json = opt_json.unwrap();
+    // Uh... for each invocation?
+    let mut mapping: HashMap<String, u8> = json.members_mut()
+        .map(|obj| {
+            let name = obj.remove("name").as_str()
+                .expect("Expected 'name' property as a string.")
+                .to_string();
+            let value = obj.remove("value").as_u8()
+                .expect("Expected 'value' property as a u8.");
+
+            (name, value)
+        })
+        .collect();
+
+    if let Some(val) = mapping.get(&trace_point_name) {
+        let code = format!(r#"
+{{
+  use crate::hil::gpio_trace;
+  gpio_trace::INSTANCE.map(|trace| trace.signal({}, None));
+}}"#, val);
+        println!("Emitting code for {}:\n{}", trace_point_name, code);
+
+        code
+            .parse()
+            .unwrap()
+    } else {
+        format!(r#"compile_error!("Trace point '{}' not specified in spec file.")"#,
+                trace_point_name)
+            .parse()
+            .unwrap()
     }
 }
 
@@ -194,4 +223,29 @@ fn stream_to_args(stream: TokenStream) -> Vec<TokenStream> {
     }
 
     stream_args
+}
+
+fn trace_point_name(name_stream: TokenStream) -> Result<String, String> {
+    let raw_name = name_stream.to_string();
+    let mut stream_iter = name_stream.into_iter();
+    let mut name = String::new();
+
+    loop {
+        if let Some(TokenTree::Ident(s)) = stream_iter.next() {
+            name.push_str(&s.to_string());
+            match stream_iter.next() {
+                Some(TokenTree::Punct(punct_char)) => {
+                    if punct_char.as_char() != '/' {
+                        return Err(format!("Malformed trace point name: {} (expected '/').", raw_name));
+                    } else {
+                        name.push('/');
+                    }
+                },
+                None => return Ok(name),
+                _ => return Err(format!("Malformed trace point name (expected '/')."))
+            };
+        } else {
+            return Err(format!("Malformed trace point name: {}", raw_name));
+        }
+    }
 }

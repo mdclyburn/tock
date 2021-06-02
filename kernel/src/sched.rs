@@ -480,7 +480,7 @@ impl Kernel {
                     }
                     false => {
                         // No kernel work ready, so ask scheduler for a process.
-                        comp::trace!("scheduler/enter");
+                        comp::trace!(scheduler/enter);
                         match scheduler.next(self) {
                             SchedulingDecision::RunProcess((appid, timeslice_us)) => {
                                 self.process_map_or((), appid, |process| {
