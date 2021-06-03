@@ -29,14 +29,15 @@ impl<'a, IP: InterruptPin<'a>> ParallelGPIOTrace<'a, IP> {
 
 impl<'a, IP: InterruptPin<'a>> Trace for ParallelGPIOTrace<'a, IP> {
     fn signal(&self, id: u8, other_data: Option<u8>) {
+        use kernel::hil::gpio::GPIO;
         let out: u16 =
             (id as u16)
             | ((other_data.unwrap_or(0) as u16) << self.id_len);
         for offset in 0..self.pin_nos.len() {
             if (out >> offset) == 1 {
-                // Set the pin to high.
+                self.gpio.set(offset);
             } else {
-                // Set the pin to low.
+                self.gpio.clear(offset);
             }
         }
     }
