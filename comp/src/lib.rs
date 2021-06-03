@@ -77,15 +77,10 @@ pub fn trace_init(input: TokenStream) -> TokenStream {
     let opt_trace_points = load_result.unwrap();
     if opt_trace_points.is_none() {
         return "None".parse().unwrap();
-    } else {
-        println!("Generating tracing code.");
     }
     let trace_points = opt_trace_points.unwrap();
 
     let macro_args = stream_to_args(input);
-    for (arg, no) in macro_args.iter().zip(1..) {
-        println!("Argument #{}: {}", no, arg);
-    }
     if macro_args.len() != 3 {
         return r#"compile_error!("Macro takes three arguments: pin type, pin numbers, and GPIO capsule.")"#
             .parse()
@@ -126,9 +121,6 @@ pub fn trace_init(input: TokenStream) -> TokenStream {
     let state_pins = ((req_states + 1) as f32)
         .log2()
         .ceil() as usize;
-    println!("Trace pins:  {:2}", trace_pin_count);
-    println!("States used: {:2} / {:2}", req_states, possible_states);
-    println!("State pins:  {:2} / {:2}", state_pins, trace_pin_count);
 
     if possible_states < req_states {
         let e = format!(r#"compile_error!("Not enough states available; need to represent {} but can only represent {}.")"#,
@@ -139,16 +131,9 @@ pub fn trace_init(input: TokenStream) -> TokenStream {
 
     // Remaining pins can be used for transmitting additional information.
     let data_pins = trace_pin_count - state_pins;
-    println!("Data pins:   {:2}", data_pins);
 
     // Argument #3: GPIO capsule.
     let gpio = &macro_args[2];
-
-    println!(r#"GPIO code: {}
-slice code: {}
-trace pin count: {}
-"#,
-             gpio, slice_code, trace_pin_count);
 
     let generated_code = format!(r#"
 {{
@@ -161,7 +146,14 @@ trace pin count: {}
   Some(___macro__trace_capsule)
 }}
     "#, pin_type.to_string(), gpio.to_string(), slice_code, trace_pin_count);
-    println!("generated code:\n{}", generated_code);
+
+    if verbose() {
+        println!("Generated tracing initialization:\n{}", generated_code);
+        println!("Trace pins:  {:2}", trace_pin_count);
+        println!("States used: {:2} / {:2}", req_states, possible_states);
+        println!("State pins:  {:2} / {:2}", state_pins, trace_pin_count);
+        println!("Data pins:   {:2}", data_pins);
+    }
 
     generated_code.parse().unwrap()
 }
@@ -187,18 +179,14 @@ pub fn trace(input: TokenStream) -> TokenStream {
             .parse()
             .unwrap()
     }
-    println!("Generating tracing code for '{}'.", macro_args[0]);
 
     let trace_point_name = trace_point_name(macro_args[0].clone())
         .unwrap();
-    println!("Trace point name: {}", trace_point_name);
-
     let trace_point_data = if macro_args.len() == 2 {
         Some(macro_args[1].to_string())
     } else {
         None
     };
-    println!("Trace point other data: {:?}", trace_point_data);
 
     let trace_points = opt_trace_points.unwrap();
     if let Some(trace_point) = trace_points.iter().find(|p| p.get_name() == &trace_point_name) {
@@ -212,7 +200,9 @@ pub fn trace(input: TokenStream) -> TokenStream {
   use crate::hil::trace;
   trace::INSTANCE.map(|trace| trace.signal({}, {}));
 }}"#, trace_point.get_signal_value(), optional_data_code);
-        println!("Emitting code for {}:\n{}", trace_point_name, code);
+        if verbose() {
+            println!("Generated trace point for {}:\n{}", trace_point_name, code);
+        }
 
         code
             .parse()
@@ -317,5 +307,13 @@ fn trace_point_name(name_stream: TokenStream) -> Result<String, String> {
         } else {
             return Err(format!("Malformed trace point name: {}", raw_name));
         }
+    }
+}
+
+fn verbose() -> bool {
+    if let Some(_value) = option_env!("TRACE_VERBOSE") {
+        true
+    } else {
+        false
     }
 }
