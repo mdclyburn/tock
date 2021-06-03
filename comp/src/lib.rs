@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::fs::File;
 use std::io::Read;
 use std::iter::FromIterator;
@@ -10,6 +10,61 @@ use proc_macro::{
     TokenTree
 };
 
+#[derive(Debug)]
+struct TracePoint {
+    name: String,
+    signal_value: u16,
+}
+
+impl TracePoint {
+    pub fn get_name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn get_signal_value(&self) -> u16 {
+        self.signal_value
+    }
+}
+
+impl TryFrom<&JsonValue> for TracePoint {
+    type Error = String;
+
+    fn try_from(json: &JsonValue) -> Result<Self, Self::Error> {
+        let mut name: Option<String> = None;
+        let mut value: Option<u16> = None;
+
+        for (k, v) in json.entries() {
+            match k {
+                "name" => {
+                    if let Some(trace_point_name) = v.as_str() {
+                        name = Some(trace_point_name.to_string());
+                    } else {
+                        return Err("'name' property is not a string.".to_string());
+                    }
+                },
+
+                "value" => {
+                    let val = v.as_u16().expect("'value' property is not a u16.");
+                    value = Some(val);
+                },
+
+                _ => {  },
+            }
+        }
+
+        if name.is_none() {
+            Err("Name property is missing.".to_string())
+        } else if value.is_none() {
+            Err("Value property is missing.".to_string())
+        } else {
+            Ok(TracePoint {
+                name: name.unwrap(),
+                signal_value: value.unwrap(),
+            })
+        }
+    }
+}
+
 #[proc_macro]
 pub fn trace_init(input: TokenStream) -> TokenStream {
     let load_result = load_json();
@@ -19,27 +74,15 @@ pub fn trace_init(input: TokenStream) -> TokenStream {
             .unwrap();
     }
 
-    let opt_json = load_result.unwrap();
-    if opt_json.is_none() {
+    let opt_trace_points = load_result.unwrap();
+    if opt_trace_points.is_none() {
         return "None".parse().unwrap();
     } else {
         println!("Generating tracing code.");
     }
-
-    let mut json = opt_json.unwrap();
-    let mut mapping = Vec::<(String, u8)>::new();
-    for obj in json.members_mut() {
-        let name = obj.remove("name").as_str()
-            .expect("Name property must be a string.")
-            .to_string();
-        let value = obj.remove("value").as_u8()
-            .expect("Missing value property on JSON object.");
-
-        mapping.push((name, value));
-    }
+    let trace_points = opt_trace_points.unwrap();
 
     let macro_args = stream_to_args(input);
-
     for (arg, no) in macro_args.iter().zip(1..) {
         println!("Argument #{}: {}", no, arg);
     }
@@ -76,7 +119,7 @@ pub fn trace_init(input: TokenStream) -> TokenStream {
     };
 
     // Check total state count vs. what's possible.
-    let (req_states, possible_states) = (mapping.len() as u32,
+    let (req_states, possible_states) = (trace_points.len() as u32,
                                          2u32.pow(trace_pin_count as u32) - 1);
     // Number of pins needed for state is ceiling of log_2 of number of states plus one
     // since all pins set to low is the default that I'm not counting as a state.
@@ -132,8 +175,8 @@ pub fn trace(input: TokenStream) -> TokenStream {
             .unwrap();
     }
 
-    let opt_json = load_result.unwrap();
-    if opt_json.is_none() {
+    let opt_trace_points = load_result.unwrap();
+    if opt_trace_points.is_none() {
         return "None".parse().unwrap();
     }
 
@@ -157,21 +200,8 @@ pub fn trace(input: TokenStream) -> TokenStream {
     };
     println!("Trace point other data: {:?}", trace_point_data);
 
-    let mut json = opt_json.unwrap();
-    // Uh... for each invocation?
-    let mapping: HashMap<String, u8> = json.members_mut()
-        .map(|obj| {
-            let name = obj.remove("name").as_str()
-                .expect("Expected 'name' property as a string.")
-                .to_string();
-            let value = obj.remove("value").as_u8()
-                .expect("Expected 'value' property as a u8.");
-
-            (name, value)
-        })
-        .collect();
-
-    if let Some(val) = mapping.get(&trace_point_name) {
+    let trace_points = opt_trace_points.unwrap();
+    if let Some(trace_point) = trace_points.iter().find(|p| p.get_name() == &trace_point_name) {
         let optional_data_code = if let Some(data) = trace_point_data {
             format!("Some({})", data)
         } else {
@@ -181,7 +211,7 @@ pub fn trace(input: TokenStream) -> TokenStream {
 {{
   use crate::hil::trace;
   trace::INSTANCE.map(|trace| trace.signal({}, {}));
-}}"#, val, optional_data_code);
+}}"#, trace_point.get_signal_value(), optional_data_code);
         println!("Emitting code for {}:\n{}", trace_point_name, code);
 
         code
@@ -195,7 +225,7 @@ pub fn trace(input: TokenStream) -> TokenStream {
     }
 }
 
-fn load_json() -> Result<Option<JsonValue>, String> {
+fn load_json() -> Result<Option<Vec<TracePoint>>, String> {
     if let Some(path) = option_env!("TRACE_SPEC_PATH") {
         let mut trace_spec_file = File::open(path)
             .map_err(|err| format!("Failed to open trace spec file: {}", err))?;
@@ -204,9 +234,39 @@ fn load_json() -> Result<Option<JsonValue>, String> {
         trace_spec_file.read_to_string(&mut json_text)
             .map_err(|err| format!("Failed to read trace spec file: {}", err))?;
         let trace_json = json::parse(&json_text)
-            .map_err(|err| format!("Failed to parse trace spec file: {}", err))?;
+            .map_err(|err| format!("Failed to parse trace spec file: {}", err))
+            .and_then(|json_val| {
+                if json_val.is_object() {
+                    Ok(json_val)
+                } else {
+                    Err("Expected JSON object.".to_string())
+                }
+            })?;
 
-        Ok(Some(trace_json))
+        // Check version.
+        let compat_version = 1;
+        let version = trace_json.entries()
+            .find(|(k, v)| *k == "_version" && v.is_number())
+            .map(|(_k, version)| version.as_u64().expect("Version should be unsigned (u64)."))
+            .expect("Missing '_version' in trace spec file.");
+        if version != 1 {
+            Err(format!("Need version {}, not version {}", compat_version, version))
+        } else {
+            let trace_points: Vec<TracePoint> = trace_json.entries()
+                .find(|(k, v)| *k == "trace-points" && v.is_array())
+                .map(|(_k, arr)| arr)
+                .expect("Missing 'trace-points' array.")
+                .members()
+                .map(|tp_obj| {
+                    TracePoint::try_from(tp_obj)
+                        .map_err::<Result<TracePoint, String>, _>(|e| {
+                            Err(format!("Malformed trace spec: '{}'", e))
+                        })
+                        .unwrap()
+                })
+                .collect();
+            Ok(Some(trace_points))
+        }
     } else {
         Ok(None)
     }
