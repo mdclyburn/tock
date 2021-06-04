@@ -34,7 +34,7 @@ impl<'a, IP: InterruptPin<'a>> Trace for ParallelGPIOTrace<'a, IP> {
             (id as u16)
             | ((other_data.unwrap_or(0) as u16) << self.id_len);
         for offset in 0..self.pin_nos.len() {
-            if (out >> offset) == 1 {
+            if ((out >> offset) & 1) == 1 {
                 self.gpio.set(offset);
             } else {
                 self.gpio.clear(offset);
