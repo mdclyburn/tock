@@ -197,11 +197,26 @@ pub fn trace(input: TokenStream) -> TokenStream {
         } else {
             "None".to_string()
         };
+        let import = macro_args[0].clone().into_iter()
+            .next()
+            .map(|token| {
+                if let TokenTree::Ident(ident) = token {
+                    let s = ident.to_string();
+                    if &s == "kernel" {
+                        "crate::hil::trace"
+                    } else {
+                        "kernel::hil::trace"
+                    }
+                } else {
+                    panic!("First part of trace point name is not an identifier.");
+                }
+            })
+            .unwrap();
         let code = format!(r#"
-{{
-  use crate::hil::trace;
+unsafe {{
+  use {};
   trace::INSTANCE.map(|trace| trace.signal({}, {}));
-}}"#, trace_point.get_signal_value(), optional_data_code);
+}}"#, import, trace_point.get_signal_value(), optional_data_code);
         if verbose() {
             println!("Generated trace point for {}:\n{}", trace_point_name, code);
         }

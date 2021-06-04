@@ -53,6 +53,8 @@
 use kernel::hil::gpio;
 use kernel::{AppId, Driver, ReturnCode};
 
+use comp;
+
 /// Syscall driver number.
 use crate::driver;
 pub const DRIVER_NUM: usize = driver::NUM::Led as usize;
@@ -100,6 +102,7 @@ impl<P: gpio::Pin> Driver for LED<'_, P> {
 
             // on
             1 => {
+                comp::trace!(capsules/led/command/on);
                 if data >= pins_init.len() {
                     ReturnCode::EINVAL /* impossible pin */
                 } else {
@@ -111,6 +114,7 @@ impl<P: gpio::Pin> Driver for LED<'_, P> {
 
             // off
             2 => {
+                comp::trace!(capsules/led/command/off);
                 if data >= pins_init.len() {
                     ReturnCode::EINVAL /* impossible pin */
                 } else {
@@ -122,6 +126,7 @@ impl<P: gpio::Pin> Driver for LED<'_, P> {
 
             // toggle
             3 => {
+                comp::trace!(capsules/led/command/toggle);
                 if data >= pins_init.len() {
                     ReturnCode::EINVAL /* impossible pin */
                 } else {
