@@ -1,6 +1,4 @@
-use crate::common::cells::MapCell;
-
-pub static mut INSTANCE: MapCell<&dyn Trace> = MapCell::empty();
+pub static mut INSTANCE: Option<&dyn Trace> = None;
 
 pub trait Trace {
     fn signal(&self, id: u8, other_data: Option<u8>);
