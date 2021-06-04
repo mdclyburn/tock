@@ -189,7 +189,9 @@ pub fn trace(input: TokenStream) -> TokenStream {
     };
 
     let trace_points = opt_trace_points.unwrap();
-    if let Some(trace_point) = trace_points.iter().find(|p| p.get_name() == &trace_point_name) {
+    let find_trace_point = trace_points.iter()
+        .find(|tp| tp.get_name() == &trace_point_name);
+    if let Some(trace_point) = find_trace_point {
         let optional_data_code = if let Some(data) = trace_point_data {
             format!("Some({})", data)
         } else {
@@ -208,10 +210,7 @@ pub fn trace(input: TokenStream) -> TokenStream {
             .parse()
             .unwrap()
     } else {
-        format!(r#"compile_error!("Trace point '{}' not specified in spec file.")"#,
-                trace_point_name)
-            .parse()
-            .unwrap()
+        "".parse().unwrap()
     }
 }
 
