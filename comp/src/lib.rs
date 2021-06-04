@@ -141,7 +141,7 @@ pub fn trace_init(input: TokenStream) -> TokenStream {
         capsules::trace::ParallelGPIOTrace<'static, {}>,
         capsules::trace::ParallelGPIOTrace::new({}, &{}, {}));
 
-  hil::trace::INSTANCE.put(___macro__trace_capsule);
+  hil::trace::INSTANCE = Some(___macro__trace_capsule);
 
   Some(___macro__trace_capsule)
 }}
@@ -215,7 +215,7 @@ pub fn trace(input: TokenStream) -> TokenStream {
         let code = format!(r#"
 unsafe {{
   use {};
-  trace::INSTANCE.map(|trace| trace.signal({}, {}));
+  if trace::INSTANCE.is_some() {{ trace::INSTANCE.as_ref().unwrap().signal({}, {}) }}
 }}"#, import, trace_point.get_signal_value(), optional_data_code);
         if verbose() {
             println!("Generated trace point for {}:\n{}", trace_point_name, code);
