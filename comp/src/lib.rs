@@ -169,7 +169,7 @@ pub fn trace(input: TokenStream) -> TokenStream {
 
     let opt_trace_points = load_result.unwrap();
     if opt_trace_points.is_none() {
-        return "None".parse().unwrap();
+        return "".parse().unwrap();
     }
 
     let macro_args = stream_to_args(input);
