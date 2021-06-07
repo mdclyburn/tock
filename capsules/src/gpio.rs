@@ -341,6 +341,15 @@ impl<'a, IP: gpio::InterruptPin<'a>> Driver for GPIO<'a, IP> {
 }
 
 impl<'a, IP: gpio::InterruptPin<'a>> gpio::GPIO for GPIO<'a, IP> {
+    fn enable_output(&self, pin_no: usize) {
+        let pins = self.pins.as_ref();
+        if pin_no < pins.len() {
+            if let Some(pin) = pins[pin_no] {
+                pin.make_output();
+            }
+        }
+    }
+
     fn set(&self, pin_no: usize) {
         let pins = self.pins.as_ref();
         if pin_no < pins.len() {

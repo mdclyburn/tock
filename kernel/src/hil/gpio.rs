@@ -58,6 +58,8 @@ pub enum ActivationMode {
 }
 
 pub trait GPIO {
+    fn enable_output(&self, pin_no: usize);
+
     fn set(&self, pin_no: usize);
 
     fn clear(&self, pin_no: usize);
