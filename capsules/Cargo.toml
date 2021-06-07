@@ -7,3 +7,4 @@ edition = "2018"
 [dependencies]
 comp = { path = "../comp" }
 enum_primitive = { path = "../libraries/enum_primitive" }
+kernel = { path = "../kernel" }
