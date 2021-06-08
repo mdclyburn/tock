@@ -63,6 +63,8 @@ pub trait GPIO {
     fn set(&self, pin_no: usize);
 
     fn clear(&self, pin_no: usize);
+
+    fn toggle(&self, pin_no: usize);
 }
 
 /// The Pin trait allows a pin to be used as either input
