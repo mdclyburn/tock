@@ -38,9 +38,13 @@ impl<'a, IP: InterruptPin<'a>> Trace for ParallelGPIOTrace<'a, IP> {
         let out: u16 =
             (id as u16)
             | ((other_data.unwrap_or(0) as u16) << self.id_len);
-        for offset in 0..self.pin_nos.len() {
-            self.gpio.toggle(offset);
-            self.gpio.toggle(offset);
+        let count = self.pin_nos.len();
+        for offset in 0..count {
+            // Signal final trace pin change.
+            if offset == count - 1 {
+                self.gpio.toggle(offset);
+                self.gpio.toggle(offset);
+            }
 
             if ((out >> offset) & 1) == 1 {
                 self.gpio.set(offset);
