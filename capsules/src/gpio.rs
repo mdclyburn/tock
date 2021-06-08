@@ -367,4 +367,13 @@ impl<'a, IP: gpio::InterruptPin<'a>> gpio::GPIO for GPIO<'a, IP> {
             }
         }
     }
+
+    fn toggle(&self, pin_no: usize) {
+        let pins = self.pins.as_ref();
+        if pin_no < pins.len() {
+            if let Some(pin) = pins[pin_no] {
+                pin.toggle();
+            }
+        }
+    }
 }
