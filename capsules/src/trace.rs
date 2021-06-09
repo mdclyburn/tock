@@ -22,6 +22,7 @@ impl<'a, IP: InterruptPin<'a>> ParallelGPIOTrace<'a, IP> {
         use kernel::hil::gpio::GPIO;
         for pin_no in pin_nos {
             gpio.enable_output(*pin_no as usize);
+            gpio.clear(*pin_no as usize);
         }
 
         ParallelGPIOTrace {
