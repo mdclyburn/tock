@@ -145,7 +145,7 @@ pub fn trace_init(input: TokenStream) -> TokenStream {
 
   Some(___macro__trace_capsule)
 }}
-    "#, pin_type.to_string(), gpio.to_string(), slice_code, trace_pin_count);
+    "#, pin_type.to_string(), gpio.to_string(), slice_code, trace_pin_count - data_pins);
 
     if verbose() {
         println!("Generated tracing initialization:\n{}", generated_code);
