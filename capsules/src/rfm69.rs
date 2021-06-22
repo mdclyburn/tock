@@ -7,6 +7,8 @@ use kernel::{AppId, Driver, ReturnCode};
 
 use core::convert::From;
 
+use comp;
+
 use crate::virtual_alarm;
 use crate::virtual_alarm::VirtualMuxAlarm;
 
@@ -147,6 +149,8 @@ impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
 
     /// Reset and configure the radio.
     fn reset(&self) -> ReturnCode {
+        comp::trace!(capsule/radio/reset);
+
         self.spi.configure(spi::ClockPolarity::IdleLow, spi::ClockPhase::SampleLeading, 1000);
 
         self.reset_pin.set();
@@ -213,12 +217,14 @@ impl<'a, A: Alarm<'a>> Rfm69<'a, A> {
                         0b000 << 2
                     },
                     OpMode::Standby => {
+                        comp::trace!(capsule/radio/standby);
                         self.eacct.stop(app_id);
                         self.eacct.measure(Heuristic::Recurrent(app_id, 100));
                         0b001 << 2
                     },
                     OpMode::FrequencySynthesizer => 0b010 << 2,
                     OpMode::Transmit => {
+                        comp::trace!(capsule/radio/transmit);
                         self.eacct.stop(app_id);
                         self.eacct.measure(Heuristic::Recurrent(app_id, 100));
                         0b011 << 2
