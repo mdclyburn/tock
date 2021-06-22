@@ -55,7 +55,8 @@ static mut RFM69_RX_BUFFER: [u8; 66] = [0; 66];
 
 // Energy accounting
 static mut EACCT_ENTRIES: [Option<capsules::eacct::Entry>; NUM_PROCS] = [None; NUM_PROCS];
-type Trace = capsules::trace::Trace<'static, sam4l::gpio::GPIOPin<'static>>;
+
+// type Trace = capsules::trace::Trace<'static, sam4l::gpio::GPIOPin<'static>>;
 
 /// A structure representing this platform that holds references to all
 /// capsules for this platform.
@@ -84,7 +85,7 @@ struct Hail {
     dac: &'static capsules::dac::Dac<'static>,
     radio: &'static capsules::rfm69::Rfm69<'static, sam4l::ast::Ast<'static>>,
     eacct: &'static capsules::eacct::EnergyAccount<'static, sam4l::adc::Adc, sam4l::ast::Ast<'static>>,
-    trace: Option<&'static capsules::trace::Trace<'static, sam4l::gpio::GPIOPin<'static>>>,
+    trace: Option<&'static capsules::trace::ParallelGPIOTrace<'static, sam4l::gpio::GPIOPin<'static>>>,
 }
 
 /// Mapping of integer syscalls to objects that implement syscalls.
@@ -392,7 +393,7 @@ pub unsafe fn reset_handler() {
 
     // Tracing
     type Trace = capsules::trace::ParallelGPIOTrace<'static, sam4l::gpio::GPIOPin<'static>>;
-    let _trace: Option<&'static Trace> = comp::trace_init!(
+    let trace: Option<&'static Trace> = comp::trace_init!(
         sam4l::gpio::GPIOPin<'static>,
         [0, 1, 2, 3],
         &gpio,
@@ -493,8 +494,7 @@ pub unsafe fn reset_handler() {
         dac: dac,
         radio: radio,
         eacct: eacct,
-        crc,
-        dac,
+        trace: trace,
     };
 
     // Setup the UART bus for nRF51 serialization..
