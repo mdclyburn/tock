@@ -102,7 +102,7 @@ impl<P: gpio::Pin> Driver for LED<'_, P> {
 
             // on
             1 => {
-                comp::trace!(capsule/led/command/on);
+                comp::trace!(capsule/led/command/on, data as u8);
                 if data >= pins_init.len() {
                     ReturnCode::EINVAL /* impossible pin */
                 } else {
@@ -114,7 +114,7 @@ impl<P: gpio::Pin> Driver for LED<'_, P> {
 
             // off
             2 => {
-                comp::trace!(capsule/led/command/off);
+                comp::trace!(capsule/led/command/off, data as u8);
                 if data >= pins_init.len() {
                     ReturnCode::EINVAL /* impossible pin */
                 } else {
@@ -126,7 +126,7 @@ impl<P: gpio::Pin> Driver for LED<'_, P> {
 
             // toggle
             3 => {
-                comp::trace!(capsule/led/command/toggle);
+                comp::trace!(capsule/led/command/toggle, data as u8);
                 if data >= pins_init.len() {
                     ReturnCode::EINVAL /* impossible pin */
                 } else {
