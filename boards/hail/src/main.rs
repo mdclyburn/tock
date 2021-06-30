@@ -238,8 +238,8 @@ pub unsafe fn reset_handler() {
     // Initialize USART2 for serial tracing.
     sam4l::usart::USART2.set_mode(sam4l::usart::UsartMode::Uart);
     let serial_tracing = static_init!(
-        capsules::trace::SerialUARTTrace<'static>,
-        capsules::trace::SerialUARTTrace::new(&sam4l::usart::USART2, &mut SERTRACE_TX));
+        capsules::uart_trace::SerialUARTTrace<'static>,
+        capsules::uart_trace::SerialUARTTrace::new(&sam4l::usart::USART2, &mut SERTRACE_TX));
     sam4l::usart::USART2.set_transmit_client(serial_tracing);
     hil::trace::INSTANCE = Some(serial_tracing);
 
@@ -386,7 +386,7 @@ pub unsafe fn reset_handler() {
     .finalize(components::gpio_component_buf!(sam4l::gpio::GPIOPin));
 
     // Tracing
-    type Trace = capsules::trace::ParallelGPIOTrace<'static, sam4l::gpio::GPIOPin<'static>>;
+    type Trace = capsules::gpio_trace::ParallelGPIOTrace<'static, sam4l::gpio::GPIOPin<'static>>;
     let _trace: Option<&'static Trace> = comp::trace_init!(
         sam4l::gpio::GPIOPin<'static>,
         [0, 1, 2, 3],
