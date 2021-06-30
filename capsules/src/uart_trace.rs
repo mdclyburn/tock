@@ -64,3 +64,20 @@ impl<'a> TransmitClient for SerialUARTTrace<'a> {
 }
 
 impl<'a> Driver for SerialUARTTrace<'a> {  }
+
+#[macro_export]
+macro_rules! serial_trace {
+    ($name:expr, $data:expr) => {
+        {
+            let data: &[u8] = ($data);
+
+            use kernel::hil::trace;
+            use kernel::hil::trace::Trace;
+
+            if trace::INSTANCE.is_some() {
+                trace::INSTANCE.as_ref().unwrap()
+                    .signal(data, data.len());
+            }
+        }
+    }
+}
