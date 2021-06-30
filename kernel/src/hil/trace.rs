@@ -1,5 +1,5 @@
 pub static mut INSTANCE: Option<&dyn Trace> = None;
 
 pub trait Trace {
-    fn signal(&self, id: u8, other_data: Option<u8>);
+    fn signal(&self, data: &[u8], len: usize);
 }

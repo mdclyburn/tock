@@ -41,11 +41,15 @@ impl<'a, IP: InterruptPin<'a>> ParallelGPIOTrace<'a, IP> {
 }
 
 impl<'a, IP: InterruptPin<'a>> Trace for ParallelGPIOTrace<'a, IP> {
-    fn signal(&self, id: u8, other_data: Option<u8>) {
+    fn signal(&self, data: &[u8], len: usize) {
+        if len == 0 {
+            return;
+        }
+
         use kernel::hil::gpio::GPIO;
         let out: u16 =
-            (id as u16)
-            | ((other_data.unwrap_or(0) as u16) << self.id_len);
+            (data[0] as u16)
+            | if len > 1 { data[1] as u16 } else { 0u16 } << self.id_len;
         let count = self.pin_nos.len();
         for offset in 0..count {
             self.gpio.clear(offset);
@@ -90,19 +94,19 @@ impl<'a> SerialUARTTrace<'a> {
 }
 
 impl<'a> Trace for SerialUARTTrace<'a> {
-    fn signal(&self, id: u8, data: Option<u8>) {
+    fn signal(&self, data: &[u8], len: usize) {
         let mut tx_buffer: Option<&'static mut [u8]> = None;
         while tx_buffer.is_none() {
             tx_buffer = self.tx_buffer.take();
         }
-
         let tx_buffer = tx_buffer.unwrap();
-        tx_buffer[0] = id;
-        tx_buffer[1] = data.unwrap_or(0);
 
-        let (_return_code, _buf) = self.uart.transmit_buffer(
-            tx_buffer,
-            data.map(|_| 2).unwrap_or(1));
+        let end = tx_buffer.len().min(len);
+        for i in 0..end {
+            tx_buffer[i] = data[i];
+        }
+
+        let (_return_code, _buf) = self.uart.transmit_buffer(tx_buffer, len);
     }
 }
 
