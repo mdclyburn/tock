@@ -19,6 +19,7 @@ use kernel::component::Component;
 use kernel::hil;
 use kernel::hil::i2c::I2CMaster;
 use kernel::hil::Controller;
+use kernel::hil::uart::Transmit;
 use kernel::Platform;
 #[allow(unused_imports)]
 use kernel::{create_capability, debug, debug_gpio, static_init};
@@ -41,6 +42,9 @@ const NUM_PROCS: usize = 20;
 static mut PROCESSES: [Option<&'static dyn kernel::procs::ProcessType>; NUM_PROCS] =
     [None; NUM_PROCS];
 static mut CHIP: Option<&'static sam4l::chip::Sam4l> = None;
+
+// Serial tracing transmission buffer.
+static mut SERTRACE_TX: [u8; 64] = [0; 64];
 
 /// Dummy buffer that causes the linker to reserve enough space for the stack.
 #[no_mangle]
@@ -230,6 +234,14 @@ pub unsafe fn reset_handler() {
 
     hil::uart::Transmit::set_transmit_client(&sam4l::usart::USART0, uart_mux);
     hil::uart::Receive::set_receive_client(&sam4l::usart::USART0, uart_mux);
+
+    // Initialize USART2 for serial tracing.
+    sam4l::usart::USART2.set_mode(sam4l::usart::UsartMode::Uart);
+    let serial_tracing = static_init!(
+        capsules::trace::SerialUARTTrace<'static>,
+        capsules::trace::SerialUARTTrace::new(&sam4l::usart::USART2, &mut SERTRACE_TX));
+    sam4l::usart::USART2.set_transmit_client(serial_tracing);
+    hil::trace::INSTANCE = Some(serial_tracing);
 
     // Setup the console and the process inspection console.
     let console = components::console::ConsoleComponent::new(board_kernel, uart_mux).finalize(());
