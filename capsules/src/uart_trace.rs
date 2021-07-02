@@ -45,12 +45,13 @@ impl<'a> Trace for SerialUARTTrace<'a> {
         }
         let tx_buffer = tx_buffer.unwrap();
 
-        let end = tx_buffer.len().min(len);
-        for i in 0..end {
-            tx_buffer[i] = data[i];
+        let data_len = tx_buffer.len().min(len);
+        tx_buffer[0] = data_len as u8;
+        for i in 1..data_len+1 {
+            tx_buffer[i] = data[i-1];
         }
 
-        let (_return_code, _buf) = self.uart.transmit_buffer(tx_buffer, len);
+        let (_return_code, _buf) = self.uart.transmit_buffer(tx_buffer, 1+data_len);
     }
 }
 

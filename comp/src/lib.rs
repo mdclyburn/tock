@@ -138,8 +138,8 @@ pub fn trace_init(input: TokenStream) -> TokenStream {
     let generated_code = format!(r#"
 {{
   let ___macro__trace_capsule = static_init!(
-        capsules::trace::ParallelGPIOTrace<'static, {}>,
-        capsules::trace::ParallelGPIOTrace::new({}, &{}, {}));
+        capsules::gpio_trace::ParallelGPIOTrace<'static, {}>,
+        capsules::gpio_trace::ParallelGPIOTrace::new({}, &{}, {}));
 
   hil::trace::INSTANCE = Some(___macro__trace_capsule);
 
