@@ -4,6 +4,14 @@ pub trait Trace {
     fn signal(&self, data: &[u8], len: usize);
 }
 
+pub fn signal(data: &[u8], len: usize) {
+    unsafe {
+        if let Some(tracing) = INSTANCE {
+            tracing.signal(data, len);
+        }
+    }
+}
+
 #[macro_export]
 macro_rules! trace {
     ($name:expr, $data:expr) => {

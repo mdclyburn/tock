@@ -68,17 +68,12 @@ impl<'a> Driver for SerialUARTTrace<'a> {  }
 
 #[macro_export]
 macro_rules! serial_trace {
-    ($name:expr, $data:expr) => {
-        {
-            let data: &[u8] = ($data);
+    ($name:expr, $data:expr) => {{
+        use kernel;
 
-            use kernel::hil::trace;
-            use kernel::hil::trace::Trace;
+        let data: &[u8] = ($data);
+        let len: usize = ($data).len();
 
-            if trace::INSTANCE.is_some() {
-                trace::INSTANCE.as_ref().unwrap()
-                    .signal(data, data.len());
-            }
-        }
-    }
+        kernel::hil::trace::signal(data, len);
+    }}
 }
