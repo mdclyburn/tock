@@ -114,7 +114,7 @@ impl<P: gpio::Pin> Driver for LED<'_, P> {
 
             // off
             2 => {
-                crate::serial_trace!("led_on", "led off".as_bytes());
+                // crate::serial_trace!("led_on", "led off".as_bytes());
                 if data >= pins_init.len() {
                     ReturnCode::EINVAL /* impossible pin */
                 } else {

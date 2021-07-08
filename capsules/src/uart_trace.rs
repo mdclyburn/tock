@@ -1,10 +1,12 @@
 use kernel::{Driver, ReturnCode};
+use kernel::debug;
 use kernel::common::cells::TakeCell;
 use kernel::hil::trace::Trace;
 use kernel::hil::uart;
 use kernel::hil::uart::{
     Uart,
     Parameters as UartParameters,
+    ReceiveClient,
     TransmitClient,
 };
 
@@ -28,12 +30,10 @@ impl<'a> SerialUARTTrace<'a> {
             hw_flow_control: false,
         });
 
-        let serial_trace = SerialUARTTrace {
+        SerialUARTTrace {
             uart,
             tx_buffer: TakeCell::new(tx_buffer),
-        };
-
-        serial_trace
+        }
     }
 }
 

@@ -480,7 +480,7 @@ impl Kernel {
                     }
                     false => {
                         // No kernel work ready, so ask scheduler for a process.
-                        crate::trace!("kernel/sched/start", &[]);
+                        // crate::trace!("kernel/sched/start", &[]);
 
                         match scheduler.next(self) {
                             SchedulingDecision::RunProcess((appid, timeslice_us)) => {

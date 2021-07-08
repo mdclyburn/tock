@@ -242,7 +242,6 @@ pub unsafe fn reset_handler() {
         capsules::uart_trace::SerialUARTTrace::new(&sam4l::usart::USART2, &mut SERTRACE_TX));
     sam4l::usart::USART2.set_transmit_client(serial_tracing);
     hil::trace::INSTANCE = Some(serial_tracing);
-    capsules::serial_trace!("enabled", &[0x25, 0x52, 0x20]);
 
     // Setup the console and the process inspection console.
     let console = components::console::ConsoleComponent::new(board_kernel, uart_mux).finalize(());
