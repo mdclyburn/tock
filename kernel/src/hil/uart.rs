@@ -147,6 +147,8 @@ pub trait Transmit<'a> {
     ///    not be synchronously cancelled. A callback will be made on the
     ///    client indicating whether the call was successfully cancelled.
     fn transmit_abort(&self) -> ReturnCode;
+
+    fn poll_service(&self) { unimplemented!("Polling for this UART implementation is unimplemented."); }
 }
 
 pub trait Receive<'a> {

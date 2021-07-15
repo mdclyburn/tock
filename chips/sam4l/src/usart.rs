@@ -927,6 +927,13 @@ impl<'a> uart::Transmit<'a> for USART<'a> {
     fn transmit_word(&self, _word: u32) -> ReturnCode {
         ReturnCode::FAIL
     }
+
+    fn poll_service(&self) {
+        if let Some(dma) = self.tx_dma.get() {
+            dma.handle_interrupt();
+            self.handle_interrupt();
+        }
+    }
 }
 
 impl<'a> uart::UartAdvanced<'a> for USART<'a> {}

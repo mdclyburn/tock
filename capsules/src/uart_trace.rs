@@ -1,4 +1,5 @@
 use kernel::{Driver, ReturnCode};
+#[allow(unused_imports)]
 use kernel::debug;
 use kernel::common::cells::TakeCell;
 use kernel::hil::trace::Trace;
@@ -6,7 +7,6 @@ use kernel::hil::uart;
 use kernel::hil::uart::{
     Uart,
     Parameters as UartParameters,
-    ReceiveClient,
     TransmitClient,
 };
 
@@ -39,8 +39,9 @@ impl<'a> SerialUARTTrace<'a> {
 
 impl<'a> Trace for SerialUARTTrace<'a> {
     fn signal(&self, data: &[u8], len: usize) {
-        let mut tx_buffer: Option<&'static mut [u8]> = None;
+        let mut tx_buffer: Option<&'static mut [u8]> = self.tx_buffer.take();
         while tx_buffer.is_none() {
+            self.uart.poll_service();
             tx_buffer = self.tx_buffer.take();
         }
         let tx_buffer = tx_buffer.unwrap();

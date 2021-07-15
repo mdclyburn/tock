@@ -261,7 +261,7 @@ impl DMAChannel {
         self.enabled.get()
     }
 
-    pub fn handle_interrupt(&mut self) {
+    pub fn handle_interrupt(&self) {
         self.registers
             .idr
             .write(Interrupt::TERR::SET + Interrupt::TRC::SET + Interrupt::RCZ::SET);
