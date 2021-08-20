@@ -10,6 +10,11 @@
 #![feature(const_in_array_repeat_expressions)]
 #![deny(missing_docs)]
 
+// Allow handily creating memory statistics structure.
+#![feature(maybe_uninit_uninit_array)]
+#![feature(maybe_uninit_ref)]
+
+use capsules::memstat::{SimpleMemoryStatistics, SimpleMemoryCounterNode};
 use capsules::virtual_alarm::VirtualMuxAlarm;
 use capsules::virtual_i2c::{I2CDevice, MuxI2C};
 use capsules::virtual_spi::VirtualSpiMasterDevice;
@@ -38,7 +43,12 @@ const NUM_PROCS: usize = 20;
 // Actual memory for holding the active process structures.
 static mut PROCESSES: [Option<&'static dyn kernel::procs::ProcessType>; NUM_PROCS] =
     [None; NUM_PROCS];
-static mut CHIP: Option<&'static sam4l::chip::Sam4l> = None;
+
+const MEM_STATS_LEN: usize = 50;
+static mut MEMORY_STATS: core::mem::MaybeUninit<[Option<SimpleMemoryCounterNode>; MEM_STATS_LEN]> =
+    core::mem::MaybeUninit::<[Option<SimpleMemoryCounterNode>; MEM_STATS_LEN]>::uninit();
+
+static mut CHIP: Option<&'static sam4l::chip::Sam4l<Sam4lDefaultPeripherals>> = None;
 
 /// Dummy buffer that causes the linker to reserve enough space for the stack.
 #[no_mangle]
@@ -434,6 +444,15 @@ pub unsafe fn reset_handler() {
 
     // Uncomment to measure overheads for TakeCell and MapCell:
     // test_take_map_cell::test_take_map_cell();
+
+    let mem_pi = MEMORY_STATS.as_mut_ptr() as usize;
+    (0..MEM_STATS_LEN).into_iter()
+        .map(|i| (mem_pi + (core::mem::size_of::<Option<SimpleMemoryCounterNode>>() * i)))
+        .for_each(|addr| *(addr as *mut Option<SimpleMemoryCounterNode>) = None);
+    let mem_stats = static_init!(
+        SimpleMemoryStatistics,
+        SimpleMemoryStatistics::new(MEMORY_STATS.assume_init_mut()));
+    hil::memstat::INSTANCE = Some(mem_stats);
 
     debug!("Initialization complete. Entering main loop.");
 
