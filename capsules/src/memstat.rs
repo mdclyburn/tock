@@ -69,14 +69,6 @@ impl MemoryStatistics for SimpleMemoryStatistics {
             Ok(())
         })
     }
-
-    fn modify<F>(&self, id: CounterId, mod_fun: F) -> Result<(), ErrorCode>
-    where
-        F: FnOnce(usize) -> usize,
-    {
-        self.set(id, mod_fun(self.get(id)?))?;
-        Ok(())
-    }
 }
 
 impl SyscallDriver for SimpleMemoryStatistics {
