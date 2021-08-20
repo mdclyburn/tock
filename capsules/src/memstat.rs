@@ -72,7 +72,7 @@ impl MemoryStatistics for SimpleMemoryStatistics {
 }
 
 impl SyscallDriver for SimpleMemoryStatistics {
-    fn allocate_grant(&self, _process_id: ProcessId) -> core::result::Result<(), process::Error> {
+    fn allocate_grant(&self, _process_id: ProcessId) -> Result<(), process::Error> {
         Ok(())
     }
 }
