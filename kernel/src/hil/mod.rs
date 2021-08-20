@@ -16,6 +16,7 @@ pub mod i2c;
 pub mod kv_system;
 pub mod led;
 pub mod log;
+pub mod memstat;
 pub mod nonvolatile_storage;
 pub mod pwm;
 pub mod radio;
