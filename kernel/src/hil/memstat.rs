@@ -21,9 +21,9 @@ pub trait MemoryStatistics {
     /// Change the current memory usage for a counter.
     fn modify(&self, id: CounterId, delta: isize) -> Result<(), ErrorCode> {
         if delta < 0 {
-            self.set(id, self.get(id)? - ((delta * -1) as usize))
+            self.set(id, self.get(id)?.saturating_sub((delta * -1) as usize))
         } else {
-            self.set(id, self.get(id)? + (delta as usize))
+            self.set(id, self.get(id)?.saturating_add(delta as usize))
         }
     }
 }
