@@ -5,83 +5,81 @@ use core::cell::Cell;
 use kernel::{
     ErrorCode,
     ProcessId,
+    hil::memstat::{
+        CounterId,
+        MemoryStatistics,
+    },
     process,
     syscall::SyscallDriver,
     utilities::cells::TakeCell,
 };
 
-pub type Result<T> = core::result::Result<T, ErrorCode>;
-
-/// Memory statistic category.
-#[derive(Copy, Clone, Eq, PartialEq)]
-pub enum CounterId {
-    Grant(ProcessId),
-}
-
-pub struct MemoryCounterNode {
+pub struct SimpleMemoryCounterNode {
     id: CounterId,
     val: Cell<usize>,
 }
 
-pub struct MemoryStatistics {
-    counters: TakeCell<'static, [Option<MemoryCounterNode>]>,
+pub struct SimpleMemoryStatistics {
+    counters: TakeCell<'static, [Option<SimpleMemoryCounterNode>]>,
 }
 
-impl MemoryStatistics {
-    pub fn new(counters: &'static mut [Option<MemoryCounterNode>]) -> MemoryStatistics {
-        MemoryStatistics {
+impl SimpleMemoryStatistics {
+    pub fn new(counters: &'static mut [Option<SimpleMemoryCounterNode>]) -> SimpleMemoryStatistics {
+        SimpleMemoryStatistics {
             counters: TakeCell::new(counters),
         }
     }
 
-    fn with_counter<F>(&self, id: CounterId, fun: F) -> Result<()>
+    fn with_counter<F, T>(&self, id: CounterId, fun: F) -> Result<T, ErrorCode>
     where
-        F: FnOnce(&mut MemoryCounterNode),
+        F: FnOnce(&mut SimpleMemoryCounterNode) -> Result<T, ErrorCode>,
     {
         self.counters.map(|counters| {
             let res = counters.iter_mut()
                 .filter_map(|opt_node| opt_node.as_mut())
                 .find(|opt_node| opt_node.id == id);
             if let Some(counter) = res {
-                fun(counter);
-                Ok(())
+                fun(counter)
             } else {
                 let next_empty = counters.iter_mut()
                     .filter(|opt_node| opt_node.is_none())
                     .next();
                 if let Some(counter) = next_empty {
-                    *counter = Some(MemoryCounterNode {
+                    *counter = Some(SimpleMemoryCounterNode {
                         id,
                         val: Cell::new(0),
                     });
-                    fun(counter.as_mut().unwrap());
-
-                    Ok(())
+                    fun(counter.as_mut().unwrap())
                 } else {
                     Err(ErrorCode::NOMEM)
                 }
             }
         }).unwrap()
     }
+}
 
-    pub fn set(&self, id: CounterId, val: usize) -> Result<()> {
-        self.with_counter(id, |counter| counter.val.set(val))
+impl MemoryStatistics for SimpleMemoryStatistics {
+    fn get(&self, id: CounterId) -> Result<usize, ErrorCode> {
+        self.with_counter(id, |counter| Ok(counter.val.get()) )
     }
 
-    pub fn modify(&self, id: CounterId, delta: isize) -> Result<()> {
+    fn set(&self, id: CounterId, bytes_used: usize) -> Result<(), ErrorCode> {
         self.with_counter(id, |counter| {
-            let delta = if delta < 0 {
-                (delta * -1) as usize
-            } else {
-                delta as usize
-            };
-            let val = counter.val.get().saturating_sub(delta);
-            counter.val.set(val);
+            counter.val.set(bytes_used);
+            Ok(())
         })
+    }
+
+    fn modify<F>(&self, id: CounterId, mod_fun: F) -> Result<(), ErrorCode>
+    where
+        F: FnOnce(usize) -> usize,
+    {
+        self.set(id, mod_fun(self.get(id)?))?;
+        Ok(())
     }
 }
 
-impl SyscallDriver for MemoryStatistics {
+impl SyscallDriver for SimpleMemoryStatistics {
     fn allocate_grant(&self, _process_id: ProcessId) -> core::result::Result<(), process::Error> {
         Ok(())
     }
