@@ -14,12 +14,12 @@ pub type Result<T> = core::result::Result<T, ErrorCode>;
 
 /// Memory statistic category.
 #[derive(Copy, Clone, Eq, PartialEq)]
-pub enum CounterID {
+pub enum CounterId {
     Grant(ProcessId),
 }
 
 pub struct MemoryCounterNode {
-    id: CounterID,
+    id: CounterId,
     val: Cell<usize>,
 }
 
@@ -34,7 +34,7 @@ impl MemoryStatistics {
         }
     }
 
-    fn with_counter<F>(&self, id: CounterID, fun: F) -> Result<()>
+    fn with_counter<F>(&self, id: CounterId, fun: F) -> Result<()>
     where
         F: FnOnce(&mut MemoryCounterNode),
     {
@@ -64,11 +64,11 @@ impl MemoryStatistics {
         }).unwrap()
     }
 
-    pub fn set(&self, id: CounterID, val: usize) -> Result<()> {
+    pub fn set(&self, id: CounterId, val: usize) -> Result<()> {
         self.with_counter(id, |counter| counter.val.set(val))
     }
 
-    pub fn modify(&self, id: CounterID, delta: isize) -> Result<()> {
+    pub fn modify(&self, id: CounterId, delta: isize) -> Result<()> {
         self.with_counter(id, |counter| {
             let delta = if delta < 0 {
                 (delta * -1) as usize
