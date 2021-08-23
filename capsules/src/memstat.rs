@@ -5,6 +5,7 @@ use core::cell::Cell;
 use kernel::{
     ErrorCode,
     ProcessId,
+    debug,
     hil::memstat::{
         CounterId,
         MemoryStatistics,
@@ -64,6 +65,7 @@ impl MemoryStatistics for SimpleMemoryStatistics {
     }
 
     fn set(&self, id: CounterId, bytes_used: usize) -> Result<(), ErrorCode> {
+        debug!("{} uses {} bytes", id, bytes_used);
         self.with_counter(id, |counter| {
             counter.val.set(bytes_used);
             Ok(())

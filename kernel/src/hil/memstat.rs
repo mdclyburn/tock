@@ -1,5 +1,10 @@
 //! Memory statistic tracking.
 
+use core::fmt::{
+    self,
+    Display,
+};
+
 use crate::errorcode::ErrorCode;
 use crate::process::ProcessId;
 
@@ -9,6 +14,15 @@ pub static mut INSTANCE: Option<&dyn MemoryStatistics> = None;
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub enum CounterId {
     Grant(ProcessId),
+}
+
+impl Display for CounterId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use CounterId::*;
+        match self {
+            Grant(ref pid) => write!(f, "grant for process {}", pid.id()),
+        }
+    }
 }
 
 pub trait MemoryStatistics {
