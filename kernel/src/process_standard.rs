@@ -1674,9 +1674,13 @@ impl<C: 'static + Chip> ProcessStandard<'_, C> {
         let fixed_address_flash = tbf_header.get_fixed_address_flash();
         let fixed_address_ram = tbf_header.get_fixed_address_ram();
 
-        process
-            .process_id
-            .set(ProcessId::new(kernel, unique_identifier, index));
+        let pid = ProcessId::new(kernel, unique_identifier, index);
+        // Count process grant table size.
+        crate::hil::memstat::INSTANCE.map(|memstat| {
+            memstat.set(crate::hil::memstat::CounterId::Grant(pid), grant_ptrs_offset)
+        }).unwrap().unwrap();
+
+        process.process_id.set(pid);
         process.kernel = kernel;
         process.chip = chip;
         process.allow_high_water_mark = Cell::new(initial_allow_high_water_mark);
