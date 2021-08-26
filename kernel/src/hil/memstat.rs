@@ -45,3 +45,33 @@ pub trait MemoryStatistics {
         self.set(id, new_val)
     }
 }
+
+pub fn instance() -> &'static dyn MemoryStatistics {
+    unsafe {
+        if let Some(memstat) = crate::hil::memstat::INSTANCE {
+            memstat
+        } else {
+            panic!("Cannot use memory statistics tracking when unconfigured.");
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! memstat_set {
+    ($counter:expr, $bytes_used:expr) => {{
+        let counter_id: crate::hil::memstat::CounterId = ($counter);
+        let bytes_used: usize = ($bytes_used);
+
+        crate::hil::memstat::instance().set(counter_id, bytes_used).unwrap();
+    }}
+}
+
+#[macro_export]
+macro_rules! memstat_mod {
+    ($counter:expr, $delta:expr) => {{
+        let counter_id: crate::hil::memstat::CounterId = ($counter);
+        let delta: isize = ($delta);
+
+        crate::hil::memstat::instance().modify(counter_id, delta).unwrap();
+    }}
+}

@@ -13,6 +13,7 @@ use crate::collections::queue::Queue;
 use crate::collections::ring_buffer::RingBuffer;
 use crate::config;
 use crate::debug;
+use crate::memstat_set;
 use crate::errorcode::ErrorCode;
 use crate::kernel::Kernel;
 use crate::platform::chip::Chip;
@@ -1676,9 +1677,7 @@ impl<C: 'static + Chip> ProcessStandard<'_, C> {
 
         let pid = ProcessId::new(kernel, unique_identifier, index);
         // Count process grant table size.
-        crate::hil::memstat::INSTANCE.map(|memstat| {
-            memstat.set(crate::hil::memstat::CounterId::Grant(pid), grant_ptrs_offset)
-        }).unwrap().unwrap();
+        memstat_set!(crate::hil::memstat::CounterId::Grant(pid), grant_ptrs_offset);
 
         process.process_id.set(pid);
         process.kernel = kernel;

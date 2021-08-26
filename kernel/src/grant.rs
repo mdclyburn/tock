@@ -128,6 +128,7 @@ use core::ptr::{write, NonNull};
 use core::slice;
 
 use crate::kernel::Kernel;
+use crate::memstat_mod;
 use crate::process::{Error, Process, ProcessCustomGrantIdentifer, ProcessId};
 use crate::upcall::{Upcall, UpcallError, UpcallId};
 use crate::ErrorCode;
@@ -478,13 +479,8 @@ impl<'a, T: Default, const NUM_UPCALLS: usize> ProcessGrant<'a, T, NUM_UPCALLS> 
 
                     // Now we can calculate the entire size of the grant.
                     let alloc_size = upcalls_size + upcalls_padding + grant_t_size;
-
-                    unsafe {
-                        crate::hil::memstat::INSTANCE.map(|memstat| {
-                            memstat.modify(crate::hil::memstat::CounterId::Grant(processid),
-                                           alloc_size as isize).unwrap();
-                        }).unwrap();
-                    }
+                    memstat_mod!(crate::hil::memstat::CounterId::Grant(processid),
+                                    alloc_size as isize);
 
                     let (ptr_upcall_count, optional_ptr_first_upcall, raw_ptr_grant_nn) = process
                         .allocate_grant(grant_num, driver_num, alloc_size, alloc_align)
