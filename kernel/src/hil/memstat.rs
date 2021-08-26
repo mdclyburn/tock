@@ -34,10 +34,14 @@ pub trait MemoryStatistics {
 
     /// Change the current memory usage for a counter.
     fn modify(&self, id: CounterId, delta: isize) -> Result<(), ErrorCode> {
-        if delta < 0 {
-            self.set(id, self.get(id)?.saturating_sub((delta * -1) as usize))
+        let new_val = if delta < 0 {
+            self.get(id)?.checked_sub((delta * -1) as usize)
+                .ok_or(ErrorCode::FAIL)?
         } else {
-            self.set(id, self.get(id)?.saturating_add(delta as usize))
-        }
+            self.get(id)?.checked_add(delta as usize)
+                .ok_or(ErrorCode::FAIL)?
+        };
+
+        self.set(id, new_val)
     }
 }
