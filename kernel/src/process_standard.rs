@@ -2017,7 +2017,7 @@ impl<C: 'static + Chip> ProcessStandard<'_, C> {
                     let old_kbrk = self.kernel_memory_break.get() as usize;
                     let new_kbrk = new_break as usize;
                     memstat_mod!(crate::hil::memstat::CounterId::Grant(self.processid()),
-                                 old_kbrk.checked_sub(new_kbrk).unwrap() as isize);
+                                 (old_kbrk - new_kbrk) as isize);
                 }
                 self.kernel_memory_break.set(new_break);
 
