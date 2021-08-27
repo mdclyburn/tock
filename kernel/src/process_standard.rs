@@ -13,7 +13,7 @@ use crate::collections::queue::Queue;
 use crate::collections::ring_buffer::RingBuffer;
 use crate::config;
 use crate::debug;
-use crate::memstat_set;
+use crate::{memstat_set, memstat_mod};
 use crate::errorcode::ErrorCode;
 use crate::kernel::Kernel;
 use crate::platform::chip::Chip;
@@ -2013,6 +2013,12 @@ impl<C: 'static + Chip> ProcessStandard<'_, C> {
 
                 // We always allocate down, so we must lower the
                 // kernel_memory_break.
+                {
+                    let old_kbrk = self.kernel_memory_break.get() as usize;
+                    let new_kbrk = new_break as usize;
+                    memstat_mod!(crate::hil::memstat::CounterId::Grant(self.processid()),
+                                 old_kbrk.checked_sub(new_kbrk).unwrap() as isize);
+                }
                 self.kernel_memory_break.set(new_break);
 
                 // We need `grant_ptr` as a mutable pointer.
