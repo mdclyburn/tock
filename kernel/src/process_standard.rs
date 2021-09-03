@@ -1678,6 +1678,8 @@ impl<C: 'static + Chip> ProcessStandard<'_, C> {
         let pid = ProcessId::new(kernel, unique_identifier, index);
         // Count process grant table size.
         memstat_set!(crate::hil::memstat::CounterId::Grant(pid), grant_ptrs_offset);
+        memstat_set!(crate::hil::memstat::CounterId::PCB(pid), Self::PROCESS_STRUCT_OFFSET);
+        memstat_set!(crate::hil::memstat::CounterId::UpcallQueue(pid), Self::CALLBACKS_OFFSET);
 
         process.process_id.set(pid);
         process.kernel = kernel;

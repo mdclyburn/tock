@@ -14,6 +14,8 @@ pub static mut INSTANCE: Option<&dyn MemoryStatistics> = None;
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub enum CounterId {
     Grant(ProcessId),
+    PCB(ProcessId),
+    UpcallQueue(ProcessId),
 }
 
 impl Display for CounterId {
@@ -21,6 +23,8 @@ impl Display for CounterId {
         use CounterId::*;
         match self {
             Grant(ref pid) => write!(f, "grant for process {}", pid.id()),
+            PCB(ref pid) => write!(f, "PCB for process {}", pid.id()),
+            UpcallQueue(ref pid) => write!(f, "upcall queue for process {}", pid.id()),
         }
     }
 }
