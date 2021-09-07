@@ -3,16 +3,13 @@
 use core::cell::Cell;
 
 use kernel::{
-    ErrorCode,
-    ProcessId,
     debug,
     hil::memstat::{
         CounterId,
         MemoryStatistics,
     },
-    process,
-    syscall::SyscallDriver,
-    utilities::cells::TakeCell,
+    ReturnCode,
+    common::cells::TakeCell,
 };
 
 pub struct SimpleMemoryCounterNode {
@@ -31,9 +28,9 @@ impl SimpleMemoryStatistics {
         }
     }
 
-    fn with_counter<F, T>(&self, id: CounterId, fun: F) -> Result<T, ErrorCode>
+    fn with_counter<F, T>(&self, id: CounterId, fun: F) -> Result<T, ReturnCode>
     where
-        F: FnOnce(&mut SimpleMemoryCounterNode) -> Result<T, ErrorCode>,
+        F: FnOnce(&mut SimpleMemoryCounterNode) -> Result<T, ReturnCode>,
     {
         self.counters.map(|counters| {
             let res = counters.iter_mut()
@@ -52,7 +49,7 @@ impl SimpleMemoryStatistics {
                     });
                     fun(counter.as_mut().unwrap())
                 } else {
-                    Err(ErrorCode::NOMEM)
+                    Err(ReturnCode::ENOMEM)
                 }
             }
         }).unwrap()
@@ -60,21 +57,15 @@ impl SimpleMemoryStatistics {
 }
 
 impl MemoryStatistics for SimpleMemoryStatistics {
-    fn get(&self, id: CounterId) -> Result<usize, ErrorCode> {
+    fn get(&self, id: CounterId) -> Result<usize, ReturnCode> {
         self.with_counter(id, |counter| Ok(counter.val.get()) )
     }
 
-    fn set(&self, id: CounterId, bytes_used: usize) -> Result<(), ErrorCode> {
+    fn set(&self, id: CounterId, bytes_used: usize) -> Result<(), ReturnCode> {
         debug!("{} uses {} bytes", id, bytes_used);
         self.with_counter(id, |counter| {
             counter.val.set(bytes_used);
             Ok(())
         })
-    }
-}
-
-impl SyscallDriver for SimpleMemoryStatistics {
-    fn allocate_grant(&self, _process_id: ProcessId) -> Result<(), process::Error> {
-        Ok(())
     }
 }

@@ -48,7 +48,7 @@ const MEM_STATS_LEN: usize = 50;
 static mut MEMORY_STATS: core::mem::MaybeUninit<[Option<SimpleMemoryCounterNode>; MEM_STATS_LEN]> =
     core::mem::MaybeUninit::<[Option<SimpleMemoryCounterNode>; MEM_STATS_LEN]>::uninit();
 
-static mut CHIP: Option<&'static sam4l::chip::Sam4l<Sam4lDefaultPeripherals>> = None;
+static mut CHIP: Option<&'static sam4l::chip::Sam4l> = None;
 
 /// Dummy buffer that causes the linker to reserve enough space for the stack.
 #[no_mangle]
@@ -451,7 +451,7 @@ pub unsafe fn reset_handler() {
         .for_each(|addr| *(addr as *mut Option<SimpleMemoryCounterNode>) = None);
     let mem_stats = static_init!(
         SimpleMemoryStatistics,
-        SimpleMemoryStatistics::new(MEMORY_STATS.assume_init_mut()));
+        SimpleMemoryStatistics::new(MEMORY_STATS.as_mut_ptr().as_mut().unwrap()));
     hil::memstat::INSTANCE = Some(mem_stats);
 
     debug!("Initialization complete. Entering main loop.");
