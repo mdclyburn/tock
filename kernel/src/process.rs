@@ -15,6 +15,7 @@ use crate::config;
 use crate::debug;
 use crate::ipc;
 use crate::mem::{AppSlice, Shared};
+use crate::{memstat_set, memstat_mod};
 use crate::platform::mpu::{self, MPU};
 use crate::platform::Chip;
 use crate::returncode::ReturnCode;
@@ -1212,6 +1213,13 @@ impl<C: Chip> ProcessType for Process<'_, C> {
             ) {
                 None
             } else {
+                {
+                    let old_kbrk = self.kernel_memory_break.get() as usize;
+                    let new_kbrk = new_break as usize;
+                    memstat_mod!(crate::hil::memstat::CounterId::Grant(self.appid()),
+                                 (old_kbrk - new_kbrk) as isize);
+                }
+
                 self.kernel_memory_break.set(new_break);
                 unsafe {
                     // Two unsafe steps here, both okay as we just made this pointer
@@ -1892,6 +1900,13 @@ impl<C: 'static + Chip> Process<'_, C> {
         // for later debugging.
         let fixed_address_flash = tbf_header.get_fixed_address_flash();
         let fixed_address_ram = tbf_header.get_fixed_address_ram();
+
+        let pid = AppId::new(kernel, unique_identifier, index);
+
+        // Count memory sizes.
+        memstat_set!(crate::hil::memstat::CounterId::Grant(pid), grant_ptrs_offset);
+        memstat_set!(crate::hil::memstat::CounterId::PCB(pid), Self::PROCESS_STRUCT_OFFSET);
+        memstat_set!(crate::hil::memstat::CounterId::UpcallQueue(pid), Self::CALLBACKS_OFFSET);
 
         process
             .app_id
