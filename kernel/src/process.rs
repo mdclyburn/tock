@@ -1219,6 +1219,10 @@ impl<C: Chip> ProcessType for Process<'_, C> {
 
                     memstat_mod!(crate::hil::memstat::CounterId::AllGrantStructures(self.appid()),
                                  (old_kbrk - new_kbrk) as isize);
+
+                    // No concept of grant number here, just use its location in memory instead.
+                    memstat_set!(crate::hil::memstat::CounterId::Grant(self.appid(), old_kbrk as usize),
+                                 (old_kbrk - new_kbrk));
                 }
 
                 self.kernel_memory_break.set(new_break);

@@ -15,6 +15,8 @@ pub static mut INSTANCE: Option<&dyn MemoryStatistics> = None;
 pub enum CounterId {
     /// Total for allocated grant types.
     AllGrantStructures(AppId),
+    /// Custom grant allocation total.
+    CustomGrant(AppId),
     /// Sizes of individual grants.
     Grant(AppId, usize),
     /// Grant pointer table.
@@ -30,6 +32,7 @@ impl Display for CounterId {
         use CounterId::*;
         match self {
             AllGrantStructures(ref pid) => write!(f, "grant total for {}", pid.id()),
+            CustomGrant(ref pid) => write!(f, "custom grant total for {}", pid.id()),
             Grant(ref pid, grant_no) => write!(f, "grant #{} for process {}", grant_no, pid.id()),
             GrantPointerTable(ref pid) => write!(f, "grant pointer table for process {}", pid.id()),
             PCB(ref pid) => write!(f, "PCB for process {}", pid.id()),
