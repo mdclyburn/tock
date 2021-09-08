@@ -13,8 +13,15 @@ pub static mut INSTANCE: Option<&dyn MemoryStatistics> = None;
 /// Memory statistic category
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub enum CounterId {
-    Grant(AppId),
+    /// Total for allocated grant types.
+    AllGrantStructures(AppId),
+    /// Sizes of individual grants.
+    Grant(AppId, usize),
+    /// Grant pointer table.
+    GrantPointerTable(AppId),
+    /// Process control block.
     PCB(AppId),
+    /// Upcall queue.
     UpcallQueue(AppId),
 }
 
@@ -22,7 +29,9 @@ impl Display for CounterId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use CounterId::*;
         match self {
-            Grant(ref pid) => write!(f, "grant for process {}", pid.id()),
+            AllGrantStructures(ref pid) => write!(f, "grant total for {}", pid.id()),
+            Grant(ref pid, grant_no) => write!(f, "grant #{} for process {}", grant_no, pid.id()),
+            GrantPointerTable(ref pid) => write!(f, "grant pointer table for process {}", pid.id()),
             PCB(ref pid) => write!(f, "PCB for process {}", pid.id()),
             UpcallQueue(ref pid) => write!(f, "upcall queue for process {}", pid.id()),
         }

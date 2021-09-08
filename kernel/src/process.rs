@@ -1216,7 +1216,8 @@ impl<C: Chip> ProcessType for Process<'_, C> {
                 {
                     let old_kbrk = self.kernel_memory_break.get() as usize;
                     let new_kbrk = new_break as usize;
-                    memstat_mod!(crate::hil::memstat::CounterId::Grant(self.appid()),
+
+                    memstat_mod!(crate::hil::memstat::CounterId::AllGrantStructures(self.appid()),
                                  (old_kbrk - new_kbrk) as isize);
                 }
 
@@ -1904,13 +1905,14 @@ impl<C: 'static + Chip> Process<'_, C> {
         let pid = AppId::new(kernel, unique_identifier, index);
 
         // Count memory sizes.
-        memstat_set!(crate::hil::memstat::CounterId::Grant(pid), grant_ptrs_offset);
+        memstat_set!(crate::hil::memstat::CounterId::GrantPointerTable(pid), grant_ptrs_offset);
         memstat_set!(crate::hil::memstat::CounterId::PCB(pid), Self::PROCESS_STRUCT_OFFSET);
         memstat_set!(crate::hil::memstat::CounterId::UpcallQueue(pid), Self::CALLBACKS_OFFSET);
+        memstat_set!(crate::hil::memstat::CounterId::AllGrantStructures(pid), 0);
 
         process
             .app_id
-            .set(AppId::new(kernel, unique_identifier, index));
+            .set(pid);
         process.kernel = kernel;
         process.chip = chip;
         process.allow_high_water_mark = Cell::new(app_memory.as_ptr());
