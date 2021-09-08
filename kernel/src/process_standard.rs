@@ -736,7 +736,7 @@ impl<C: Chip> Process for ProcessStandard<'_, C> {
 
         // Use the shared grant allocator function to actually allocate memory.
         // Returns `None` if the allocation cannot be created.
-        if let Some(grant_ptr) = self.allocate_in_grant_region_internal(size, align) {
+        if let Some(grant_ptr) = self.allocate_in_grant_region_internal(Some(grant_num), size, align) {
             // Update the grant pointer to the address of the new allocation.
             self.grant_pointers.map_or(None, |grant_pointers| {
                 // Implement `grant_pointers[grant_num] = grant_ptr` without a
@@ -770,7 +770,7 @@ impl<C: Chip> Process for ProcessStandard<'_, C> {
 
         // Use the shared grant allocator function to actually allocate memory.
         // Returns `None` if the allocation cannot be created.
-        if let Some(ptr) = self.allocate_in_grant_region_internal(size, align) {
+        if let Some(ptr) = self.allocate_in_grant_region_internal(None, size, align) {
             // Create the identifier that the caller will use to get access to
             // this custom grant in the future.
             let identifier = self.create_custom_grant_identifier(ptr);
@@ -1676,8 +1676,8 @@ impl<C: 'static + Chip> ProcessStandard<'_, C> {
         let fixed_address_ram = tbf_header.get_fixed_address_ram();
 
         let pid = ProcessId::new(kernel, unique_identifier, index);
-        // Count process grant table size.
-        memstat_set!(crate::hil::memstat::CounterId::Grant(pid), grant_ptrs_offset);
+        // Count process kernel memory sizes.
+        memstat_set!(crate::hil::memstat::CounterId::GrantPointerTable(pid), grant_ptrs_offset);
         memstat_set!(crate::hil::memstat::CounterId::PCB(pid), Self::PROCESS_STRUCT_OFFSET);
         memstat_set!(crate::hil::memstat::CounterId::UpcallQueue(pid), Self::CALLBACKS_OFFSET);
 
@@ -1976,7 +1976,7 @@ impl<C: 'static + Chip> ProcessStandard<'_, C> {
     /// If there is not enough memory, or the MPU cannot isolate the process
     /// accessible region from the new kernel memory break after doing the
     /// allocation, then this will return `None`.
-    fn allocate_in_grant_region_internal(&self, size: usize, align: usize) -> Option<NonNull<u8>> {
+    fn allocate_in_grant_region_internal(&self, grant_no: Option<usize>, size: usize, align: usize) -> Option<NonNull<u8>> {
         self.mpu_config.and_then(|mut config| {
             // First, compute the candidate new pointer. Note that at this
             // point we have not yet checked whether there is space for
@@ -2018,8 +2018,13 @@ impl<C: 'static + Chip> ProcessStandard<'_, C> {
                 {
                     let old_kbrk = self.kernel_memory_break.get() as usize;
                     let new_kbrk = new_break as usize;
-                    memstat_mod!(crate::hil::memstat::CounterId::Grant(self.processid()),
+                    memstat_mod!(crate::hil::memstat::CounterId::AllGrantStructures(self.processid()),
                                  (old_kbrk - new_kbrk) as isize);
+                    // Not tracking custom grants.
+                    if let Some(grant_no) = grant_no {
+                        memstat_set!(crate::hil::memstat::CounterId::Grant(self.processid(), grant_no),
+                                     (old_kbrk - new_kbrk));
+                    }
                 }
                 self.kernel_memory_break.set(new_break);
 
