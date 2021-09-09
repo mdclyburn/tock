@@ -11,6 +11,7 @@
 #![deny(missing_docs)]
 
 mod imix_components;
+use capsules::memstat::{SimpleMemoryStatistics, SimpleMemoryCounterNode};
 use capsules::alarm::AlarmDriver;
 use capsules::net::ieee802154::MacAddress;
 use capsules::net::ipv6::ip_utils::IPAddr;
@@ -21,6 +22,7 @@ use capsules::virtual_spi::VirtualSpiMasterDevice;
 use kernel::capabilities;
 use kernel::common::dynamic_deferred_call::{DynamicDeferredCall, DynamicDeferredCallClientState};
 use kernel::component::Component;
+use kernel::hil;
 use kernel::hil::i2c::I2CMaster;
 use kernel::hil::radio;
 #[allow(unused_imports)]
@@ -91,6 +93,10 @@ const PAN_ID: u16 = 0xABCD;
 
 // how should the kernel respond when a process faults
 const FAULT_RESPONSE: kernel::procs::FaultResponse = kernel::procs::FaultResponse::Panic;
+
+const MEM_STATS_LEN: usize = 50;
+static mut MEMORY_STATS: core::mem::MaybeUninit<[Option<SimpleMemoryCounterNode>; MEM_STATS_LEN]> =
+    core::mem::MaybeUninit::<[Option<SimpleMemoryCounterNode>; MEM_STATS_LEN]>::uninit();
 
 static mut PROCESSES: [Option<&'static dyn kernel::procs::ProcessType>; NUM_PROCS] =
     [None; NUM_PROCS];
@@ -560,6 +566,15 @@ pub unsafe fn reset_handler() {
     //virtual_alarm_timer.set_alarm_client(mux_timer);
 
     //multi_alarm_test::run_multi_alarm(mux_alarm);
+
+    let mem_pi = MEMORY_STATS.as_mut_ptr() as usize;
+    (0..MEM_STATS_LEN).into_iter()
+        .map(|i| (mem_pi + (core::mem::size_of::<Option<SimpleMemoryCounterNode>>() * i)))
+        .for_each(|addr| *(addr as *mut Option<SimpleMemoryCounterNode>) = None);
+    let mem_stats = static_init!(
+        SimpleMemoryStatistics,
+        SimpleMemoryStatistics::new(MEMORY_STATS.as_mut_ptr().as_mut().unwrap()));
+    hil::memstat::INSTANCE = Some(mem_stats);
 
     debug!("Initialization complete. Entering main loop");
 
