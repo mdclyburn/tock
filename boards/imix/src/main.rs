@@ -10,6 +10,7 @@
 #![deny(missing_docs)]
 
 mod imix_components;
+use capsules::memstat::{SimpleMemoryStatistics, SimpleMemoryCounterNode};
 use capsules::alarm::AlarmDriver;
 use capsules::net::ieee802154::MacAddress;
 use capsules::net::ipv6::ip_utils::IPAddr;
@@ -21,6 +22,7 @@ use capsules::virtual_spi::VirtualSpiMasterDevice;
 use kernel::capabilities;
 use kernel::component::Component;
 use kernel::dynamic_deferred_call::{DynamicDeferredCall, DynamicDeferredCallClientState};
+use kernel::hil;
 use kernel::hil::i2c::I2CMaster;
 use kernel::hil::radio;
 #[allow(unused_imports)]
@@ -95,6 +97,10 @@ const FAULT_RESPONSE: kernel::process::PanicFaultPolicy = kernel::process::Panic
 
 static mut PROCESSES: [Option<&'static dyn kernel::process::Process>; NUM_PROCS] =
     [None; NUM_PROCS];
+
+const MEM_STATS_LEN: usize = 50;
+static mut MEMORY_STATS: core::mem::MaybeUninit<[Option<SimpleMemoryCounterNode>; MEM_STATS_LEN]> =
+    core::mem::MaybeUninit::<[Option<SimpleMemoryCounterNode>; MEM_STATS_LEN]>::uninit();
 
 static mut CHIP: Option<&'static sam4l::chip::Sam4l<Sam4lDefaultPeripherals>> = None;
 
@@ -694,6 +700,15 @@ pub unsafe fn main() {
     /*components::test::multi_alarm_test::MultiAlarmTestComponent::new(mux_alarm)
     .finalize(components::multi_alarm_test_component_buf!(sam4l::ast::Ast))
     .run();*/
+
+    let mem_pi = MEMORY_STATS.as_mut_ptr() as usize;
+    (0..MEM_STATS_LEN).into_iter()
+        .map(|i| (mem_pi + (core::mem::size_of::<Option<SimpleMemoryCounterNode>>() * i)))
+        .for_each(|addr| *(addr as *mut Option<SimpleMemoryCounterNode>) = None);
+    let mem_stats = static_init!(
+        SimpleMemoryStatistics,
+        SimpleMemoryStatistics::new(MEMORY_STATS.as_mut_ptr().as_mut().unwrap()));
+    hil::memstat::INSTANCE = Some(mem_stats);
 
     debug!("Initialization complete. Entering main loop");
 
