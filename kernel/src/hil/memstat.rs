@@ -27,6 +27,21 @@ pub enum CounterId {
     UpcallQueue(ProcessId),
 }
 
+impl From<CounterId> for u8 {
+    fn from(counter: CounterId) -> u8 {
+        use CounterId::*;
+        match counter {
+            PCB(_pid) => 1,
+            UpcallQueue(_pid) => 2,
+            GrantPointerTable(_pid) => 3,
+            Grant(_pid, _grant_no) => 4,
+            CustomGrant(_pid) => 5,
+
+            _ => 0
+        }
+    }
+}
+
 impl Display for CounterId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use CounterId::*;
