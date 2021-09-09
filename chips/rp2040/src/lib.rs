@@ -2,6 +2,7 @@
 #![no_std]
 
 pub mod adc;
+pub mod bootrom;
 pub mod chip;
 pub mod clocks;
 pub mod gpio;
