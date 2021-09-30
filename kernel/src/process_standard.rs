@@ -1677,10 +1677,10 @@ impl<C: 'static + Chip> ProcessStandard<'_, C> {
 
         let pid = ProcessId::new(kernel, unique_identifier, index);
         // Count process kernel memory sizes.
-        memstat_set!(crate::hil::memstat::CounterId::GrantPointerTable(pid), grant_ptrs_offset);
-        memstat_set!(crate::hil::memstat::CounterId::PCB(pid), Self::PROCESS_STRUCT_OFFSET);
-        memstat_set!(crate::hil::memstat::CounterId::UpcallQueue(pid), Self::CALLBACKS_OFFSET);
-        memstat_set!(crate::hil::memstat::CounterId::CustomGrant(pid), 0);
+        memstat_set!(crate::hil::memstat::CounterId::GrantPointerTable(pid.id() as u32), grant_ptrs_offset);
+        memstat_set!(crate::hil::memstat::CounterId::PCB(pid.id() as u32), Self::PROCESS_STRUCT_OFFSET);
+        memstat_set!(crate::hil::memstat::CounterId::UpcallQueue(pid.id() as u32), Self::CALLBACKS_OFFSET);
+        memstat_set!(crate::hil::memstat::CounterId::CustomGrant(pid.id() as u32), 0);
 
         process.process_id.set(pid);
         process.kernel = kernel;
@@ -2019,16 +2019,15 @@ impl<C: 'static + Chip> ProcessStandard<'_, C> {
                 {
                     let old_kbrk = self.kernel_memory_break.get() as usize;
                     let new_kbrk = new_break as usize;
-                    memstat_mod!(crate::hil::memstat::CounterId::AllGrantStructures(self.processid()),
-                                 (old_kbrk - new_kbrk) as isize);
 
                     // If a grant number was supplied by the caller, then this is a standard grant.
                     // Otherwise, it is a custom grant which would be a bit harder to track down a source for.
                     if let Some(grant_no) = grant_no {
-                        memstat_set!(crate::hil::memstat::CounterId::Grant(self.processid(), grant_no),
+                        memstat_set!(crate::hil::memstat::CounterId::Grant(self.processid().id() as u32,
+                                                                           grant_no as u32),
                                      (old_kbrk - new_kbrk));
                     } else {
-                        memstat_mod!(crate::hil::memstat::CounterId::CustomGrant(self.processid()),
+                        memstat_mod!(crate::hil::memstat::CounterId::CustomGrant(self.processid().id() as u32),
                                      (old_kbrk - new_kbrk) as isize);
                     }
                 }

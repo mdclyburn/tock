@@ -1,60 +1,12 @@
 //! Memory statistic tracking.
 
-use core::fmt::{
-    self,
-    Display,
-};
-
 use crate::errorcode::ErrorCode;
-use crate::process::ProcessId;
+
+// `pub use` to make it easier to refer to this type without
+// polluting the code with external library references.
+pub use flexbed_shared::mem::CounterId;
 
 pub static mut INSTANCE: Option<&dyn MemoryStatistics> = None;
-
-/// Memory statistic category
-#[derive(Copy, Clone, Eq, PartialEq)]
-pub enum CounterId {
-    /// Total for allocated grant types.
-    AllGrantStructures(ProcessId),
-    /// Custom grant allocation total.
-    CustomGrant(ProcessId),
-    /// Sizes of individual grants.
-    Grant(ProcessId, usize),
-    /// Grant pointer table.
-    GrantPointerTable(ProcessId),
-    /// Process control block.
-    PCB(ProcessId),
-    /// Upcall queue.
-    UpcallQueue(ProcessId),
-}
-
-impl From<CounterId> for u8 {
-    fn from(counter: CounterId) -> u8 {
-        use CounterId::*;
-        match counter {
-            PCB(_pid) => 1,
-            UpcallQueue(_pid) => 2,
-            GrantPointerTable(_pid) => 3,
-            Grant(_pid, _grant_no) => 4,
-            CustomGrant(_pid) => 5,
-
-            _ => 0
-        }
-    }
-}
-
-impl Display for CounterId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use CounterId::*;
-        match self {
-            AllGrantStructures(ref pid) => write!(f, "grant total for {}", pid.id()),
-            CustomGrant(ref pid) => write!(f, "custom grant total for {}", pid.id()),
-            Grant(ref pid, grant_no) => write!(f, "grant #{} for process {}", grant_no, pid.id()),
-            GrantPointerTable(ref pid) => write!(f, "grant pointer table for process {}", pid.id()),
-            PCB(ref pid) => write!(f, "PCB for process {}", pid.id()),
-            UpcallQueue(ref pid) => write!(f, "upcall queue for process {}", pid.id()),
-        }
-    }
-}
 
 pub trait MemoryStatistics {
     /// Returns the memory usage accounted to the counter.
