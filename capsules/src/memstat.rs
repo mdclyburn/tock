@@ -8,6 +8,7 @@ use kernel::{
     debug,
     hil::{
         memstat::{
+            self,
             CounterId,
             MemoryStatistics,
         },
@@ -123,13 +124,12 @@ impl<'a> MemoryStatistics for MemoryStatisticsBridge<'a> {
         }
         let tx_buffer = tx_buffer.unwrap();
 
+        let mut written = id.serialize(tx_buffer);
         tx_buffer[0] = u8::from(id) | 0b1000_0000;
-        tx_buffer[1] = (bytes_used & 0xFF) as u8;
-        tx_buffer[2] = ((bytes_used >> 8) & 0xFF) as u8;
-        tx_buffer[3] = ((bytes_used >> 16) & 0xFF) as u8;
-        tx_buffer[4] = ((bytes_used >> 24) & 0xFF) as u8;
 
-        let r = self.uart.transmit_buffer(tx_buffer, 5);
+        written += memstat::serialize_u32(bytes_used as u32, &mut tx_buffer[written..]);
+
+        let r = self.uart.transmit_buffer(tx_buffer, written);
         if let Err((error_code, tx_buffer)) = r {
             self.tx_buffer.put(Some(tx_buffer));
             Err(error_code)
@@ -152,13 +152,12 @@ impl<'a> MemoryStatistics for MemoryStatisticsBridge<'a> {
         }
         let tx_buffer = tx_buffer.unwrap();
 
-        tx_buffer[0] = (u8::from(id)) << 1;
-        tx_buffer[1] = (delta & 0xFF) as u8;
-        tx_buffer[2] = ((delta >> 8) & 0xFF) as u8;
-        tx_buffer[3] = ((delta >> 16) & 0xFF) as u8;
-        tx_buffer[4] = ((delta >> 24) & 0xFF) as u8;
+        let mut written = id.serialize(tx_buffer);
+        tx_buffer[0] = (u8::from(id)) & 0b0111_1111;
 
-        let r = self.uart.transmit_buffer(tx_buffer, 5);
+        written += memstat::serialize_u32(delta as u32, &mut tx_buffer[written..]);
+
+        let r = self.uart.transmit_buffer(tx_buffer, written);
         if let Err((error_code, tx_buffer)) = r {
             self.tx_buffer.put(Some(tx_buffer));
             Err(error_code)

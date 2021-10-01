@@ -56,7 +56,7 @@ static mut PROCESSES: [Option<&'static dyn kernel::process::Process>; NUM_PROCS]
 // static mut MEMORY_STATS: core::mem::MaybeUninit<[Option<SimpleMemoryCounterNode>; MEM_STATS_LEN]> =
 //     core::mem::MaybeUninit::<[Option<SimpleMemoryCounterNode>; MEM_STATS_LEN]>::uninit();
 
-static mut MEM_STAT_BUFFER: [u8; 10] = [0u8; 10];
+static mut MEM_STAT_BUFFER: [u8; 32] = [0u8; 32];
 
 static mut CHIP: Option<&'static sam4l::chip::Sam4l<Sam4lDefaultPeripherals>> = None;
 
