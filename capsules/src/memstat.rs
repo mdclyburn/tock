@@ -123,7 +123,7 @@ impl<'a> MemoryStatistics for MemoryStatisticsBridge<'a> {
         }
         let tx_buffer = tx_buffer.unwrap();
 
-        tx_buffer[0] = ((u8::from(id)) << 1) | 0b0000_0001;
+        tx_buffer[0] = ((u8::from(id)) << 1) | 0b1000_0000;
         tx_buffer[1] = (bytes_used & 0xFF) as u8;
         tx_buffer[2] = ((bytes_used >> 8) & 0xFF) as u8;
         tx_buffer[3] = ((bytes_used >> 16) & 0xFF) as u8;
