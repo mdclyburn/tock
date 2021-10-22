@@ -13,11 +13,7 @@
 #![feature(maybe_uninit_uninit_array)]
 #![feature(maybe_uninit_ref)]
 
-use capsules::memstat::{
-    MemoryStatisticsBridge,
-    SimpleMemoryStatistics,
-    SimpleMemoryCounterNode,
-};
+use capsules::memstat::MemoryStatisticsBridge;
 use capsules::virtual_alarm::VirtualMuxAlarm;
 use capsules::virtual_i2c::{I2CDevice, MuxI2C};
 use capsules::virtual_spi::VirtualSpiMasterDevice;

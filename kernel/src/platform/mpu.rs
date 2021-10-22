@@ -19,6 +19,7 @@ pub enum Permissions {
 /// This is one contiguous address space protected by the MPU.
 #[derive(Copy, Clone)]
 pub struct Region {
+    id: usize,
     /// The memory address where the region starts.
     ///
     /// For maximum compatibility, we use a u8 pointer, however, note that many
@@ -32,12 +33,15 @@ pub struct Region {
 
 impl Region {
     /// Create a new MPU region with a given starting point and length in bytes.
-    pub fn new(start_address: *const u8, size: usize) -> Region {
+    pub fn new(id: usize, start_address: *const u8, size: usize) -> Region {
         Region {
+            id,
             start_address: start_address,
             size: size,
         }
     }
+
+    pub fn id(&self) -> usize { self.id }
 
     /// Getter: retrieve the address of the start of the MPU region.
     pub fn start_address(&self) -> *const u8 {
@@ -154,8 +158,16 @@ pub trait MPU {
         if min_region_size > unallocated_memory_size {
             None
         } else {
-            Some(Region::new(unallocated_memory_start, min_region_size))
+            Some(Region::new(0, unallocated_memory_start, min_region_size))
         }
+    }
+
+    #[allow(unused_variables)]
+    fn deallocate_region(&self,
+                         region: &Region,
+                         config: &mut Self::MpuConfig,
+    ) -> Result<(), ()> {
+        Err(())
     }
 
     /// Chooses the location for a process's memory, and allocates an MPU region

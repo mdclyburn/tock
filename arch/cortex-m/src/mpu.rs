@@ -511,7 +511,17 @@ impl<const NUM_REGIONS: usize, const MIN_REGION_SIZE: usize> mpu::MPU
         config.regions[region_num] = region;
         config.is_dirty.set(true);
 
-        Some(mpu::Region::new(start as *const u8, size))
+        Some(mpu::Region::new(region_num, start as *const u8, size))
+    }
+
+    fn deallocate_region(&self,
+                         region: &mpu::Region,
+                         config: &mut Self::MpuConfig) -> Result<(), ()>
+    {
+        config.regions[region.id()] = CortexMRegion::empty(region.id());
+        config.is_dirty.set(true);
+
+        Ok(())
     }
 
     fn allocate_app_memory_region(
