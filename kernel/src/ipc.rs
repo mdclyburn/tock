@@ -6,6 +6,7 @@
 use crate::capabilities::MemoryAllocationCapability;
 use crate::grant::Grant;
 use crate::kernel::Kernel;
+use crate::platform::mpu;
 use crate::process;
 use crate::process::ProcessId;
 use crate::processbuffer::{ReadOnlyProcessBuffer, ReadWriteProcessBuffer, ReadableProcessBuffer};
@@ -122,6 +123,7 @@ impl<const NUM_PROCS: usize, const NUM_UPCALLS: usize> IPC<NUM_PROCS, NUM_UPCALL
                                                     slice.ptr(),
                                                     slice.len(),
                                                     slice.len(),
+                                                    mpu::Permissions::ReadWriteOnly,
                                                 )
                                             },
                                         );

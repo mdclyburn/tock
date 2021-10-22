@@ -24,6 +24,7 @@ use crate::process_policies::ProcessFaultPolicy;
 use crate::process_utilities::ProcessLoadError;
 use crate::processbuffer::{ReadOnlyProcessBuffer, ReadWriteProcessBuffer};
 use crate::syscall::{self, Syscall, SyscallReturn, UserspaceKernelBoundary};
+use crate::testing;
 use crate::upcall::UpcallId;
 use crate::utilities::cells::{MapCell, NumericCellExt};
 
@@ -457,13 +458,14 @@ impl<C: Chip> Process for ProcessStandard<'_, C> {
         unallocated_memory_start: *const u8,
         unallocated_memory_size: usize,
         min_region_size: usize,
+        permissions: mpu::Permissions,
     ) -> Option<mpu::Region> {
         self.mpu_config.and_then(|mut config| {
             let new_region = self.chip.mpu().allocate_region(
                 unallocated_memory_start,
                 unallocated_memory_size,
                 min_region_size,
-                mpu::Permissions::ReadWriteOnly,
+                permissions,
                 &mut config,
             );
 
@@ -482,6 +484,8 @@ impl<C: Chip> Process for ProcessStandard<'_, C> {
             None
         })
     }
+
+    fn deallocate_mpu_region(&self, region: &mpu::Region) -> Result<(), ()> { Err(()) }
 
     fn sbrk(&self, increment: isize) -> Result<*const u8, Error> {
         // Do not modify an inactive process.
@@ -1350,6 +1354,7 @@ impl<C: 'static + Chip> ProcessStandard<'_, C> {
         fault_policy: &'static dyn ProcessFaultPolicy,
         require_kernel_version: bool,
         index: usize,
+        process_event_hook: &dyn testing::ProcessEventSubscriber,
     ) -> Result<(Option<&'static dyn Process>, &'a mut [u8]), ProcessLoadError> {
         // Get a slice for just the app header.
         let header_flash = app_flash
@@ -1771,6 +1776,10 @@ impl<C: 'static + Chip> ProcessStandard<'_, C> {
                 return Err(ProcessLoadError::InternalError);
             }
         };
+
+        // This isn't quite the right place for this as far as clean code goes,
+        // but it works for this round.
+        process_event_hook.created(&*process as &dyn Process);
 
         kernel.increment_work();
 

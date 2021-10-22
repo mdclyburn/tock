@@ -264,6 +264,10 @@ impl CortexMRegion {
     ) -> CortexMRegion {
         // Determine access and execute permissions
         let (access, execute) = match permissions {
+            mpu::Permissions::NoAccess => (
+                RegionAttributes::AP::NoAccess,
+                RegionAttributes::XN::Enable,
+            ),
             mpu::Permissions::ReadWriteExecute => (
                 RegionAttributes::AP::ReadWrite,
                 RegionAttributes::XN::Enable,

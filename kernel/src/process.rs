@@ -408,7 +408,10 @@ pub trait Process {
         unallocated_memory_start: *const u8,
         unallocated_memory_size: usize,
         min_region_size: usize,
+        permissions: mpu::Permissions,
     ) -> Option<mpu::Region>;
+
+    fn deallocate_mpu_region(&self, region: &mpu::Region) -> Result<(), ()>;
 
     // grants
 

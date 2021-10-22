@@ -602,6 +602,7 @@ pub unsafe fn main() {
         ),
         &mut PROCESSES,
         fault_policy,
+        stack_profiler,
         &process_management_capability,
     )
     .unwrap_or_else(|err| {

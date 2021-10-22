@@ -7,6 +7,7 @@ use core::fmt::{self, Display};
 /// User mode access permissions.
 #[derive(Copy, Clone)]
 pub enum Permissions {
+    NoAccess,
     ReadWriteExecute,
     ReadWriteOnly,
     ReadExecuteOnly,
@@ -163,10 +164,7 @@ pub trait MPU {
     }
 
     #[allow(unused_variables)]
-    fn deallocate_region(&self,
-                         region: &Region,
-                         config: &mut Self::MpuConfig,
-    ) -> Result<(), ()> {
+    fn deallocate_region(&self, region: &Region, config: &mut Self::MpuConfig) -> Result<(), ()> {
         Err(())
     }
 

@@ -11,6 +11,7 @@ use crate::platform::chip::Chip;
 use crate::process::Process;
 use crate::process_policies::ProcessFaultPolicy;
 use crate::process_standard::ProcessStandard;
+use crate::testing;
 
 /// Errors that can occur when trying to load and create processes.
 pub enum ProcessLoadError {
@@ -160,6 +161,7 @@ pub fn load_processes_advanced<C: Chip>(
     procs: &'static mut [Option<&'static dyn Process>],
     fault_policy: &'static dyn ProcessFaultPolicy,
     require_kernel_version: bool,
+    process_event_hook: &dyn testing::ProcessEventSubscriber,
     _capability: &dyn ProcessManagementCapability,
 ) -> Result<(), ProcessLoadError> {
     if config::CONFIG.debug_load_processes {
@@ -249,6 +251,7 @@ pub fn load_processes_advanced<C: Chip>(
                     fault_policy,
                     require_kernel_version,
                     index,
+                    process_event_hook,
                 )?
             };
             process_option.map(|process| {
@@ -295,6 +298,7 @@ pub fn load_processes<C: Chip>(
     app_memory: &mut [u8], // not static, so that process.rs cannot hold on to slice w/o unsafe
     procs: &'static mut [Option<&'static dyn Process>],
     fault_policy: &'static dyn ProcessFaultPolicy,
+    process_event_hook: &dyn testing::ProcessEventSubscriber,
     capability: &dyn ProcessManagementCapability,
 ) -> Result<(), ProcessLoadError> {
     load_processes_advanced(
@@ -305,6 +309,7 @@ pub fn load_processes<C: Chip>(
         procs,
         fault_policy,
         true,
+        process_event_hook,
         capability,
     )
 }
