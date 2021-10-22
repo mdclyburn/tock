@@ -5,6 +5,7 @@ use core::fmt::Write;
 
 use crate::errorcode::ErrorCode;
 use crate::process;
+use crate::process::ExecutionState;
 
 pub use crate::syscall_driver::{CommandReturn, SyscallDriver};
 
@@ -452,7 +453,7 @@ pub trait UserspaceKernelBoundary {
     /// Implementations should **not** rely on the `Default` constructor (custom
     /// or derived) for any initialization of a process's stored state. The
     /// initialization must happen in the `initialize_process()` function.
-    type StoredState: Default;
+    type StoredState: Default + ExecutionState;
 
     /// Called by the kernel during process creation to inform the kernel of the
     /// minimum amount of process-accessible RAM needed by a new process. This

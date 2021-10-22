@@ -18,7 +18,7 @@ use crate::errorcode::ErrorCode;
 use crate::kernel::Kernel;
 use crate::platform::chip::Chip;
 use crate::platform::mpu::{self, MPU};
-use crate::process::{Error, FunctionCall, FunctionCallSource, Process, State, Task};
+use crate::process::{Error, ExecutionState, FunctionCall, FunctionCallSource, Process, State, Task};
 use crate::process::{FaultAction, ProcessCustomGrantIdentifer, ProcessId, ProcessStateCell};
 use crate::process_policies::ProcessFaultPolicy;
 use crate::process_utilities::ProcessLoadError;
@@ -1317,6 +1317,10 @@ impl<C: Chip> Process for ProcessStandard<'_, C> {
                 ));
             }
         });
+    }
+
+    fn stack_pointer(&self) -> Option<usize> {
+        self.stored_state.and_then(|state| state.stack_pointer())
     }
 }
 

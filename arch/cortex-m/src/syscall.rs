@@ -5,6 +5,8 @@ use core::fmt::Write;
 use core::mem;
 use core::ptr::{read_volatile, write_volatile};
 
+use kernel::process::ExecutionState;
+
 /// This is used in the syscall handler. When set to 1 this means the
 /// svc_handler was called. Marked `pub` because it is used in the cortex-m*
 /// specific handler.
@@ -45,6 +47,12 @@ pub struct CortexMStoredState {
     yield_pc: usize,
     psr: usize,
     psp: usize,
+}
+
+impl ExecutionState for CortexMStoredState {
+    fn stack_pointer(&self) -> Option<usize> {
+        Some(self.psp)
+    }
 }
 
 /// Implementation of the `UserspaceKernelBoundary` for the Cortex-M non-floating point

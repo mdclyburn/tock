@@ -570,6 +570,9 @@ pub trait Process {
 
     /// Return the lowest recorded address of the process stack, if known.
     fn debug_stack_end(&self) -> Option<*const u8>;
+
+    /// Value of the process' stack pointer.
+    fn stack_pointer(&self) -> Option<usize>;
 }
 
 /// Opaque identifier for custom grants allocated dynamically from a process's
@@ -771,4 +774,10 @@ pub struct FunctionCall {
     pub argument2: usize,
     pub argument3: usize,
     pub pc: usize,
+}
+
+/// Implementation-specific process information found in its [`StoredState`].
+pub trait ExecutionState {
+    /// Current value of the stack pointer.
+    fn stack_pointer(&self) -> Option<usize> { None }
 }
