@@ -6,7 +6,7 @@ use crate::process::Process;
 
 /// Enables a type to hook into the process lifecycle.
 #[allow(unused_variables)]
-pub trait ProcessEventHandler {
+pub trait ProcessEventSubscriber {
     /// The kernel calls this function when it creates a process.
     fn created(&self, process: &dyn Process) {  }
 
@@ -16,6 +16,8 @@ pub trait ProcessEventHandler {
     /// The kernel calls this function when a process faults.
     fn faulted(&self, process: &dyn Process) {  }
 }
+
+impl ProcessEventSubscriber for () {  }
 
 pub struct StackProfiler<M: 'static + MPU> {
     mpu: &'static M,
@@ -29,7 +31,7 @@ impl<M: MPU> StackProfiler<M> {
     }
 }
 
-impl<M: MPU> ProcessEventHandler for StackProfiler<M> {
+impl<M: MPU> ProcessEventSubscriber for StackProfiler<M> {
     /// Initializes stack usage information for a process.
     fn created(&self, process: &dyn Process) {
     }

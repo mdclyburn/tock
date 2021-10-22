@@ -25,6 +25,7 @@ use kernel::hil::i2c::I2CMaster;
 use kernel::hil::led::LedLow;
 use kernel::hil::Controller;
 use kernel::platform::{KernelResources, SyscallDriverLookup};
+use kernel::platform::chip::Chip;
 use kernel::scheduler::round_robin::RoundRobinSched;
 #[allow(unused_imports)]
 use kernel::{create_capability, debug, debug_gpio, static_init};
@@ -88,6 +89,8 @@ struct Hail {
     dac: &'static capsules::dac::Dac<'static>,
     scheduler: &'static RoundRobinSched<'static>,
     systick: cortexm4::systick::SysTick,
+    stack_profiler: &'static kernel::testing::StackProfiler<<sam4l::chip::Sam4l<Sam4lDefaultPeripherals> as Chip>
+                                                            ::MPU>,
 }
 
 /// Mapping of integer syscalls to objects that implement syscalls.
@@ -123,10 +126,13 @@ impl SyscallDriverLookup for Hail {
     }
 }
 
+type Sam4lMPU = <sam4l::chip::Sam4l<Sam4lDefaultPeripherals> as Chip>::MPU;
+
 impl KernelResources<sam4l::chip::Sam4l<Sam4lDefaultPeripherals>> for Hail {
     type SyscallDriverLookup = Self;
     type SyscallFilter = ();
-    type ProcessFault = ();
+    type ProcessEventSubscriber = kernel::testing::StackProfiler<Sam4lMPU>;
+    type ProcessFault = kernel::testing::StackProfiler<Sam4lMPU>;
     type Scheduler = RoundRobinSched<'static>;
     type SchedulerTimer = cortexm4::systick::SysTick;
     type WatchDog = ();
@@ -137,8 +143,11 @@ impl KernelResources<sam4l::chip::Sam4l<Sam4lDefaultPeripherals>> for Hail {
     fn syscall_filter(&self) -> &Self::SyscallFilter {
         &()
     }
+    fn process_event_subscriber(&self) -> &Self::ProcessEventSubscriber {
+        &self.stack_profiler
+    }
     fn process_fault(&self) -> &Self::ProcessFault {
-        &()
+        &self.stack_profiler
     }
     fn scheduler(&self) -> &Self::Scheduler {
         self.scheduler
@@ -508,6 +517,10 @@ pub unsafe fn main() {
     // );
     // peripherals.pa[16].set_client(debug_process_restart);
 
+    let stack_profiler = static_init!(
+        kernel::testing::StackProfiler<Sam4lMPU>,
+        kernel::testing::StackProfiler::<Sam4lMPU>::new(chip.mpu()));
+
     // Configure application fault policy
     let fault_policy = static_init!(
         kernel::process::ThresholdRestartThenPanicFaultPolicy,
@@ -539,6 +552,7 @@ pub unsafe fn main() {
         crc,
         dac,
         scheduler,
+        stack_profiler,
         systick: cortexm4::systick::SysTick::new(),
     };
 

@@ -9,6 +9,7 @@ use crate::syscall_driver::SyscallDriver;
 use crate::platform::chip::Chip;
 use crate::platform::scheduler_timer;
 use crate::platform::watchdog;
+use crate::testing;
 
 /// Combination trait that boards provide to the kernel that includes all of
 /// the extensible operations the kernel supports.
@@ -22,6 +23,8 @@ pub trait KernelResources<C: Chip> {
     /// The implementation of the system call filtering mechanism the kernel
     /// will use.
     type SyscallFilter: SyscallFilter;
+
+    type ProcessEventSubscriber: testing::ProcessEventSubscriber;
 
     /// The implementation of the process fault handling mechanism the kernel
     /// will use.
@@ -45,6 +48,8 @@ pub trait KernelResources<C: Chip> {
     /// Returns a reference to the implementation of the SyscallFilter this
     /// platform wants the kernel to use.
     fn syscall_filter(&self) -> &Self::SyscallFilter;
+
+    fn process_event_subscriber(&self) -> &Self::ProcessEventSubscriber;
 
     /// Returns a reference to the implementation of the ProcessFault handler
     /// this platform wants the kernel to use.
