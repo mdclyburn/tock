@@ -255,6 +255,7 @@ pub fn load_processes_advanced<C: Chip>(
                 )?
             };
             process_option.map(|process| {
+                process_event_hook.created(process);
                 if config::CONFIG.debug_load_processes {
                     debug!(
                         "Loaded process[{}] from flash={:#010X}-{:#010X} into sram={:#010X}-{:#010X} = {:?}",

@@ -1,7 +1,5 @@
 //! OS testing facilities.
 
-use core::cell::Cell;
-
 use crate::debug;
 use crate::utilities::cells::OptionalCell;
 use crate::platform::mpu::{
@@ -11,6 +9,7 @@ use crate::platform::mpu::{
 };
 use crate::platform::ProcessFault;
 use crate::process::Process;
+use crate::syscall::Syscall;
 
 /// Enables a type to hook into the process lifecycle.
 #[allow(unused_variables)]
@@ -26,6 +25,9 @@ pub trait ProcessEventSubscriber {
 
     /// The kernel calls this function when a process faults.
     fn faulted(&self, process: &dyn Process) {  }
+
+    // The kernel calls this function when a process invokes a syscall.
+    fn on_syscall(&self, process: &dyn Process, syscall: &Syscall) {  }
 }
 
 impl ProcessEventSubscriber for () {  }
@@ -36,7 +38,8 @@ pub struct StackProfiler<M: 'static + MPU> {
     mpu_regions: [OptionalCell<Region>; 4],
     /// Currently required subregion enabled-disabled state.
     mpu_subregion_state: [OptionalCell<u8>; 4],
-    sp_start: Cell<usize>,
+    /// Initial value of the process' stack pointer and its stack size.
+    stack_range: OptionalCell<(usize, usize)>,
 }
 
 impl<M: MPU> StackProfiler<M> {
@@ -51,7 +54,7 @@ impl<M: MPU> StackProfiler<M> {
                                   OptionalCell::empty(),
                                   OptionalCell::empty(),
                                   OptionalCell::empty()],
-            sp_start: Cell::new(0),
+            stack_range: OptionalCell::empty(),
         }
     }
 
@@ -69,6 +72,32 @@ impl<M: MPU> StackProfiler<M> {
     #[inline(always)]
     fn region_size(&self, region_idx: usize) -> usize {
         (2usize).pow((8 + 3 * region_idx) as u32)
+    }
+
+    /// Set the initial stack profiling MPU state.
+    fn initialize(&self, process: &dyn Process, stack_start: usize) {
+        if self.stack_range.is_some() {
+            return;
+        }
+
+        // We may now calculate the real stack size.
+        let stack_len = (process.mem_end() as usize) - stack_start;
+
+        self.stack_range.set((stack_start, stack_len));
+        debug!("Initial SP: {:08X}", stack_start);
+        debug!("Stack end:  {:08X}", stack_start + stack_len);
+        debug!("Stack len:  {:08X}", stack_len);
+
+        // Create the necessary MPU regions.
+        // We size them such that larger regions fit entire smaller regions in their subregion size.
+        // We will not use more than four regions.
+        let no_req_regions = required_regions(stack_len);
+        // Assert that there are between 1 and 4 regions for this purpose?
+        for i in 0..no_req_regions {
+            // For regions we use, all their subregions are initially enabled.
+            self.mpu_subregion_state[i].set(u8::MAX);
+        }
+        debug!("Using {} MPU regions for stack profiling.", no_req_regions);
     }
 
     /// Make the stack-tracking region smaller.
@@ -148,28 +177,8 @@ impl<M: MPU> StackProfiler<M> {
 }
 
 impl<M: MPU> ProcessEventSubscriber for StackProfiler<M> {
-    /// Initializes stack usage information for a process.
-    fn created(&self, process: &dyn Process) {
-        // Record where the stack pointer starts;
-        // this will tell us how large of an area we must track.
-        let proc_sp = process.stack_pointer()
-            .unwrap(); // ...If we can't tell the SP, what are we doing here?
-        self.sp_start.set(proc_sp);
-        let proc_stack_end = process.mem_end() as usize;
-        debug!("Initial SP: {:08X}", proc_sp);
-        debug!("Stack end:  {:08X}", proc_stack_end);
-
-        // Create the necessary MPU regions.
-        // We size them such that larger regions fit entire smaller regions in their subregion size.
-        // We will not use more than three regions.
-        let no_req_regions = required_regions(proc_stack_end - proc_sp);
-        // Assert that there are between 1 and 4 regions for this purpose?
-        for i in 0..no_req_regions {
-            // For regions we use, all their subregions are initially enabled.
-            self.mpu_subregion_state[i].set(u8::MAX);
-        }
-        debug!("Using {} MPU regions for stack profiling.", no_req_regions);
-    }
+    /// Initializes some information for a process.
+    fn created(&self, process: &dyn Process) {  }
 
     /// Enable the stack-tracking MPU regions.
     fn starting(&self, process: &dyn Process) {
@@ -180,6 +189,16 @@ impl<M: MPU> ProcessEventSubscriber for StackProfiler<M> {
     /// Notes the process' stack pointer's current location
     /// and adjusts the MPU region it manipulates as necessary.
     fn stopped(&self, process: &dyn Process) {
+    }
+
+    /// Watch for a process to inform the kernel where it puts its stack.
+    fn on_syscall(&self, process: &dyn Process, syscall: &Syscall) {
+        match *syscall {
+            Syscall::Memop { operand: 10, arg0: initial_sp } =>
+                self.initialize(process, initial_sp),
+
+            _ => {  }
+        };
     }
 }
 

@@ -1777,10 +1777,6 @@ impl<C: 'static + Chip> ProcessStandard<'_, C> {
             }
         };
 
-        // This isn't quite the right place for this as far as clean code goes,
-        // but it works for this round.
-        process_event_hook.created(&*process as &dyn Process);
-
         kernel.increment_work();
 
         // Return the process object and a remaining memory for processes slice.

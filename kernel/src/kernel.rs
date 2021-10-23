@@ -733,6 +733,12 @@ impl Kernel {
         // Hook for process debugging.
         process.debug_syscall_called(syscall);
 
+        {
+            use crate::testing::ProcessEventSubscriber;
+            resources.process_event_subscriber()
+                .on_syscall(process, &syscall);
+        }
+
         // Enforce platform-specific syscall filtering here.
         //
         // Before continuing to handle non-yield syscalls
