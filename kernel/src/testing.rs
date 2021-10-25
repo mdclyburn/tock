@@ -83,11 +83,12 @@ impl<M: MPU> StackProfiler<M> {
 
         // We may now calculate the real stack size.
         let stack_len = (process.mem_end() as usize) - stack_start;
+        let stack_end = stack_start - stack_len;
 
         self.stack_range.set((stack_start, stack_len));
-        debug!("Initial SP: {:08X}", stack_start);
-        debug!("Stack end:  {:08X}", stack_start + stack_len);
-        debug!("Stack len:  {:08X}", stack_len);
+        debug!("Initial SP: {:#08X}", stack_start);
+        debug!("Stack end:  {:#08X}", stack_end);
+        debug!("Stack len:  {:#08X}", stack_len);
 
         // Create the necessary MPU regions.
         // We size them such that larger regions fit entire smaller regions in their subregion size.
@@ -96,19 +97,12 @@ impl<M: MPU> StackProfiler<M> {
         debug!("Using {} MPU regions for stack profiling.", no_req_regions);
         // Assert that there are between 1 and 4 regions for this purpose?
 
-        let stack_end = stack_start + stack_len;
         for i in 0..no_req_regions {
             // Reverse our iteration; start with allocating the largest region.
             let region_idx = no_req_regions - i - 1;
 
             // Size of the region we require.
-            // All but the smallest region should be exactly their max size - 1/8 their max size.
-            let region_size =
-                if region_idx == 0 {
-                    self.region_size(region_idx)
-                } else {
-                    self.region_size(region_idx) / 8 * 7
-                };
+            let region_size = self.region_size(region_idx);
             // Where the region should start.
             // If this is the largest region, it should start at the end of the stack.
             // Subsequent regions should start at the start address of the previous, larger region
@@ -123,13 +117,14 @@ impl<M: MPU> StackProfiler<M> {
                         .unwrap(); // Guaranteed to exist by the previous iteration of the loop.
                     (previous_region_addr as usize + (previous_region_size / 8 * 7))
                 };
+            let subregion_state = if region_idx == 0 { 0b11111110 } else { 0b11111111 };
 
-            debug!("Requested profiling region #{} @{:#08X}, length {} bytes",
-                   region_idx, region_addr, region_size);
-            let region = process.add_mpu_region(
+            debug!("Requested profiling region #{} @{:#08X}, size: {} bytes, subregion state: {:08b} ",
+                   region_idx, region_addr, region_size, subregion_state);
+            let region = process.add_exact_mpu_region(
                 region_addr as *const u8,
                 region_size,
-                region_size,
+                subregion_state,
                 Permissions::NoAccess)
                 .unwrap(); // If we can't do this, we shouldn't be profiling.
 
@@ -140,8 +135,7 @@ impl<M: MPU> StackProfiler<M> {
             assert!(region.size() == region_size);
 
             // Set region states.
-            let state = if region_idx == no_req_regions - 1 { 0b11111110 } else { 0b11111111 };
-            self.mpu_subregion_state[region_idx].set(state);
+            self.mpu_subregion_state[region_idx].set(subregion_state);
             self.mpu_regions[region_idx].set(region);
         }
     }
@@ -256,6 +250,7 @@ impl<M: MPU> ProcessFault for StackProfiler<M> {
     /// the profiler records the stack space usage
     /// and reconfigures the MPU to allow the process to continue.
     fn process_fault_hook(&self, process: &dyn Process) -> Result<(), ()> {
+        debug!("Stack profiler picked up on a fault, but this isn't implemented.");
         Err(())
     }
 }

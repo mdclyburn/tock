@@ -6,6 +6,7 @@ use core::cmp;
 use core::fmt;
 
 use kernel;
+use kernel::debug;
 use kernel::platform::mpu;
 use kernel::utilities::cells::OptionalCell;
 use kernel::utilities::math;
@@ -492,6 +493,12 @@ impl<const NUM_REGIONS: usize, const MIN_REGION_SIZE: usize> mpu::MPU
 
         // Check that our logical region fits in memory.
         if start + size > (unallocated_memory_start as usize) + unallocated_memory_size {
+            debug!("logical region does not fit in memory");
+            debug!("{:#08X} + {} bytes > {:#08X} + {} bytes",
+                   start,
+                   size,
+                   unallocated_memory_start as usize,
+                   unallocated_memory_size);
             return None;
         }
 
@@ -509,6 +516,55 @@ impl<const NUM_REGIONS: usize, const MIN_REGION_SIZE: usize> mpu::MPU
         config.is_dirty.set(true);
 
         Some(mpu::Region::new(region_num, start as *const u8, size))
+    }
+
+    fn allocate_exact_region(
+        &self,
+        start_address: *const u8,
+        size: usize,
+        subregions_enabled: u8,
+        permissions: mpu::Permissions,
+        config: &mut Self::MpuConfig,
+    ) -> Option<mpu::Region> {
+        let region_num = config.unused_region_number()?;
+
+        let subregions =
+            if subregions_enabled == u8::MAX {
+                None
+            } else {
+                let mut first = 0;
+                let mut last = 0;
+
+                for i in 0..8 {
+                    if subregions_enabled >> i & 1 == 1 {
+                        first = i;
+                        break;
+                    }
+                }
+
+                for i in 0..8 {
+                    if subregions_enabled << i & (1 << 7) == (1 << 7) {
+                        last = 8 - i - 1;
+                        break;
+                    }
+                }
+                Some((first, last))
+            };
+
+        let region = CortexMRegion::new(
+            start_address,
+            size,
+            start_address,
+            size,
+            region_num,
+            subregions,
+            permissions,
+        );
+
+        config.regions[region_num] = region;
+        config.is_dirty.set(true);
+
+        Some(mpu::Region::new(region_num, start_address, size))
     }
 
     fn deallocate_region(&self,

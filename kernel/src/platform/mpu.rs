@@ -163,6 +163,17 @@ pub trait MPU {
         }
     }
 
+    fn allocate_exact_region(
+        &self,
+        start_address: *const u8,
+        size: usize,
+        subregions_enabled: u8,
+        permissions: Permissions,
+        config: &mut Self::MpuConfig,
+    ) -> Option<Region> {
+        None
+    }
+
     #[allow(unused_variables)]
     fn deallocate_region(&self, region: &Region, config: &mut Self::MpuConfig) -> Result<(), ()> {
         Err(())

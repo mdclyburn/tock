@@ -411,6 +411,14 @@ pub trait Process {
         permissions: mpu::Permissions,
     ) -> Option<mpu::Region>;
 
+    fn add_exact_mpu_region(
+        &self,
+        start_address: *const u8,
+        size: usize,
+        subregions_enabled: u8,
+        permissions: mpu::Permissions,
+    ) -> Option<mpu::Region>;
+
     fn deallocate_mpu_region(&self, region: &mpu::Region) -> Result<(), ()>;
 
     // grants

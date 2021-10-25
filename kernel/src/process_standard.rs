@@ -485,6 +485,36 @@ impl<C: Chip> Process for ProcessStandard<'_, C> {
         })
     }
 
+    fn add_exact_mpu_region(
+        &self,
+        start_address: *const u8,
+        size: usize,
+        subregions_enabled: u8,
+        permissions: mpu::Permissions,
+    ) -> Option<mpu::Region>
+    {
+        self.mpu_config.and_then(|mut config| {
+            let new_region = self.chip.mpu().allocate_exact_region(
+                start_address,
+                size,
+                subregions_enabled,
+                permissions,
+                &mut config);
+
+            if new_region.is_none() { return None; }
+
+            for region in self.mpu_regions.iter() {
+                if region.get().is_none() {
+                    region.set(new_region);
+                    return new_region;
+                }
+            }
+
+            // Not enough room in Process struct to store the MPU region.
+            None
+        })
+    }
+
     fn deallocate_mpu_region(&self, region: &mpu::Region) -> Result<(), ()> { Err(()) }
 
     fn sbrk(&self, increment: isize) -> Result<*const u8, Error> {
