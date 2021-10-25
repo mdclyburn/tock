@@ -5,7 +5,8 @@ use crate::utilities::cells::OptionalCell;
 use crate::platform::mpu::{
     self,
     MPU,
-    Region
+    Permissions,
+    Region,
 };
 use crate::platform::ProcessFault;
 use crate::process::Process;
@@ -92,12 +93,57 @@ impl<M: MPU> StackProfiler<M> {
         // We size them such that larger regions fit entire smaller regions in their subregion size.
         // We will not use more than four regions.
         let no_req_regions = required_regions(stack_len);
-        // Assert that there are between 1 and 4 regions for this purpose?
-        for i in 0..no_req_regions {
-            // For regions we use, all their subregions are initially enabled.
-            self.mpu_subregion_state[i].set(u8::MAX);
-        }
         debug!("Using {} MPU regions for stack profiling.", no_req_regions);
+        // Assert that there are between 1 and 4 regions for this purpose?
+
+        let stack_end = stack_start - stack_len;
+        for i in 0..no_req_regions {
+            // Reverse our iteration; start with allocating the largest region.
+            let region_idx = no_req_regions - i - 1;
+
+            // Size of the region we require.
+            // All but the smallest region should be exactly their max size - 1/8 their max size.
+            let region_size =
+                if region_idx == 0 {
+                    self.region_size(i)
+                } else {
+                    self.region_size(i) / 8 * 7
+                };
+            // Where the region should start.
+            // If this is the largest region, it should start at the end of the stack.
+            // Subsequent regions should start at the start address of the previous, larger region
+            // plus 7/8ths the size of the larger region.
+            let region_addr =
+                if region_idx == (no_req_regions - 1) {
+                    stack_end
+                } else {
+                    let previous_region_size = self.region_size(region_idx+1);
+                    let previous_region_addr = self.mpu_regions[region_idx+1]
+                        .and_then(|larger_region| Some(larger_region.start_address() as usize))
+                        .unwrap(); // Guaranteed to exist by the previous iteration of the loop.
+                    (previous_region_addr as usize + (previous_region_size / 8 * 7))
+                };
+
+            let region = process.add_mpu_region(
+                region_addr as *const u8,
+                region_size,
+                region_size,
+                Permissions::NoAccess)
+                .unwrap(); // If we can't do this, we shouldn't be profiling.
+
+            // We must get exactly what we asked for.
+            debug!("Requested profiling region #{} @{:08X}, length {} bytes",
+                   region_idx, region_addr, region_size);
+            debug!("Allocated profiling region #{} @{:08X}, length {} bytes",
+                   region_idx, region.start_address() as usize, region.size());
+            assert!(region.start_address() == region_addr as *const u8);
+            assert!(region.size() == region_size);
+
+            // Set region states.
+            let state = if region_idx == no_req_regions - 1 { 0b11111110 } else { 0b11111111 };
+            self.mpu_subregion_state[region_idx].set(state);
+            self.mpu_regions[region_idx].set(region);
+        }
     }
 
     /// Make the stack-tracking region smaller.
