@@ -96,7 +96,7 @@ impl<M: MPU> StackProfiler<M> {
         debug!("Using {} MPU regions for stack profiling.", no_req_regions);
         // Assert that there are between 1 and 4 regions for this purpose?
 
-        let stack_end = stack_start - stack_len;
+        let stack_end = stack_start + stack_len;
         for i in 0..no_req_regions {
             // Reverse our iteration; start with allocating the largest region.
             let region_idx = no_req_regions - i - 1;
@@ -105,9 +105,9 @@ impl<M: MPU> StackProfiler<M> {
             // All but the smallest region should be exactly their max size - 1/8 their max size.
             let region_size =
                 if region_idx == 0 {
-                    self.region_size(i)
+                    self.region_size(region_idx)
                 } else {
-                    self.region_size(i) / 8 * 7
+                    self.region_size(region_idx) / 8 * 7
                 };
             // Where the region should start.
             // If this is the largest region, it should start at the end of the stack.
@@ -124,6 +124,8 @@ impl<M: MPU> StackProfiler<M> {
                     (previous_region_addr as usize + (previous_region_size / 8 * 7))
                 };
 
+            debug!("Requested profiling region #{} @{:#08X}, length {} bytes",
+                   region_idx, region_addr, region_size);
             let region = process.add_mpu_region(
                 region_addr as *const u8,
                 region_size,
@@ -132,9 +134,7 @@ impl<M: MPU> StackProfiler<M> {
                 .unwrap(); // If we can't do this, we shouldn't be profiling.
 
             // We must get exactly what we asked for.
-            debug!("Requested profiling region #{} @{:08X}, length {} bytes",
-                   region_idx, region_addr, region_size);
-            debug!("Allocated profiling region #{} @{:08X}, length {} bytes",
+            debug!("Allocated profiling region #{} @{:#08X}, length {} bytes",
                    region_idx, region.start_address() as usize, region.size());
             assert!(region.start_address() == region_addr as *const u8);
             assert!(region.size() == region_size);

@@ -399,13 +399,6 @@ impl<const NUM_REGIONS: usize, const MIN_REGION_SIZE: usize> mpu::MPU
         permissions: mpu::Permissions,
         config: &mut Self::MpuConfig,
     ) -> Option<mpu::Region> {
-        // Check that no previously allocated regions overlap the unallocated memory.
-        for region in config.regions.iter() {
-            if region.overlaps(unallocated_memory_start, unallocated_memory_size) {
-                return None;
-            }
-        }
-
         let region_num = config.unused_region_number()?;
 
         // Logical region
