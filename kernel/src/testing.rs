@@ -1,5 +1,7 @@
 //! OS testing facilities.
 
+use core::cell::Cell;
+
 use crate::debug;
 use crate::utilities::cells::OptionalCell;
 use crate::platform::mpu::{
@@ -34,19 +36,21 @@ pub trait ProcessEventSubscriber {
 impl ProcessEventSubscriber for () {  }
 
 pub struct StackProfiler<M: 'static + MPU> {
-    mpu: &'static M,
+    _mpu: &'static M,
     /// Regions in use for stack profiling (up to 4), smallest up to largest.
     mpu_regions: [OptionalCell<Region>; 4],
     /// Currently required subregion enabled-disabled state.
     mpu_subregion_state: [OptionalCell<u8>; 4],
     /// Initial value of the process' stack pointer and its stack size.
     stack_range: OptionalCell<(usize, usize)>,
+    /// Number of MPU regions we are manipulating.
+    region_count: Cell<usize>,
 }
 
 impl<M: MPU> StackProfiler<M> {
     pub fn new(mpu: &'static M) -> StackProfiler<M> {
         StackProfiler {
-            mpu,
+            _mpu: mpu,
             mpu_regions: [OptionalCell::empty(),
                           OptionalCell::empty(),
                           OptionalCell::empty(),
@@ -56,17 +60,24 @@ impl<M: MPU> StackProfiler<M> {
                                   OptionalCell::empty(),
                                   OptionalCell::empty()],
             stack_range: OptionalCell::empty(),
+            region_count: Cell::new(0),
         }
     }
 
-    fn region_count(&self) -> usize {
-        (&self.mpu_regions).iter().fold(0, |c, opt_region| {
-            if opt_region.is_some() {
-                c + 1
-            } else {
-                c
-            }
-        })
+    /// Return the lowest address the profiling regions reach.
+    fn edge(&self) -> usize {
+        let (base_addr, size) = self.mpu_regions[0]
+            .map(|r| (r.start_address(), r.size()))
+            .unwrap(); // Why would we not at least be using the smallest region size?
+
+        // We assume that the subregions are contiguous here.
+        // They really _should_ be.
+        let subregions_enabled = self.mpu_subregion_state[0]
+            .extract()
+            .unwrap() // Why would we not at least be using the smallest region size?
+            .count_ones();
+
+        base_addr as usize + (size / 8) * subregions_enabled as usize
     }
 
     /// Return the size of the region at the specified index.
@@ -86,20 +97,20 @@ impl<M: MPU> StackProfiler<M> {
         let stack_end = stack_start - stack_len;
 
         self.stack_range.set((stack_start, stack_len));
-        debug!("Initial SP: {:#08X}", stack_start);
-        debug!("Stack end:  {:#08X}", stack_end);
-        debug!("Stack len:  {:#08X}", stack_len);
+        // debug!("Initial SP: {:#08X}", stack_start);
+        // debug!("Stack end:  {:#08X}", stack_end);
+        // debug!("Stack len:  {:#08X}", stack_len);
 
         // Create the necessary MPU regions.
         // We size them such that larger regions fit entire smaller regions in their subregion size.
         // We will not use more than four regions.
-        let no_req_regions = required_regions(stack_len);
-        debug!("Using {} MPU regions for stack profiling.", no_req_regions);
+        self.region_count.set(required_regions(stack_len));
+        debug!("Using {} MPU regions for stack profiling.", self.region_count.get());
         // Assert that there are between 1 and 4 regions for this purpose?
 
-        for i in 0..no_req_regions {
+        for i in 0..self.region_count.get() {
             // Reverse our iteration; start with allocating the largest region.
-            let region_idx = no_req_regions - i - 1;
+            let region_idx = self.region_count.get() - i - 1;
 
             // Size of the region we require.
             let region_size = self.region_size(region_idx);
@@ -108,7 +119,7 @@ impl<M: MPU> StackProfiler<M> {
             // Subsequent regions should start at the start address of the previous, larger region
             // plus 7/8ths the size of the larger region.
             let region_addr =
-                if region_idx == (no_req_regions - 1) {
+                if region_idx == (self.region_count.get() - 1) {
                     stack_end
                 } else {
                     let previous_region_size = self.region_size(region_idx+1);
@@ -119,8 +130,8 @@ impl<M: MPU> StackProfiler<M> {
                 };
             let subregion_state = if region_idx == 0 { 0b11111110 } else { 0b11111111 };
 
-            debug!("Requested profiling region #{} @{:#08X}, size: {} bytes, subregion state: {:08b} ",
-                   region_idx, region_addr, region_size, subregion_state);
+            // debug!("Requested profiling region #{} @{:#08X}, size: {} bytes, subregion state: {:08b} ",
+            //        region_idx, region_addr, region_size, subregion_state);
             let region = process.add_exact_mpu_region(
                 region_addr as *const u8,
                 region_size,
@@ -129,8 +140,8 @@ impl<M: MPU> StackProfiler<M> {
                 .unwrap(); // If we can't do this, we shouldn't be profiling.
 
             // We must get exactly what we asked for.
-            debug!("Allocated profiling region #{} @{:#08X}, length {} bytes",
-                   region_idx, region.start_address() as usize, region.size());
+            // debug!("Allocated profiling region #{} @{:#08X}, length {} bytes",
+            //        region_idx, region.start_address() as usize, region.size());
             assert!(region.start_address() == region_addr as *const u8);
             assert!(region.size() == region_size);
 
@@ -138,41 +149,20 @@ impl<M: MPU> StackProfiler<M> {
             self.mpu_subregion_state[region_idx].set(subregion_state);
             self.mpu_regions[region_idx].set(region);
         }
+
+        // Shrink the regions until we arrive at the process' stack base.
+        while self.edge() > stack_start {
+            // debug!("Shrinking edge because {:#08X} > {:#08X} (stack base).",
+            //        self.edge(), stack_start);
+            self.shrink(process);
+        }
     }
 
     /// Make the stack-tracking region smaller.
-    ///
-    /// Updates the internally-tracked subregion state and applies it to the MPU.
-    /// All the figuring work happens in [`StackProfiler::shrink_state()`].
     fn shrink(&self, process: &dyn Process) {
         // Figure out the shrinkage.
         self.shrink_state(process, 0)
-            .expect("Shrinking stack profiling MPU regions failed.");
-
-        // Actually apply the shrink.
-        // Possible optimization: only update regions that actually changed.
-        for region_idx in 0..self.region_count() {
-            // We'll scooch over by the size of the larger region's subregion,
-            // which is the size of this entire region.
-            let new_region_base = self.mpu_regions[region_idx]
-                // Our two arrays _should_ have the same number of cells non-empty...
-                .map(|r| r.start_address() as usize).unwrap() - self.region_size(region_idx);
-
-            // Get rid of the old region.
-            let old_region = self.mpu_regions[region_idx]
-                .take().unwrap(); // ProcessEventSubscriber::created() should set this up.
-            process.deallocate_mpu_region(&old_region);
-
-            // Create the new region...
-            let new_region = process.add_mpu_region(
-                new_region_base as *const u8,
-                self.region_size(region_idx),
-                self.region_size(region_idx),
-                mpu::Permissions::NoAccess).unwrap(); // Gonna take this is a no-go.
-            // ...and make sure it fits our size exactly.
-            assert!(new_region.start_address() as usize == new_region_base);
-            assert!(new_region.size() as usize == self.region_size(region_idx));
-        }
+            .expect("Shrinking stack-profiling MPU regions failed");
     }
 
     /// Compute the state to shrink stack profiling MPU region coverage.
@@ -187,30 +177,65 @@ impl<M: MPU> StackProfiler<M> {
     /// Shrink the larger region preceding the region up for shrinkage instead.
     /// After completing the shrink for the larger region, adjust the smaller region's base.
     /// The new base of the smaller region is the start address of the subregion in the larger region we just disabled.
-    fn shrink_state(&self, process: &dyn Process, region_idx: usize) -> Result<(), ()> {
+    fn shrink_state(&self, process: &dyn Process, region_idx: usize) -> Result<(), &'static str> {
         // Check that there is a configuration to modify.
-        let past_end = region_idx >= self.region_count();
+        let past_end = region_idx >= self.region_count.get();
         let iterated_to_unused = self.mpu_subregion_state[region_idx].is_none();
-        if past_end || iterated_to_unused {
-            return Err(());
-        }
+        if past_end || iterated_to_unused { return Err("no more regions to shrink"); }
 
-        let subregion_state = self.mpu_subregion_state[region_idx]
+        // This region is changing soon; take it and we'll replace it later.
+        let old_region = self.mpu_regions[region_idx]
+            .take().unwrap(); // ProcessEventSubscriber::created() should set this up.
+        let old_subregion_state = self.mpu_subregion_state[region_idx]
             .take().unwrap(); // We just checked the state.
 
-        // If there are subregions active in this region...
-        if subregion_state > 0 {
-            // Disable the edge and we good.
-            self.mpu_subregion_state[region_idx].set(subregion_state << 1);
+        process.deallocate_mpu_region(&old_region)
+            .expect("Failed to deallocate old region.");
+
+        if old_subregion_state > 0 {
+            // If there are subregions active in this region,
+            // we can simply disable a subregion.
+            let subregion_state = old_subregion_state << 1;
+            // No changes to the region itself; recreate it...
+            let region = process.add_exact_mpu_region(
+                old_region.start_address(),
+                old_region.size(),
+                subregion_state,
+                mpu::Permissions::NoAccess).unwrap(); // This must happen.
+            // ...and make sure it fits our size exactly.
+            assert!(region.start_address() == old_region.start_address());
+            assert!(region.size() as usize == self.region_size(region_idx));
+
+            // Update region state.
+            self.mpu_regions[region_idx].set(region);
+            self.mpu_subregion_state[region_idx].set(subregion_state);
+
             Ok(())
         } else {
             // Can't simply disable a subregion.
             // The larger region needs to disable a subregion.
             self.shrink_state(process, region_idx+1)?;
 
-            // Represent our new subregion state,
-            // and we'll recurse to the same index to finish off the operation.
+            // We'll scooch by the size of this entire region.
+            let shifted_region_base = old_region.start_address() as usize - old_region.size();
+
+            // Create the new region...
+            let region = process.add_exact_mpu_region(
+                shifted_region_base as *const u8,
+                old_region.size(),
+                u8::MAX, // We'll enable all subregions here and recurse to fix later.
+                mpu::Permissions::NoAccess).unwrap(); // Non-negotiable!
+            // ...and make sure it fits our size exactly.
+            assert!(region.start_address() as usize == shifted_region_base);
+            assert!(region.size() as usize == self.region_size(region_idx));
+
+            // Update region state.
+            self.mpu_regions[region_idx].set(region);
             self.mpu_subregion_state[region_idx].set(u8::MAX);
+            debug!("Shifted region {} to {:#08X}", region_idx, shifted_region_base);
+
+            // Now we recurse to the same index to clean up.
+            // This will disable the edge subregion and complete the operation.
             self.shrink_state(process, region_idx)
         }
     }

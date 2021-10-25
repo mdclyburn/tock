@@ -515,7 +515,21 @@ impl<C: Chip> Process for ProcessStandard<'_, C> {
         })
     }
 
-    fn deallocate_mpu_region(&self, region: &mpu::Region) -> Result<(), ()> { Err(()) }
+    fn deallocate_mpu_region(&self, region: &mpu::Region) -> Result<(), ()> {
+        let target_region = region;
+        for i in 0..self.mpu_regions.len() {
+            let opt_region = self.mpu_regions[i].get();
+            let is_target = opt_region.map_or(false, |r| r.id() == target_region.id());
+            if is_target {
+                self.mpu_regions[i].set(None);
+                return self.mpu_config.map(|config| {
+                    self.chip.mpu().deallocate_region(region, config)
+                }).expect("Deallocated region with no MPU config.");
+            }
+        }
+
+        Err(())
+    }
 
     fn sbrk(&self, increment: isize) -> Result<*const u8, Error> {
         // Do not modify an inactive process.
