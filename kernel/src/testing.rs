@@ -163,11 +163,7 @@ impl<M: MPU> StackProfiler<M> {
         }
 
         // Shrink the regions until we arrive at the process' stack base.
-        let mut i = 0;
-        while self.edge() > stack_start {
-            self.shrink(process);
-            i += 1;
-        }
+        while self.edge() > stack_start { self.shrink(process); }
         unimplemented!();
     }
 
