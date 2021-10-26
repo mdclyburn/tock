@@ -199,7 +199,7 @@ impl<M: MPU> StackProfiler<M> {
             .take().unwrap(); // We just checked the state.
 
         process.deallocate_mpu_region(&old_region)
-            .expect("Failed to deallocate old region.");
+            .map_err(|_e| "Failed to deallocate old region.")?;
 
         if old_subregion_state > 0 {
             // If there are subregions active in this region,
@@ -210,7 +210,8 @@ impl<M: MPU> StackProfiler<M> {
                 old_region.start_address(),
                 old_region.size(),
                 subregion_state,
-                mpu::Permissions::NoAccess).unwrap(); // This must happen.
+                mpu::Permissions::NoAccess)
+                .ok_or("Failed to disable a subregion.")?;
             // ...and make sure it fits our size exactly.
             assert!(region.start_address() == old_region.start_address());
             assert!(region.size() as usize == self.region_size(region_idx));
@@ -233,7 +234,8 @@ impl<M: MPU> StackProfiler<M> {
                 shifted_region_base as *const u8,
                 old_region.size(),
                 shifted_region_state,
-                mpu::Permissions::NoAccess).unwrap(); // Non-negotiable!
+                mpu::Permissions::NoAccess)
+                .ok_or("Failed to shift region.")?;
             // ...and make sure it fits our size exactly.
             assert!(region.start_address() as usize == shifted_region_base);
             assert!(region.size() as usize == self.region_size(region_idx));
