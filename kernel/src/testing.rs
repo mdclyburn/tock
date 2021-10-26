@@ -169,9 +169,8 @@ impl<M: MPU> StackProfiler<M> {
 
     /// Make the stack-tracking region smaller.
     fn shrink(&self, process: &dyn Process) {
-        // Figure out the shrinkage.
-        self.shrink_state(process, 0)
-            .expect("Shrinking stack-profiling MPU regions failed");
+        self.__shrink_rec(process, 0)
+            .unwrap(); // Panicking here is intentional.
     }
 
     /// Compute the state to shrink stack profiling MPU region coverage.
@@ -186,7 +185,7 @@ impl<M: MPU> StackProfiler<M> {
     /// Shrink the larger region preceding the region up for shrinkage instead.
     /// After completing the shrink for the larger region, adjust the smaller region's base.
     /// The new base of the smaller region is the start address of the subregion in the larger region we just disabled.
-    fn shrink_state(&self, process: &dyn Process, region_idx: usize) -> Result<(), &'static str> {
+    fn __shrink_rec(&self, process: &dyn Process, region_idx: usize) -> Result<(), &'static str> {
         // Check that there is a configuration to modify.
         let past_end = region_idx >= self.region_count.get();
         let iterated_to_unused = self.mpu_subregion_state[region_idx].is_none();
@@ -199,7 +198,7 @@ impl<M: MPU> StackProfiler<M> {
             .take().unwrap(); // We just checked the state.
 
         process.deallocate_mpu_region(&old_region)
-            .map_err(|_e| "Failed to deallocate old region.")?;
+            .or(Err("Failed to deallocate old region."))?;
 
         if old_subregion_state > 0 {
             // If there are subregions active in this region,
@@ -222,7 +221,7 @@ impl<M: MPU> StackProfiler<M> {
         } else {
             // Can't simply disable a subregion.
             // The larger region needs to disable a subregion.
-            self.shrink_state(process, region_idx+1)?;
+            self.__shrink_rec(process, region_idx+1)?;
 
             // We'll scooch by the size of this entire region.
             let shifted_region_base = old_region.start_address() as usize - old_region.size();
