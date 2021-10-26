@@ -531,6 +531,8 @@ impl<const NUM_REGIONS: usize, const MIN_REGION_SIZE: usize> mpu::MPU
         let subregions =
             if subregions_enabled == u8::MAX {
                 None
+            } else if subregions_enabled == 0 {
+                Some((1, 0))
             } else {
                 let mut first = 0;
                 let mut last = 0;
