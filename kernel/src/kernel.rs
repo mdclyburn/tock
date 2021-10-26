@@ -586,9 +586,13 @@ impl Kernel {
                     // process. Arming the scheduler timer instructs it to
                     // generate an interrupt when the timeslice has expired. The
                     // underlying timer is not affected.
-                    process.setup_mpu();
 
+                    use crate::testing::ProcessEventSubscriber;
+                    resources.process_event_subscriber().starting(process);
+
+                    process.setup_mpu();
                     chip.mpu().enable_app_mpu();
+
                     scheduler_timer.arm();
                     let context_switch_reason = process.switch_to();
                     scheduler_timer.disarm();
@@ -638,11 +642,17 @@ impl Kernel {
                     // waiting for a upcall. If there is a task scheduled for
                     // this process go ahead and set the process to execute it.
 
-                    if process.get_state() == process::State::Unstarted {
-                        use crate::testing::ProcessEventSubscriber;
-                        resources.process_event_subscriber()
-                            .created(process);
-                    }
+                    match process.get_state() {
+                        process::State::Unstarted => {
+                            use crate::testing::ProcessEventSubscriber;
+                            resources.process_event_subscriber()
+                                .created(process)
+                        },
+
+                        process::State::Yielded => {  },
+
+                        _ => {  }
+                    };
 
                     match process.dequeue_task() {
                         None => break,

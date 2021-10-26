@@ -64,8 +64,14 @@ impl<M: MPU> StackProfiler<M> {
         }
     }
 
-    /// Return the lowest address the profiling regions reach.
-    fn edge(&self) -> usize {
+    fn lower_edge(&self) -> usize {
+        self.mpu_regions[self.region_count.get()-1]
+            .map(|r| r.start_address() as usize)
+            .unwrap()
+    }
+
+    /// Return the highest address the profiling regions reach.
+    fn upper_edge(&self) -> usize {
         let (base_addr, size) = self.mpu_regions[0]
             .map(|r| (r.start_address(), r.size()))
             .unwrap(); // Why would we not at least be using the smallest region size?
@@ -77,7 +83,7 @@ impl<M: MPU> StackProfiler<M> {
             .unwrap() // Why would we not at least be using the smallest region size?
             .count_ones();
 
-        base_addr as usize + (size / 8) * subregions_enabled as usize
+        base_addr as usize + (size / 8) * subregions_enabled as usize - 1
     }
 
     /// Return the size of the region at the specified index.
@@ -148,7 +154,9 @@ impl<M: MPU> StackProfiler<M> {
         }
 
         // Shrink the regions until we arrive at the process' stack base.
-        // while self.edge() > stack_start { self.shrink(process); }
+        while self.upper_edge() - 32 > stack_start { self.shrink(process); }
+        debug!("Profiler protecting {:#08X} to {:#08X} (coverage offset: {} bytes)",
+               self.lower_edge(), self.upper_edge(), stack_start - self.upper_edge() - 1);
 
         // for i in 0..self.region_count.get() {
         //     let (region, subregions_enabled) =
@@ -245,20 +253,26 @@ impl<M: MPU> StackProfiler<M> {
 
 impl<M: MPU> ProcessEventSubscriber for StackProfiler<M> {
     /// Initializes some information for a process.
+    ///
+    /// The stack profiler cannot do much with the on-creation event.
+    /// The process hasn't even begun running, so the OS has no idea where its stack pointer is.
+    /// Instead, we defer any initialization to [`ProcessEventSubscriber::on_syscall()`],
+    /// and watch for the `memop` that informs the kernel where the stack is.
     fn created(&self, process: &dyn Process) {  }
 
     /// Enable the stack-tracking MPU regions.
-    fn starting(&self, process: &dyn Process) {
-    }
+    fn starting(&self, process: &dyn Process) {  }
 
     /// Inspects the process' stack pointer to record stack memory usage.
     ///
     /// Notes the process' stack pointer's current location
     /// and adjusts the MPU region it manipulates as necessary.
-    fn stopped(&self, process: &dyn Process) {
-    }
+    fn stopped(&self, process: &dyn Process) {  }
 
     /// Watch for a process to inform the kernel where it puts its stack.
+    ///
+    /// Note the location of the stack, and initialize the profiling MPU regions
+    /// once the process passes this debug information to the kernel.
     fn on_syscall(&self, process: &dyn Process, syscall: &Syscall) {
         match *syscall {
             Syscall::Memop { operand: 10, arg0: initial_sp } =>
