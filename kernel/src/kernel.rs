@@ -637,6 +637,13 @@ impl Kernel {
                     // If the process is yielded or hasn't been started it is
                     // waiting for a upcall. If there is a task scheduled for
                     // this process go ahead and set the process to execute it.
+
+                    if process.get_state() == process::State::Unstarted {
+                        use crate::testing::ProcessEventSubscriber;
+                        resources.process_event_subscriber()
+                            .created(process);
+                    }
+
                     match process.dequeue_task() {
                         None => break,
                         Some(cb) => match cb {

@@ -1864,6 +1864,14 @@ impl<C: 'static + Chip> ProcessStandard<'_, C> {
         // create() and reset(), but process load debugging complicates this.
         // We just want to create new config with only flash and memory regions.
         let mut mpu_config: <<C as Chip>::MPU as MPU>::MpuConfig = Default::default();
+
+        // Clear out the region configurations.
+        for r in &self.mpu_regions {
+            if let Some(region) = r.take() {
+                self.deallocate_mpu_region(&region);
+            }
+        }
+
         // Allocate MPU region for flash.
         let app_mpu_flash = self.chip.mpu().allocate_region(
             self.flash.as_ptr(),

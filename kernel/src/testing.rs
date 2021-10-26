@@ -88,10 +88,6 @@ impl<M: MPU> StackProfiler<M> {
 
     /// Set the initial stack profiling MPU state.
     fn initialize(&self, process: &dyn Process, stack_start: usize) {
-        if self.stack_range.is_some() {
-            return;
-        }
-
         // We may now calculate the real stack size.
         let stack_len = (process.mem_end() as usize) - stack_start;
         let stack_end = stack_start - stack_len;
@@ -151,20 +147,19 @@ impl<M: MPU> StackProfiler<M> {
             self.mpu_regions[region_idx].set(region);
         }
 
-        for i in 0..self.region_count.get() {
-            let (region, subregions_enabled) =
-                (self.mpu_regions[i].extract().unwrap(),
-                 self.mpu_subregion_state[i].extract().unwrap());
-            debug!("Profiling region #{}: {:#08X}, {:#08X} bytes, {:#08X} bytes protected",
-                   i,
-                   region.start_address() as usize,
-                   region.size(),
-                   region.size() / 8 * subregions_enabled.count_ones() as usize);
-        }
-
         // Shrink the regions until we arrive at the process' stack base.
-        while self.edge() > stack_start { self.shrink(process); }
-        unimplemented!();
+        // while self.edge() > stack_start { self.shrink(process); }
+
+        // for i in 0..self.region_count.get() {
+        //     let (region, subregions_enabled) =
+        //         (self.mpu_regions[i].extract().unwrap(),
+        //          self.mpu_subregion_state[i].extract().unwrap());
+        //     debug!("Profiling region #{}: {:#08X}, {:#08X} bytes, {:#08X} bytes protected",
+        //            i,
+        //            region.start_address() as usize,
+        //            region.size(),
+        //            region.size() / 8 * subregions_enabled.count_ones() as usize);
+        // }
     }
 
     /// Make the stack-tracking region smaller.
