@@ -122,12 +122,20 @@ impl<C: 'static + Chip> StackProfiler<C> {
             // Size of the region we require.
             let region_size = self.region_size(region_idx);
             // Where the region should start.
-            // If this is the largest region, it should start at the end of the stack.
+            // If this is the largest region, it should start as close to the stack end as possible.
+            // Doing this right will set up the rest of the regions to be aligned correctly.
+            //
             // Subsequent regions should start at the start address of the previous, larger region
             // plus 7/8ths the size of the larger region.
             let region_addr =
                 if region_idx == (self.region_count.get() - 1) {
-                    stack_end
+                    // Find out how far out of alignment we are.
+                    // More specifically, we can think of this as how far past we are
+                    // from the previous aligned address.
+                    let unalignment_size = stack_end % region_size;
+                    // We will always move _downward_, away from the end of the stack
+                    // in order to keep all of the stack covered.
+                    stack_end - unalignment_size
                 } else {
                     let previous_region_size = self.region_size(region_idx+1);
                     let previous_region_addr = self.mpu_regions[region_idx+1]
@@ -178,7 +186,6 @@ impl<C: 'static + Chip> StackProfiler<C> {
 
     /// Make the stack-tracking region smaller.
     fn shrink(&self, process: &dyn Process, threshold_addr: usize) -> Result<usize, &'static str> {
-        debug!("Shrinking below {:#010X}.", threshold_addr);
         while self.upper_edge() > threshold_addr {
             self.__shrink_rec(process, 0)?;
         }
@@ -302,37 +309,52 @@ impl<C: 'static + Chip> ProcessFault for StackProfiler<C> {
     /// the profiler records the stack space usage
     /// and reconfigures the MPU to allow the process to continue.
     fn process_fault_hook(&self, process: &dyn Process) -> Result<(), ()> {
+        let sp_addr = process.stack_pointer().unwrap();
+        let profiler_start = self.lower_edge();
+        let profiler_end = self.upper_edge();
+        debug!("{:#010X} <= {:#010X} <= {:#010X}?",
+               profiler_start, sp_addr, profiler_end);
+
         if let Some(fault_reason) = self.chip.fault_reason() {
             // Chip can tell us what the fault is.
             match fault_reason {
                 // We were created to handle this.
                 FaultReason::MemoryAccessViolation(addr) => {
+                    debug!("Process tried {:#010X}; SP is {:#010X}.", addr, sp_addr);
+                    // Follow the stack pointer if it is lower.
+                    let addr = if sp_addr < addr { sp_addr } else { addr };
                     // Must be in range of the area protected by the profiling regions.
-                    let profiler_start = self.lower_edge();
-                    let profiler_end = self.upper_edge();
-                    if profiler_start < addr && addr <= profiler_end {
-                        match self.shrink(process, addr) {
-                            Ok(new_edge) => {
-                                debug!("Shrink success: {:#010X} → {:#010X}.", profiler_end, new_edge);
-                                Ok(())
-                            },
-
-                            Err(msg) => panic!("Shrink failed: {}", msg),
-                        }
+                    if profiler_start <= addr && addr <= profiler_end {
+                        let new_edge = self.shrink(process, addr).expect("Shrink failed");
+                        debug!("Shrunk: {:#010X} → {:#010X}.", profiler_end, new_edge);
+                        Ok(())
+                    } else if profiler_start <= addr && addr <= self.stack_range.extract().unwrap().0 {
+                        // The memory access is in an area where protection should have been lifted,
+                        // but the process is still faulting?
+                        debug!("Process is still faulting?!");
+                        Err(())
                     } else {
                         // This is not a memory fault we can handle here.
+                        debug!("Out of profiler range.");
                         Err(())
                     }
                 },
 
-                _ => {
-                    debug!("Cannot handle fault: {:?}", fault_reason);
-                    Err(())
-                }
+                // The fault is not handled by this implementation.
+                _ => Err(())
             }
         } else {
-            // Chip can't tell us what the fault is.
-            Err(())
+            // Faults from touching NoAccess are different from touching regions without MPU protection.
+            // Try shrinking based on the stack pointer.
+            if profiler_start < sp_addr && sp_addr <= profiler_end {
+                let new_edge = self.shrink(process, sp_addr).expect("Shrink failed");
+                debug!("Shrunk: {:#010X} → {:#010X}", profiler_end, new_edge);
+                Ok(())
+            } else {
+                // Chip can't tell us what the fault is,
+                // an it is unlikely to be handled here.
+                Err(())
+            }
         }
     }
 }
