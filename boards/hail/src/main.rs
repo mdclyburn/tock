@@ -25,7 +25,6 @@ use kernel::hil::i2c::I2CMaster;
 use kernel::hil::led::LedLow;
 use kernel::hil::Controller;
 use kernel::platform::{KernelResources, SyscallDriverLookup};
-use kernel::platform::chip::Chip;
 use kernel::scheduler::round_robin::RoundRobinSched;
 #[allow(unused_imports)]
 use kernel::{create_capability, debug, debug_gpio, static_init};
@@ -62,6 +61,9 @@ static mut CHIP: Option<&'static sam4l::chip::Sam4l<Sam4lDefaultPeripherals>> = 
 #[link_section = ".stack_buffer"]
 pub static mut STACK_MEMORY: [u8; 0x1000] = [0; 0x1000];
 
+/// Chip type.
+type SAM4L = sam4l::chip::Sam4l<Sam4lDefaultPeripherals>;
+
 /// A structure representing this platform that holds references to all
 /// capsules for this platform.
 struct Hail {
@@ -89,8 +91,7 @@ struct Hail {
     dac: &'static capsules::dac::Dac<'static>,
     scheduler: &'static RoundRobinSched<'static>,
     systick: cortexm4::systick::SysTick,
-    stack_profiler: &'static kernel::testing::StackProfiler<<sam4l::chip::Sam4l<Sam4lDefaultPeripherals> as Chip>
-                                                            ::MPU>,
+    stack_profiler: &'static kernel::testing::StackProfiler<SAM4L>,
 }
 
 /// Mapping of integer syscalls to objects that implement syscalls.
@@ -126,13 +127,11 @@ impl SyscallDriverLookup for Hail {
     }
 }
 
-type Sam4lMPU = <sam4l::chip::Sam4l<Sam4lDefaultPeripherals> as Chip>::MPU;
-
 impl KernelResources<sam4l::chip::Sam4l<Sam4lDefaultPeripherals>> for Hail {
     type SyscallDriverLookup = Self;
     type SyscallFilter = ();
-    type ProcessEventSubscriber = kernel::testing::StackProfiler<Sam4lMPU>;
-    type ProcessFault = kernel::testing::StackProfiler<Sam4lMPU>;
+    type ProcessEventSubscriber = kernel::testing::StackProfiler<SAM4L>;
+    type ProcessFault = kernel::testing::StackProfiler<SAM4L>;
     type Scheduler = RoundRobinSched<'static>;
     type SchedulerTimer = cortexm4::systick::SysTick;
     type WatchDog = ();
@@ -518,13 +517,13 @@ pub unsafe fn main() {
     // peripherals.pa[16].set_client(debug_process_restart);
 
     let stack_profiler = static_init!(
-        kernel::testing::StackProfiler<Sam4lMPU>,
-        kernel::testing::StackProfiler::<Sam4lMPU>::new(chip.mpu()));
+        kernel::testing::StackProfiler<SAM4L>,
+        kernel::testing::StackProfiler::<SAM4L>::new(chip));
 
     // Configure application fault policy
     let fault_policy = static_init!(
         kernel::process::ThresholdRestartThenPanicFaultPolicy,
-        kernel::process::ThresholdRestartThenPanicFaultPolicy::new(4)
+        kernel::process::ThresholdRestartThenPanicFaultPolicy::new(0)
     );
 
     let scheduler = components::sched::round_robin::RoundRobinComponent::new(&PROCESSES)

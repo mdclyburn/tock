@@ -53,6 +53,9 @@ pub trait Chip {
     where
         F: FnOnce() -> R;
 
+    /// Current fault information returns None if unhandled or unknown.
+    fn fault_reason(&self) -> Option<FaultReason> { None }
+
     /// Print out chip state (system registers) to a supplied
     /// writer. This does not print out the execution context
     /// (data registers), as this depends on how they are stored;
@@ -131,3 +134,10 @@ impl ClockInterface for NoClockControl {
 /// Instance of NoClockControl for things that need references to
 /// `ClockInterface` objects.
 pub static mut NO_CLOCK_CONTROL: NoClockControl = NoClockControl {};
+
+/// Reason the hardware has faulted.
+#[derive(Debug)]
+pub enum FaultReason {
+    /// Memory protection triggered on an invalid access to the contained address.
+    MemoryAccessViolation(usize),
+}

@@ -4,13 +4,17 @@ use core::cell::Cell;
 
 use crate::debug;
 use crate::utilities::cells::OptionalCell;
+use crate::platform::ProcessFault;
+use crate::platform::chip::{
+    Chip,
+    FaultReason,
+};
 use crate::platform::mpu::{
     self,
     MPU,
     Permissions,
     Region,
 };
-use crate::platform::ProcessFault;
 use crate::process::Process;
 use crate::syscall::Syscall;
 
@@ -35,8 +39,8 @@ pub trait ProcessEventSubscriber {
 
 impl ProcessEventSubscriber for () {  }
 
-pub struct StackProfiler<M: 'static + MPU> {
-    _mpu: &'static M,
+pub struct StackProfiler<C: 'static + Chip> {
+    chip: &'static C,
     /// Regions in use for stack profiling (up to 4), smallest up to largest.
     mpu_regions: [OptionalCell<Region>; 4],
     /// Currently required subregion enabled-disabled state.
@@ -47,10 +51,11 @@ pub struct StackProfiler<M: 'static + MPU> {
     region_count: Cell<usize>,
 }
 
-impl<M: MPU> StackProfiler<M> {
-    pub fn new(mpu: &'static M) -> StackProfiler<M> {
+impl<C: 'static + Chip> StackProfiler<C> {
+    pub fn new(chip: &'static C) -> StackProfiler<C>
+    {
         StackProfiler {
-            _mpu: mpu,
+            chip,
             mpu_regions: [OptionalCell::empty(),
                           OptionalCell::empty(),
                           OptionalCell::empty(),
@@ -128,7 +133,7 @@ impl<M: MPU> StackProfiler<M> {
                     let previous_region_addr = self.mpu_regions[region_idx+1]
                         .and_then(|larger_region| Some(larger_region.start_address() as usize))
                         .unwrap(); // Guaranteed to exist by the previous iteration of the loop.
-                    (previous_region_addr as usize + (previous_region_size / 8 * 7))
+                    previous_region_addr as usize + (previous_region_size / 8 * 7)
                 };
             // Only the most granular region should have all subregions enabled.
             let subregion_state = if region_idx == 0 { 0b1111_1111 } else { 0b0111_1111 };
@@ -154,9 +159,10 @@ impl<M: MPU> StackProfiler<M> {
         }
 
         // Shrink the regions until we arrive at the process' stack base.
-        while self.upper_edge() - 32 > stack_start { self.shrink(process); }
+        let stopped_at = self.shrink(process, stack_start)
+            .expect("Initial shrink failed");
         debug!("Profiler protecting {:#08X} to {:#08X} (coverage offset: {} bytes)",
-               self.lower_edge(), self.upper_edge(), stack_start - self.upper_edge() - 1);
+               self.lower_edge(), stopped_at, stack_start - self.upper_edge() - 1);
 
         // for i in 0..self.region_count.get() {
         //     let (region, subregions_enabled) =
@@ -171,9 +177,13 @@ impl<M: MPU> StackProfiler<M> {
     }
 
     /// Make the stack-tracking region smaller.
-    fn shrink(&self, process: &dyn Process) {
-        self.__shrink_rec(process, 0)
-            .unwrap(); // Panicking here is intentional.
+    fn shrink(&self, process: &dyn Process, threshold_addr: usize) -> Result<usize, &'static str> {
+        debug!("Shrinking below {:#010X}.", threshold_addr);
+        while self.upper_edge() > threshold_addr {
+            self.__shrink_rec(process, 0)?;
+        }
+
+        Ok(self.upper_edge())
     }
 
     /// Compute the state to shrink stack profiling MPU region coverage.
@@ -189,6 +199,7 @@ impl<M: MPU> StackProfiler<M> {
     /// After completing the shrink for the larger region, adjust the smaller region's base.
     /// The new base of the smaller region is the start address of the subregion in the larger region we just disabled.
     fn __shrink_rec(&self, process: &dyn Process, region_idx: usize) -> Result<(), &'static str> {
+        // debug!("s{}", region_idx);
         // Check that there is a configuration to modify.
         let past_end = region_idx >= self.region_count.get();
         let iterated_to_unused = self.mpu_subregion_state[region_idx].is_none();
@@ -251,7 +262,7 @@ impl<M: MPU> StackProfiler<M> {
     }
 }
 
-impl<M: MPU> ProcessEventSubscriber for StackProfiler<M> {
+impl<C: 'static + Chip> ProcessEventSubscriber for StackProfiler<C> {
     /// Initializes some information for a process.
     ///
     /// The stack profiler cannot do much with the on-creation event.
@@ -283,7 +294,7 @@ impl<M: MPU> ProcessEventSubscriber for StackProfiler<M> {
     }
 }
 
-impl<M: MPU> ProcessFault for StackProfiler<M> {
+impl<C: 'static + Chip> ProcessFault for StackProfiler<C> {
     /// Corrects faults imposed by the profiler's MPU usage.
     ///
     /// Inspects the cause of the fault the running process hit.
@@ -291,8 +302,38 @@ impl<M: MPU> ProcessFault for StackProfiler<M> {
     /// the profiler records the stack space usage
     /// and reconfigures the MPU to allow the process to continue.
     fn process_fault_hook(&self, process: &dyn Process) -> Result<(), ()> {
-        debug!("Stack profiler picked up on a fault, but this isn't implemented.");
-        Err(())
+        if let Some(fault_reason) = self.chip.fault_reason() {
+            // Chip can tell us what the fault is.
+            match fault_reason {
+                // We were created to handle this.
+                FaultReason::MemoryAccessViolation(addr) => {
+                    // Must be in range of the area protected by the profiling regions.
+                    let profiler_start = self.lower_edge();
+                    let profiler_end = self.upper_edge();
+                    if profiler_start < addr && addr <= profiler_end {
+                        match self.shrink(process, addr) {
+                            Ok(new_edge) => {
+                                debug!("Shrink success: {:#010X} → {:#010X}.", profiler_end, new_edge);
+                                Ok(())
+                            },
+
+                            Err(msg) => panic!("Shrink failed: {}", msg),
+                        }
+                    } else {
+                        // This is not a memory fault we can handle here.
+                        Err(())
+                    }
+                },
+
+                _ => {
+                    debug!("Cannot handle fault: {:?}", fault_reason);
+                    Err(())
+                }
+            }
+        } else {
+            // Chip can't tell us what the fault is.
+            Err(())
+        }
     }
 }
 

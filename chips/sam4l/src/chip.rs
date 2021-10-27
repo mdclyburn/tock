@@ -4,9 +4,10 @@ use crate::deferred_call_tasks::Task;
 use crate::pm;
 
 use core::fmt::Write;
+use core::ptr;
 use cortexm4;
 use kernel::deferred_call;
-use kernel::platform::chip::{Chip, InterruptService};
+use kernel::platform::chip::{Chip, FaultReason, InterruptService};
 
 pub struct Sam4l<I: InterruptService<Task> + 'static> {
     mpu: cortexm4::mpu::MPU,
@@ -298,5 +299,17 @@ impl<I: InterruptService<Task> + 'static> Chip for Sam4l<I> {
 
     unsafe fn print_state(&self, writer: &mut dyn Write) {
         cortexm4::print_cortexm4_state(writer);
+    }
+
+    /// Returns a `FaultReason::MemoryAccessViolation` if it is the cause of the fault.
+    fn fault_reason(&self) -> Option<FaultReason> {
+        let cfsr = unsafe { ptr::read_volatile(0xE000_ED28 as *const u32) };
+        let is_memory_fault = cfsr & 0x80 == 0x80;
+        if is_memory_fault {
+            let fault_addr = unsafe { cortexm4::syscall::SCB_REGISTERS[3] };
+            Some(FaultReason::MemoryAccessViolation(fault_addr as usize))
+        } else {
+            None
+        }
     }
 }
