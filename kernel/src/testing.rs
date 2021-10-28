@@ -47,6 +47,8 @@ pub struct StackProfiler<C: 'static + Chip> {
     mpu_subregion_state: [OptionalCell<u8>; 4],
     /// Initial value of the process' stack pointer and its stack size.
     stack_range: OptionalCell<(usize, usize)>,
+    /// Number of bytes known required for stack operation.
+    stack_allowed: Cell<usize>,
     /// Number of MPU regions we are manipulating.
     region_count: Cell<usize>,
 }
@@ -65,6 +67,7 @@ impl<C: 'static + Chip> StackProfiler<C> {
                                   OptionalCell::empty(),
                                   OptionalCell::empty()],
             stack_range: OptionalCell::empty(),
+            stack_allowed: Cell::new(0),
             region_count: Cell::new(0),
         }
     }
@@ -111,9 +114,10 @@ impl<C: 'static + Chip> StackProfiler<C> {
         // Create the necessary MPU regions.
         // We size them such that larger regions fit entire smaller regions in their subregion size.
         // We will not use more than four regions.
-        self.region_count.set(required_regions(stack_len));
-        debug!("Using {} MPU regions for stack profiling.", self.region_count.get());
-        // Assert that there are between 1 and 4 regions for this purpose?
+        let req_regions = required_regions(stack_len);
+        self.region_count.set(req_regions);
+        assert!(1 <= req_regions && req_regions <= 4);
+        debug!("Using {} regions for profiling.", self.region_count.get());
 
         for i in 0..self.region_count.get() {
             // Reverse our iteration; start with allocating the largest region.
@@ -156,8 +160,8 @@ impl<C: 'static + Chip> StackProfiler<C> {
                 .unwrap(); // If we can't do this, we shouldn't be profiling.
 
             // We must get exactly what we asked for.
-            // debug!("Allocated profiling region #{} @{:#08X}, length {} bytes",
-            //        region_idx, region.start_address() as usize, region.size());
+            debug!("Allocated profiling region #{} @{:#08X}, length {} bytes",
+                   region_idx, region.start_address() as usize, region.size());
             assert!(region.start_address() == region_addr as *const u8);
             assert!(region.size() == region_size);
 
@@ -167,21 +171,12 @@ impl<C: 'static + Chip> StackProfiler<C> {
         }
 
         // Shrink the regions until we arrive at the process' stack base.
-        let stopped_at = self.shrink(process, stack_start)
+        let stopped_at = self.shrink(process, stack_start - self.stack_allowed.get())
             .expect("Initial shrink failed");
-        debug!("Profiler protecting {:#08X} to {:#08X} (coverage offset: {} bytes)",
-               self.lower_edge(), stopped_at, stack_start - self.upper_edge() - 1);
-
-        // for i in 0..self.region_count.get() {
-        //     let (region, subregions_enabled) =
-        //         (self.mpu_regions[i].extract().unwrap(),
-        //          self.mpu_subregion_state[i].extract().unwrap());
-        //     debug!("Profiling region #{}: {:#08X}, {:#08X} bytes, {:#08X} bytes protected",
-        //            i,
-        //            region.start_address() as usize,
-        //            region.size(),
-        //            region.size() / 8 * subregions_enabled.count_ones() as usize);
-        // }
+        debug!("Profiler protecting {:#08X} to {:#08X} (stack allowed: {} bytes)",
+               self.lower_edge(),
+               stopped_at,
+               self.stack_allowed.get());
     }
 
     /// Make the stack-tracking region smaller.
@@ -293,8 +288,17 @@ impl<C: 'static + Chip> ProcessEventSubscriber for StackProfiler<C> {
     /// once the process passes this debug information to the kernel.
     fn on_syscall(&self, process: &dyn Process, syscall: &Syscall) {
         match *syscall {
-            Syscall::Memop { operand: 10, arg0: initial_sp } =>
-                self.initialize(process, initial_sp),
+            Syscall::Memop { operand: 10, arg0: stack_start } => {
+                // It is only necessary to configure the configured MPU regions if
+                // this is the first time we are initializing the process or if,
+                // for some reason, Tock changes where the application runs in memory.
+                let new_or_stack_changed = self.stack_range.map_or(
+                    true, |(prev_stack_start, _len)| *prev_stack_start != stack_start);
+
+                if new_or_stack_changed {
+                    self.initialize(process, stack_start);
+                }
+            },
 
             _ => {  }
         };
@@ -302,40 +306,30 @@ impl<C: 'static + Chip> ProcessEventSubscriber for StackProfiler<C> {
 }
 
 impl<C: 'static + Chip> ProcessFault for StackProfiler<C> {
-    /// Corrects faults imposed by the profiler's MPU usage.
+    /// Inspects faults imposed by the profiler's MPU usage.
     ///
     /// Inspects the cause of the fault the running process hit.
     /// If it was caused by the region the profiler configured,
     /// the profiler records the stack space usage
-    /// and reconfigures the MPU to allow the process to continue.
+    /// and lets the process die.
     fn process_fault_hook(&self, process: &dyn Process) -> Result<(), ()> {
-        let sp_addr = process.stack_pointer().unwrap();
-        let profiler_start = self.lower_edge();
-        let profiler_end = self.upper_edge();
-        debug!("{:#010X} <= {:#010X} <= {:#010X}?",
-               profiler_start, sp_addr, profiler_end);
-
         if let Some(fault_reason) = self.chip.fault_reason() {
             // Chip can tell us what the fault is.
             match fault_reason {
-                // We were created to handle this.
+                // I wrote this code to handle this!
                 FaultReason::MemoryAccessViolation(addr) => {
-                    debug!("Process tried {:#010X}; SP is {:#010X}.", addr, sp_addr);
-                    // Follow the stack pointer if it is lower.
-                    let addr = if sp_addr < addr { sp_addr } else { addr };
-                    // Must be in range of the area protected by the profiling regions.
-                    if profiler_start <= addr && addr <= profiler_end {
+                    debug!("Process tried to access {:#010X}.", addr);
+                    // Access violation address must be in range of the area protected by the profiler.
+                    if self.lower_edge() <= addr && addr <= self.upper_edge() {
+                        let old_edge = self.upper_edge();
                         let new_edge = self.shrink(process, addr).expect("Shrink failed");
-                        debug!("Shrunk: {:#010X} → {:#010X}.", profiler_end, new_edge);
-                        Ok(())
-                    } else if profiler_start <= addr && addr <= self.stack_range.extract().unwrap().0 {
-                        // The memory access is in an area where protection should have been lifted,
-                        // but the process is still faulting?
-                        debug!("Process is still faulting?!");
+                        self.stack_allowed.set(self.stack_allowed.get() + old_edge - new_edge);
+                        debug!("Shrunk {:#010X} → {:#010X}.", old_edge, new_edge);
+                        // Still need to fail the process.
                         Err(())
                     } else {
                         // This is not a memory fault we can handle here.
-                        debug!("Out of profiler range.");
+                        debug!("Bad access out of profiler range.");
                         Err(())
                     }
                 },
@@ -344,17 +338,9 @@ impl<C: 'static + Chip> ProcessFault for StackProfiler<C> {
                 _ => Err(())
             }
         } else {
-            // Faults from touching NoAccess are different from touching regions without MPU protection.
-            // Try shrinking based on the stack pointer.
-            if profiler_start < sp_addr && sp_addr <= profiler_end {
-                let new_edge = self.shrink(process, sp_addr).expect("Shrink failed");
-                debug!("Shrunk: {:#010X} → {:#010X}", profiler_end, new_edge);
-                Ok(())
-            } else {
-                // Chip can't tell us what the fault is,
-                // an it is unlikely to be handled here.
-                Err(())
-            }
+            // Chip can't tell us what the fault is,
+            // an it is unlikely to be handled here.
+            Err(())
         }
     }
 }
