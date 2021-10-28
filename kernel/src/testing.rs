@@ -117,7 +117,7 @@ impl<C: 'static + Chip> StackProfiler<C> {
         let req_regions = required_regions(stack_len);
         self.region_count.set(req_regions);
         assert!(1 <= req_regions && req_regions <= 4);
-        debug!("Using {} regions for profiling.", self.region_count.get());
+        // debug!("Using {} regions for profiling.", self.region_count.get());
 
         for i in 0..self.region_count.get() {
             // Reverse our iteration; start with allocating the largest region.
@@ -160,8 +160,8 @@ impl<C: 'static + Chip> StackProfiler<C> {
                 .unwrap(); // If we can't do this, we shouldn't be profiling.
 
             // We must get exactly what we asked for.
-            debug!("Allocated profiling region #{} @{:#08X}, length {} bytes",
-                   region_idx, region.start_address() as usize, region.size());
+            // debug!("Allocated profiling region #{} @{:#08X}, length {} bytes",
+            //        region_idx, region.start_address() as usize, region.size());
             assert!(region.start_address() == region_addr as *const u8);
             assert!(region.size() == region_size);
 
@@ -289,15 +289,10 @@ impl<C: 'static + Chip> ProcessEventSubscriber for StackProfiler<C> {
     fn on_syscall(&self, process: &dyn Process, syscall: &Syscall) {
         match *syscall {
             Syscall::Memop { operand: 10, arg0: stack_start } => {
-                // It is only necessary to configure the configured MPU regions if
-                // this is the first time we are initializing the process or if,
-                // for some reason, Tock changes where the application runs in memory.
-                let new_or_stack_changed = self.stack_range.map_or(
-                    true, |(prev_stack_start, _len)| *prev_stack_start != stack_start);
-
-                if new_or_stack_changed {
-                    self.initialize(process, stack_start);
-                }
+                // Getting this memop syscall means one of two things:
+                // - The application is running for the very first time.
+                // - The application has restarted and is ready to begin execution again.
+                self.initialize(process, stack_start);
             },
 
             _ => {  }
@@ -316,23 +311,72 @@ impl<C: 'static + Chip> ProcessFault for StackProfiler<C> {
         if let Some(fault_reason) = self.chip.fault_reason() {
             // Chip can tell us what the fault is.
             match fault_reason {
-                // I wrote this code to handle this!
+                // Occurs when the process expectedly writes to the profiled regions.
+                // We take a look at the address it attempted to access
+                // and use that to determine the next upper limit.
                 FaultReason::MemoryAccessViolation(addr) => {
-                    debug!("Process tried to access {:#010X}.", addr);
+                    debug!("Faulting on access to: {:#010X}.", addr);
                     // Access violation address must be in range of the area protected by the profiler.
                     if self.lower_edge() <= addr && addr <= self.upper_edge() {
                         let old_edge = self.upper_edge();
                         let new_edge = self.shrink(process, addr).expect("Shrink failed");
                         self.stack_allowed.set(self.stack_allowed.get() + old_edge - new_edge);
                         debug!("Shrunk {:#010X} → {:#010X}.", old_edge, new_edge);
-                        // Still need to fail the process.
+
                         Err(())
                     } else {
-                        // This is not a memory fault we can handle here.
-                        debug!("Bad access out of profiler range.");
-                        Err(())
+                        // Try looking at the stack pointer for a hint.
+                        // If it is lower, then we use that value.
+                        let sp = process.stack_pointer()
+                            .unwrap(); // We _must_ use the stack pointer in this case.
+                        if self.lower_edge() <= sp && sp <= self.upper_edge() {
+                            debug!("Stack pointer looks suspect. Trying it.");
+                            let old_edge = self.upper_edge();
+                            let new_edge = self.shrink(process, sp).expect("Shrink failed");
+                            self.stack_allowed.set(self.stack_allowed.get() + old_edge - new_edge);
+                            debug!("Shrunk {:#010X} → {:#010X}.", old_edge, new_edge);
+
+                            Err(())
+                        } else {
+                            // This is not on us to fix.
+                            debug!("Bad access out of profiler range.");
+                            Err(())
+                        }
                     }
                 },
+
+                // Occurs when we apply the profiling regions after receiving the memop syscall.
+                FaultReason::UnstackingAccessViolation => {
+                    let sp = process.stack_pointer()
+                        .unwrap(); // We _must_ use the stack pointer in this case.
+
+                    debug!("Unstacking fault at {:#010X}.", sp);
+
+                    // The unstacking fault occurs because the process is reading its context
+                    // from a now-protected memory region.
+                    //
+                    // We give the process 32 bytes not because it is what the process would have naturally used,
+                    // But because the stored context is still the exact value of our MPU profiling granularity.
+                    self.stack_allowed.set(32);
+
+                    Err(())
+                },
+
+                // Occurs when exception entry attempts to save the process' execution context but hits the profiling region.
+                FaultReason::StackingAccessViolation => {
+                    let sp = process.stack_pointer()
+                        .unwrap(); // We _must_ use the stack pointer in this case.
+
+                    // Context save had already begun before the derived exception happened,
+                    // so the stack pointer is not where the process would have naturally had it.
+                    // Move the SP by the 32 bytes to calculate the actual violation location.
+                    let old_edge = self.upper_edge();
+                    let new_edge = self.shrink(process, sp + 32).expect("Shrink failed");
+                    debug!("Shrunk {:#010X} → {:#010X}.", old_edge, new_edge);
+                    assert!(new_edge < old_edge);
+
+                    Err(())
+                }
 
                 // The fault is not handled by this implementation.
                 _ => Err(())

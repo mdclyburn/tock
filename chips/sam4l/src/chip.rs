@@ -304,10 +304,18 @@ impl<I: InterruptService<Task> + 'static> Chip for Sam4l<I> {
     /// Returns a `FaultReason::MemoryAccessViolation` if it is the cause of the fault.
     fn fault_reason(&self) -> Option<FaultReason> {
         let cfsr = unsafe { ptr::read_volatile(0xE000_ED28 as *const u32) };
+
         let is_memory_fault = cfsr & 0x80 == 0x80;
+        let is_unstacking_fault = cfsr & 0x08 == 0x08;
+        let is_stacking_fault = cfsr & 0x10 == 0x10;
+
         if is_memory_fault {
             let fault_addr = unsafe { cortexm4::syscall::SCB_REGISTERS[3] };
             Some(FaultReason::MemoryAccessViolation(fault_addr as usize))
+        } else if is_unstacking_fault {
+            Some(FaultReason::UnstackingAccessViolation)
+        } else if is_stacking_fault {
+            Some(FaultReason::StackingAccessViolation)
         } else {
             None
         }

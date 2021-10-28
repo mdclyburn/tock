@@ -140,4 +140,8 @@ pub static mut NO_CLOCK_CONTROL: NoClockControl = NoClockControl {};
 pub enum FaultReason {
     /// Memory protection triggered on an invalid access to the contained address.
     MemoryAccessViolation(usize),
+    /// Derived exception; an exception while unstacking execution context.
+    UnstackingAccessViolation,
+    /// Derived exception; an exception while stacking execution context.
+    StackingAccessViolation,
 }
