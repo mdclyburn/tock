@@ -171,21 +171,31 @@ impl<C: 'static + Chip> StackProfiler<C> {
         }
 
         // Shrink the regions until we arrive at the process' stack base.
-        let stopped_at = self.shrink(process, stack_start - self.stack_allowed.get())
-            .expect("Initial shrink failed");
-        debug!("Profiler protecting {:#08X} to {:#08X} (stack allowed: {} bytes)",
+        let (_old_edge, stopped_at) = self.shrink(process, stack_start - self.stack_allowed.get());
+        debug!("Profiler protecting {:#010X} to {:#010X} (stack allowed: {} bytes)",
                self.lower_edge(),
                stopped_at,
                self.stack_allowed.get());
     }
 
     /// Make the stack-tracking region smaller.
-    fn shrink(&self, process: &dyn Process, threshold_addr: usize) -> Result<usize, &'static str> {
+    fn shrink(&self, process: &dyn Process, threshold_addr: usize) -> (usize, usize) {
+        let old_upper_edge = self.upper_edge();
         while self.upper_edge() > threshold_addr {
-            self.__shrink_rec(process, 0)?;
+            self.__shrink_rec(process, 0)
+                // All reasons behind failure are unrecoverable.
+                .expect("shrink failed");
         }
 
-        Ok(self.upper_edge())
+        let new_upper_edge = self.upper_edge();
+        let stack_start = self.stack_range.extract()
+            // Shouldn't call shrink prior to configuring regions.
+            .unwrap()
+            .0;
+        // Update stack space allowed.
+        self.stack_allowed.set(stack_start - new_upper_edge - 1);
+
+        (old_upper_edge, new_upper_edge)
     }
 
     /// Compute the state to shrink stack profiling MPU region coverage.
@@ -315,12 +325,10 @@ impl<C: 'static + Chip> ProcessFault for StackProfiler<C> {
                 // We take a look at the address it attempted to access
                 // and use that to determine the next upper limit.
                 FaultReason::MemoryAccessViolation(addr) => {
-                    debug!("Faulting on access to: {:#010X}.", addr);
+                    // debug!("Faulting on access to: {:#010X}.", addr);
                     // Access violation address must be in range of the area protected by the profiler.
                     if self.lower_edge() <= addr && addr <= self.upper_edge() {
-                        let old_edge = self.upper_edge();
-                        let new_edge = self.shrink(process, addr).expect("Shrink failed");
-                        self.stack_allowed.set(self.stack_allowed.get() + old_edge - new_edge);
+                        let (old_edge, new_edge) = self.shrink(process, addr);
                         debug!("Shrunk {:#010X} → {:#010X}.", old_edge, new_edge);
 
                         Err(())
@@ -330,11 +338,8 @@ impl<C: 'static + Chip> ProcessFault for StackProfiler<C> {
                         let sp = process.stack_pointer()
                             .unwrap(); // We _must_ use the stack pointer in this case.
                         if self.lower_edge() <= sp && sp <= self.upper_edge() {
-                            debug!("Stack pointer looks suspect. Trying it.");
-                            let old_edge = self.upper_edge();
-                            let new_edge = self.shrink(process, sp).expect("Shrink failed");
-                            self.stack_allowed.set(self.stack_allowed.get() + old_edge - new_edge);
-                            debug!("Shrunk {:#010X} → {:#010X}.", old_edge, new_edge);
+                            let (old_edge, new_edge) = self.shrink(process, sp);
+                            debug!("Shrunk {:#010X} → {:#010X} (used SP, was {:#010X}).", old_edge, new_edge, sp);
 
                             Err(())
                         } else {
@@ -350,14 +355,14 @@ impl<C: 'static + Chip> ProcessFault for StackProfiler<C> {
                     let sp = process.stack_pointer()
                         .unwrap(); // We _must_ use the stack pointer in this case.
 
-                    debug!("Unstacking fault at {:#010X}.", sp);
-
                     // The unstacking fault occurs because the process is reading its context
                     // from a now-protected memory region.
                     //
                     // We give the process 32 bytes not because it is what the process would have naturally used,
                     // But because the stored context is still the exact value of our MPU profiling granularity.
-                    self.stack_allowed.set(32);
+                    let (old_edge, new_edge) = self.shrink(process, self.upper_edge() - 32);
+                    debug!("Shrunk {:#010X} → {:#010X} (unstacking fault).", old_edge, new_edge);
+                    assert!(new_edge < old_edge);
 
                     Err(())
                 },
@@ -370,9 +375,8 @@ impl<C: 'static + Chip> ProcessFault for StackProfiler<C> {
                     // Context save had already begun before the derived exception happened,
                     // so the stack pointer is not where the process would have naturally had it.
                     // Move the SP by the 32 bytes to calculate the actual violation location.
-                    let old_edge = self.upper_edge();
-                    let new_edge = self.shrink(process, sp + 32).expect("Shrink failed");
-                    debug!("Shrunk {:#010X} → {:#010X}.", old_edge, new_edge);
+                    let (old_edge, new_edge) = self.shrink(process, sp + 32);
+                    debug!("Shrunk {:#010X} → {:#010X} (stacking fault).", old_edge, new_edge);
                     assert!(new_edge < old_edge);
 
                     Err(())
