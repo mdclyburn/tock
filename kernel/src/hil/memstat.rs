@@ -4,7 +4,7 @@ use crate::errorcode::ErrorCode;
 
 // `pub use` to make it easier to refer to this type without
 // polluting the code with external library references.
-pub use flexbed_shared::mem::{CounterId, serialize_u32};
+pub use clockwise_shared::mem::{CounterId, serialize_u32};
 
 pub static mut INSTANCE: Option<&dyn MemoryStatistics> = None;
 
