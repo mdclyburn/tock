@@ -54,7 +54,12 @@ pub trait Chip {
         F: FnOnce() -> R;
 
     /// Current fault information returns None if unhandled or unknown.
+    ///
+    /// Use this to retrieves fault information until it returns None.
     fn fault_reason(&self) -> Option<FaultReason> { None }
+
+    /// Mark a fault as resolved.
+    fn clear_fault(&self, fault: FaultReason) -> Result<(), &'static str>;
 
     /// Print out chip state (system registers) to a supplied
     /// writer. This does not print out the execution context

@@ -1868,7 +1868,7 @@ impl<C: 'static + Chip> ProcessStandard<'_, C> {
         // Clear out the region configurations.
         for r in &self.mpu_regions {
             if let Some(region) = r.take() {
-                self.deallocate_mpu_region(&region);
+                let _ = self.deallocate_mpu_region(&region);
             }
         }
 

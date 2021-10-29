@@ -320,4 +320,65 @@ impl<I: InterruptService<Task> + 'static> Chip for Sam4l<I> {
             None
         }
     }
+
+    fn clear_fault(&self, fault: FaultReason) -> Result<(), &'static str> {
+        let cfsr = unsafe  { ptr::read_volatile(0xE000_ED28 as *const u32) };
+        let mmfar = unsafe { ptr::read_volatile(0xE000_ED34 as *const u32) };
+
+        match fault {
+            // Make sure the faulting address matches
+            // and clear the DACCVIOL bit.
+            FaultReason::MemoryAccessViolation(v_addr) => {
+                let is_dacc_viol = cfsr & 0x02 == 0x02;
+                let mmfar_valid = cfsr & 0x80 == 0x80;
+                if is_dacc_viol {
+                    if mmfar_valid {
+                        if mmfar == v_addr as u32 {
+                            unsafe {
+                                ptr::write_volatile(0xe000_ed28 as *mut u32, 0x82);
+                                Ok(())
+                            }
+                        } else {
+                            Err("MMFAR does not match")
+                        }
+                    } else {
+                        Err("MMFAR is not valid")
+                    }
+                } else {
+                    Err("Fault is not DACCVIOL")
+                }
+            },
+
+            // Clear the unstacking error bit.
+            FaultReason::UnstackingAccessViolation => {
+                let is_unstkerr = cfsr & 0x08 == 0x08;
+                if is_unstkerr {
+                    unsafe {
+                        ptr::write_volatile(0xe000_ed28 as *mut u32, 0x08);
+                        Ok(())
+                    }
+                } else {
+                    Err("Fault is not MUNSTKERR")
+                }
+            },
+
+            // Clear the stacking error bit.
+            FaultReason::StackingAccessViolation => {
+                let is_stkerr = cfsr & 0x10 == 0x10;
+                if is_stkerr {
+                    unsafe {
+                        ptr::write_volatile(0xe000_ed28 as *mut u32, 0x10);
+                        Ok(())
+                    }
+                } else {
+                    Err("Fault is not STKERR")
+                }
+            },
+
+            // Unhandled fault reasons.
+            #[allow(unreachable_patterns)]
+            _ => Err("Fault is not handled")
+        }
+    }
+
 }

@@ -318,76 +318,99 @@ impl<C: 'static + Chip> ProcessFault for StackProfiler<C> {
     /// the profiler records the stack space usage
     /// and lets the process die.
     fn process_fault_hook(&self, process: &dyn Process) -> Result<(), ()> {
-        if let Some(fault_reason) = self.chip.fault_reason() {
+        // Will indicate whether the process' execution is salvageable.
+        // When (un)stacking errors are among the fault reasons, 'tis not.
+        let mut recoverable = true;
+        // Limit the number of shrinks.
+        let mut shrunk = false;
+
+        while let Some(fault_reason) = self.chip.fault_reason() {
             // Chip can tell us what the fault is.
             match fault_reason {
-                // Occurs when the process expectedly writes to the profiled regions.
-                // We take a look at the address it attempted to access
-                // and use that to determine the next upper limit.
                 FaultReason::MemoryAccessViolation(addr) => {
                     // debug!("Faulting on access to: {:#010X}.", addr);
                     // Access violation address must be in range of the area protected by the profiler.
                     if self.lower_edge() <= addr && addr <= self.upper_edge() {
                         let (old_edge, new_edge) = self.shrink(process, addr);
+                        shrunk = true;
                         debug!("Shrunk {:#010X} → {:#010X}.", old_edge, new_edge);
-
-                        Err(())
                     } else {
                         // Try looking at the stack pointer for a hint.
                         // If it is lower, then we use that value.
+                        // Ideally, we do not want this to happen.
+                        // Having to do this means that we are not clearing faults correctly.
                         let sp = process.stack_pointer()
                             .unwrap(); // We _must_ use the stack pointer in this case.
                         if self.lower_edge() <= sp && sp <= self.upper_edge() {
                             let (old_edge, new_edge) = self.shrink(process, sp);
-                            debug!("Shrunk {:#010X} → {:#010X} (used SP, was {:#010X}).", old_edge, new_edge, sp);
-
-                            Err(())
+                            debug!("Shrunk {:#010X} → {:#010X} (WARNING: used SP, was {:#010X}).", old_edge, new_edge, sp);
                         } else {
                             // This is not on us to fix.
                             debug!("Bad access out of profiler range.");
-                            Err(())
+                            recoverable = false;
                         }
                     }
                 },
 
                 // Occurs when we apply the profiling regions after receiving the memop syscall.
                 FaultReason::UnstackingAccessViolation => {
-                    let sp = process.stack_pointer()
-                        .unwrap(); // We _must_ use the stack pointer in this case.
+                    // We only want to shrink in response to an unstacking error if
+                    // we have not previously done so during this fault hook call.
+                    // This keeps adjustments fine-grained.
+                    // Do note: this is dependent on the order we receive FaultReason from chip.fault_reason().
+                    // Currently we ALWAYS receive the more specific memory access fault information before this error.
+                    // We would be better served aggregating this information all at once at entry
+                    // and _then_ sifting through the details.
+                    if !shrunk {
+                        // The stack pointer is the guide for where the process' stack reached.
+                        // During exception entry, the hardware starts by decrementing the SP.
+                        // Once it started writing context to the stack, that's when it hit the exception.
+                        let sp = process.stack_pointer()
+                            .unwrap(); // We _must_ use the stack pointer in this case.
 
-                    // The unstacking fault occurs because the process is reading its context
-                    // from a now-protected memory region.
-                    //
-                    // We give the process 32 bytes not because it is what the process would have naturally used,
-                    // But because the stored context is still the exact value of our MPU profiling granularity.
-                    let (old_edge, new_edge) = self.shrink(process, self.upper_edge() - 32);
-                    debug!("Shrunk {:#010X} → {:#010X} (unstacking fault).", old_edge, new_edge);
-                    assert!(new_edge < old_edge);
+                        // The unstacking fault occurs because the process is reading its context
+                        // from a now-protected memory region.
+                        //
+                        // We give the process 32 bytes not because it is what the process would have naturally used,
+                        // But because the stored context is still the exact value of our MPU profiling granularity.
+                        let (old_edge, new_edge) = self.shrink(process, self.upper_edge() - 32);
+                        debug!("Shrunk {:#010X} → {:#010X} (unstacking fault).", old_edge, new_edge);
+                        assert!(new_edge < old_edge);
 
-                    Err(())
+                        shrunk = true;
+                    }
+
+                    recoverable = false;
                 },
 
                 // Occurs when exception entry attempts to save the process' execution context but hits the profiling region.
+                // The context is lost, so there is no recovery.
                 FaultReason::StackingAccessViolation => {
-                    let sp = process.stack_pointer()
-                        .unwrap(); // We _must_ use the stack pointer in this case.
+                    if !shrunk {
+                        let sp = process.stack_pointer()
+                            .unwrap(); // We _must_ use the stack pointer in this case.
+                        let (old_edge, new_edge) = self.shrink(process, sp);
+                        debug!("Shrunk {:#010X} → {:#010X} (stacking fault).", old_edge, new_edge);
+                        assert!(new_edge < old_edge);
+                        shrunk = true;
+                    }
 
-                    // Context save had already begun before the derived exception happened,
-                    // so the stack pointer is not where the process would have naturally had it.
-                    // Move the SP by the 32 bytes to calculate the actual violation location.
-                    let (old_edge, new_edge) = self.shrink(process, sp + 32);
-                    debug!("Shrunk {:#010X} → {:#010X} (stacking fault).", old_edge, new_edge);
-                    assert!(new_edge < old_edge);
-
-                    Err(())
+                    // The context is lost, so there is no recovery.
+                    recoverable = false;
                 }
 
                 // The fault is not handled by this implementation.
-                _ => Err(())
-            }
+                _ => recoverable = false,
+            };
+
+            self.chip.clear_fault(fault_reason).expect("clearing fault failed");
+        }
+
+        // No more handle-able faults left.
+        // If the recoverable flag will indicate whether the process can continue running.
+        if recoverable {
+            Ok(())
         } else {
-            // Chip can't tell us what the fault is,
-            // an it is unlikely to be handled here.
             Err(())
         }
     }
