@@ -1,24 +1,24 @@
+use clockwise_shared::trace::TraceData;
+
 pub static mut INSTANCE: Option<&dyn Trace> = None;
 
 pub trait Trace {
-    fn signal(&self, data: &[u8], len: usize);
+    fn signal(&self, trace: &TraceData);
 }
 
-pub fn signal(data: &[u8], len: usize) {
+pub fn signal(data: &TraceData) {
     unsafe {
-        if let Some(tracing) = INSTANCE {
-            tracing.signal(data, len);
-        }
+        INSTANCE
+            .expect("Cannot trace without selecting an implementation.")
+            .signal(data);
     }
 }
 
 #[macro_export]
 macro_rules! trace {
     ($name:expr, $data:expr) => {{
-        if $crate::hil::trace::INSTANCE.is_some() {
-            let data: &[u8] = $data;
-            $crate::hil::trace::INSTANCE.as_ref().unwrap()
-                .signal((data), (data).len());
-        }
+        use clockwise_shared::trace::TraceData;
+        let data: &TraceData = ($data);
+        $crate::hil::trace::signal(data);
     }}
 }

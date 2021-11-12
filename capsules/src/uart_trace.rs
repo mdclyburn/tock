@@ -1,5 +1,7 @@
+use crate::driver;
+
+use clockwise_shared::trace::TraceData;
 use kernel::{Driver, ReturnCode};
-#[allow(unused_imports)]
 use kernel::debug;
 use kernel::common::cells::TakeCell;
 use kernel::hil::trace::Trace;
@@ -9,8 +11,6 @@ use kernel::hil::uart::{
     Parameters as UartParameters,
     TransmitClient,
 };
-
-use crate::driver;
 
 pub const DRIVER_NUM: usize = driver::NUM::Trace as usize;
 
@@ -38,7 +38,7 @@ impl<'a> SerialUARTTrace<'a> {
 }
 
 impl<'a> Trace for SerialUARTTrace<'a> {
-    fn signal(&self, data: &[u8], len: usize) {
+    fn signal(&self, data: &TraceData) {
         let mut tx_buffer: Option<&'static mut [u8]> = self.tx_buffer.take();
         while tx_buffer.is_none() {
             self.uart.poll_service();
@@ -46,13 +46,9 @@ impl<'a> Trace for SerialUARTTrace<'a> {
         }
         let tx_buffer = tx_buffer.unwrap();
 
-        let data_len = tx_buffer.len().min(len);
-        tx_buffer[0] = data_len as u8;
-        for i in 1..data_len+1 {
-            tx_buffer[i] = data[i-1];
-        }
+        let data_len = data.serialize(tx_buffer);
 
-        let (_return_code, _buf) = self.uart.transmit_buffer(tx_buffer, 1+data_len);
+        let (_return_code, _buf) = self.uart.transmit_buffer(tx_buffer, data_len);
     }
 }
 
@@ -72,9 +68,7 @@ macro_rules! serial_trace {
     ($name:expr, $data:expr) => {{
         use kernel;
 
-        let data: &[u8] = ($data);
-        let len: usize = ($data).len();
-
-        kernel::hil::trace::signal(data, len);
+        let data = ($data);
+        kernel::hil::trace::signal(data);
     }}
 }

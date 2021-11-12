@@ -385,13 +385,13 @@ pub unsafe fn reset_handler() {
     )
     .finalize(components::gpio_component_buf!(sam4l::gpio::GPIOPin));
 
-    // Tracing
-    type Trace = capsules::gpio_trace::ParallelGPIOTrace<'static, sam4l::gpio::GPIOPin<'static>>;
-    let _trace: Option<&'static Trace> = comp::trace_init!(
-        sam4l::gpio::GPIOPin<'static>,
-        [0, 1, 2, 3],
-        &gpio,
-    );
+    // Parallel GPIO tracing
+    // type Trace = capsules::gpio_trace::ParallelGPIOTrace<'static, sam4l::gpio::GPIOPin<'static>>;
+    // let _trace: Option<&'static Trace> = comp::trace_init!(
+    //     sam4l::gpio::GPIOPin<'static>,
+    //     [0, 1, 2, 3],
+    //     &gpio,
+    // );
 
     // CRC
     let crc = components::crc::CrcComponent::new(board_kernel, &sam4l::crccu::CRCCU)

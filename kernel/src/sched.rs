@@ -510,6 +510,8 @@ impl Kernel {
                                             .unwrap_or(false)
                                     {
                                         chip.watchdog().suspend();
+                                        crate::trace!("chip sleeping",
+                                                      &clockwise_shared::trace::TraceData::ChipSleep);
                                         chip.sleep();
                                         chip.watchdog().resume();
                                     }

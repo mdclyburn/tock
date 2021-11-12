@@ -5,6 +5,7 @@ authors = ["Tock Project Developers <tock-dev@googlegroups.com>"]
 edition = "2018"
 
 [dependencies]
+clockwise_shared = { path = "../../clockwise/shared" }
 comp = { path = "../comp" }
 enum_primitive = { path = "../libraries/enum_primitive" }
 kernel = { path = "../kernel" }

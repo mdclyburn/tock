@@ -28,7 +28,7 @@ pub mod ft6x06;
 pub mod fxos8700cq;
 pub mod gpio;
 pub mod gpio_async;
-pub mod gpio_trace;
+// pub mod gpio_trace;
 pub mod hd44780;
 pub mod hmac;
 pub mod humidity;
