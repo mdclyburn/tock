@@ -444,6 +444,8 @@ impl Kernel {
                                             .unwrap_or(false)
                                     {
                                         resources.watchdog().suspend();
+                                        crate::trace!("chip sleeping",
+                                                      &clockwise_shared::trace::TraceData::ChipSleep);
                                         chip.sleep();
                                         resources.watchdog().resume();
                                     }

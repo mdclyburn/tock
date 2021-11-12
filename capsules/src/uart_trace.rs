@@ -14,13 +14,15 @@ use kernel::hil::uart::{
 pub const DRIVER_NUM: usize = driver::NUM::Trace as usize;
 
 pub struct SerialUARTTrace<'a> {
-    uart: &'a dyn Uart<'a>,
     tx_buffer: TakeCell<'static, [u8]>,
+    sync_transmit: bool,
+    uart: &'a dyn Uart<'a>,
 }
 
 impl<'a> SerialUARTTrace<'a> {
     pub fn new(uart: &'a dyn Uart<'a>,
-               tx_buffer: &'static mut [u8]) -> SerialUARTTrace<'a> {
+               tx_buffer: &'static mut [u8],
+               sync_transmit: bool) -> SerialUARTTrace<'a> {
         let _result = uart.configure(UartParameters {
             baud_rate: 115200,
             width: uart::Width::Eight,
@@ -32,6 +34,7 @@ impl<'a> SerialUARTTrace<'a> {
         SerialUARTTrace {
             uart,
             tx_buffer: TakeCell::new(tx_buffer),
+            sync_transmit,
         }
     }
 }
@@ -48,6 +51,9 @@ impl<'a> Trace for SerialUARTTrace<'a> {
         let data_len = data.serialize(tx_buffer);
 
         let _transmit_result = self.uart.transmit_buffer(tx_buffer, data_len);
+
+        // Guarantee no activity induced by trace after this.
+        while self.sync_transmit && self.tx_buffer.is_none() {  }
     }
 }
 
