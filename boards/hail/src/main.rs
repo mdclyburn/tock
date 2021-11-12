@@ -27,8 +27,6 @@ use kernel::{create_capability, debug, debug_gpio, static_init};
 use sam4l::adc::Channel;
 use sam4l::chip::Sam4lDefaultPeripherals;
 
-use comp;
-
 /// Support routines for debugging I/O.
 ///
 /// Note: Use of this module will trample any other USART0 configuration.
@@ -287,11 +285,11 @@ pub unsafe fn main() {
     hil::uart::Receive::set_receive_client(&peripherals.usart0, uart_mux);
 
     // Initialize USART2 for serial tracing.
-    sam4l::usart::USART2.set_mode(sam4l::usart::UsartMode::Uart);
+    peripherals.usart2.set_mode(sam4l::usart::UsartMode::Uart);
     let serial_tracing = static_init!(
         capsules::uart_trace::SerialUARTTrace<'static>,
-        capsules::uart_trace::SerialUARTTrace::new(&sam4l::usart::USART2, &mut SERTRACE_TX));
-    sam4l::usart::USART2.set_transmit_client(serial_tracing);
+        capsules::uart_trace::SerialUARTTrace::new(&peripherals.usart2, &mut SERTRACE_TX));
+    peripherals.usart2.set_transmit_client(serial_tracing);
     hil::trace::INSTANCE = Some(serial_tracing);
 
     // Setup the console and the process inspection console.

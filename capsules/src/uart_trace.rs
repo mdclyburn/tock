@@ -1,9 +1,8 @@
 use crate::driver;
 
 use clockwise_shared::trace::TraceData;
-use kernel::{Driver, ReturnCode};
-use kernel::debug;
-use kernel::common::cells::TakeCell;
+use kernel::ErrorCode;
+use kernel::utilities::cells::TakeCell;
 use kernel::hil::trace::Trace;
 use kernel::hil::uart;
 use kernel::hil::uart::{
@@ -22,7 +21,7 @@ pub struct SerialUARTTrace<'a> {
 impl<'a> SerialUARTTrace<'a> {
     pub fn new(uart: &'a dyn Uart<'a>,
                tx_buffer: &'static mut [u8]) -> SerialUARTTrace<'a> {
-        uart.configure(UartParameters {
+        let _result = uart.configure(UartParameters {
             baud_rate: 115200,
             width: uart::Width::Eight,
             parity: uart::Parity::Even,
@@ -48,7 +47,7 @@ impl<'a> Trace for SerialUARTTrace<'a> {
 
         let data_len = data.serialize(tx_buffer);
 
-        let (_return_code, _buf) = self.uart.transmit_buffer(tx_buffer, data_len);
+        let _transmit_result = self.uart.transmit_buffer(tx_buffer, data_len);
     }
 }
 
@@ -56,12 +55,10 @@ impl<'a> TransmitClient for SerialUARTTrace<'a> {
     fn transmitted_buffer(&self,
                           tx_buffer: &'static mut [u8],
                           _tx_len: usize,
-                          _return_value: ReturnCode) {
+                          _return_value: Result<(), ErrorCode>) {
         self.tx_buffer.put(Some(tx_buffer));
     }
 }
-
-impl<'a> Driver for SerialUARTTrace<'a> {  }
 
 #[macro_export]
 macro_rules! serial_trace {
