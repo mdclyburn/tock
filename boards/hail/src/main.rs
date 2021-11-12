@@ -286,13 +286,11 @@ pub unsafe fn main() {
 
     // Initialize USART2 for serial tracing.
     peripherals.usart2.set_mode(sam4l::usart::UsartMode::Uart);
-    let total_transfer_synchronous = true;
     let serial_tracing = static_init!(
         capsules::uart_trace::SerialUARTTrace<'static>,
         capsules::uart_trace::SerialUARTTrace::new(
             &peripherals.usart2,
-            &mut SERTRACE_TX,
-            total_transfer_synchronous));
+            &mut SERTRACE_TX));
     peripherals.usart2.set_transmit_client(serial_tracing);
     hil::trace::INSTANCE = Some(serial_tracing);
 

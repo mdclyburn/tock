@@ -1,9 +1,8 @@
 use crate::driver;
 
-use clockwise_shared::trace::TraceData;
 use kernel::ErrorCode;
 use kernel::utilities::cells::TakeCell;
-use kernel::hil::trace::Trace;
+use kernel::hil::trace::{Trace, TraceData};
 use kernel::hil::uart;
 use kernel::hil::uart::{
     Uart,
@@ -15,14 +14,12 @@ pub const DRIVER_NUM: usize = driver::NUM::Trace as usize;
 
 pub struct SerialUARTTrace<'a> {
     tx_buffer: TakeCell<'static, [u8]>,
-    sync_transmit: bool,
     uart: &'a dyn Uart<'a>,
 }
 
 impl<'a> SerialUARTTrace<'a> {
     pub fn new(uart: &'a dyn Uart<'a>,
-               tx_buffer: &'static mut [u8],
-               sync_transmit: bool) -> SerialUARTTrace<'a> {
+               tx_buffer: &'static mut [u8]) -> SerialUARTTrace<'a> {
         let _result = uart.configure(UartParameters {
             baud_rate: 115200,
             width: uart::Width::Eight,
@@ -34,7 +31,6 @@ impl<'a> SerialUARTTrace<'a> {
         SerialUARTTrace {
             uart,
             tx_buffer: TakeCell::new(tx_buffer),
-            sync_transmit,
         }
     }
 }
@@ -51,9 +47,12 @@ impl<'a> Trace for SerialUARTTrace<'a> {
         let data_len = data.serialize(tx_buffer);
 
         let _transmit_result = self.uart.transmit_buffer(tx_buffer, data_len);
+    }
 
+    fn signal_sync(&self, data: &TraceData) {
+        self.signal(data);
         // Guarantee no activity induced by trace after this.
-        while self.sync_transmit && self.tx_buffer.is_none() {  }
+        while self.tx_buffer.is_none() { self.uart.poll_service(); }
     }
 }
 

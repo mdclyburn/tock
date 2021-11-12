@@ -102,6 +102,7 @@ impl Kernel {
     /// This is only exposed in the core kernel crate.
     pub(crate) fn increment_work(&self) {
         self.work.increment();
+        crate::trace!("kernel work increased", &TraceData::KernelWork(self.work.get() as u32));
     }
 
     /// Something was scheduled for a process, so there is more work to do.
@@ -122,6 +123,7 @@ impl Kernel {
     /// This is only exposed in the core kernel crate.
     pub(crate) fn decrement_work(&self) {
         self.work.decrement();
+        crate::trace!("kernel work decreased", &TraceData::KernelWork(self.work.get() as u32));
     }
 
     /// Something finished for a process, so we decrement how much work there is
@@ -444,8 +446,6 @@ impl Kernel {
                                             .unwrap_or(false)
                                     {
                                         resources.watchdog().suspend();
-                                        crate::trace!("chip sleeping",
-                                                      &clockwise_shared::trace::TraceData::ChipSleep);
                                         chip.sleep();
                                         resources.watchdog().resume();
                                     }
