@@ -21,10 +21,13 @@ use kernel::hil::led::LedLow;
 use kernel::hil::Controller;
 use kernel::platform::{KernelResources, SyscallDriverLookup};
 use kernel::scheduler::round_robin::RoundRobinSched;
+use kernel::hil::uart::Transmit;
 #[allow(unused_imports)]
 use kernel::{create_capability, debug, debug_gpio, static_init};
 use sam4l::adc::Channel;
 use sam4l::chip::Sam4lDefaultPeripherals;
+
+use comp;
 
 /// Support routines for debugging I/O.
 ///
@@ -44,6 +47,9 @@ static mut PROCESSES: [Option<&'static dyn kernel::process::Process>; NUM_PROCS]
     [None; NUM_PROCS];
 
 static mut CHIP: Option<&'static sam4l::chip::Sam4l<Sam4lDefaultPeripherals>> = None;
+
+// Serial tracing transmission buffer.
+static mut SERTRACE_TX: [u8; 64] = [0; 64];
 
 /// Dummy buffer that causes the linker to reserve enough space for the stack.
 #[no_mangle]
@@ -280,6 +286,14 @@ pub unsafe fn main() {
     hil::uart::Transmit::set_transmit_client(&peripherals.usart0, uart_mux);
     hil::uart::Receive::set_receive_client(&peripherals.usart0, uart_mux);
 
+    // Initialize USART2 for serial tracing.
+    sam4l::usart::USART2.set_mode(sam4l::usart::UsartMode::Uart);
+    let serial_tracing = static_init!(
+        capsules::uart_trace::SerialUARTTrace<'static>,
+        capsules::uart_trace::SerialUARTTrace::new(&sam4l::usart::USART2, &mut SERTRACE_TX));
+    sam4l::usart::USART2.set_transmit_client(serial_tracing);
+    hil::trace::INSTANCE = Some(serial_tracing);
+
     // Setup the console and the process inspection console.
     let console = components::console::ConsoleComponent::new(
         board_kernel,
@@ -462,6 +476,14 @@ pub unsafe fn main() {
         ),
     )
     .finalize(components::gpio_component_buf!(sam4l::gpio::GPIOPin));
+
+    // Parallel GPIO tracing
+    // type Trace = capsules::gpio_trace::ParallelGPIOTrace<'static, sam4l::gpio::GPIOPin<'static>>;
+    // let _trace: Option<&'static Trace> = comp::trace_init!(
+    //     sam4l::gpio::GPIOPin<'static>,
+    //     [0, 1, 2, 3],
+    //     &gpio,
+    // );
 
     // CRC
     let crc = components::crc::CrcComponent::new(
