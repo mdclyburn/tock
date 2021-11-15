@@ -16,6 +16,14 @@ pub fn signal(data: &TraceData) {
     }
 }
 
+pub fn signal_sync(data: &TraceData) {
+    unsafe {
+        INSTANCE
+            .expect("Cannot trace without selecting an implementation.")
+            .signal_sync(data);
+    }
+}
+
 #[macro_export]
 macro_rules! trace {
     ($name:expr, $data:expr) => {{

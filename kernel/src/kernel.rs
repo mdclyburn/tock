@@ -431,6 +431,7 @@ impl Kernel {
                             // the running test does not generate
                             // any interrupts.
                             if !no_sleep {
+                                // crate::sync_trace!("going to sleep", &TraceData::ChipSleep);
                                 chip.atomic(|| {
                                     // Cannot sleep if interrupts are pending,
                                     // as on most platforms unhandled interrupts
@@ -595,6 +596,11 @@ impl Kernel {
                     let context_switch_reason = process.switch_to();
                     scheduler_timer.disarm();
                     chip.mpu().disable_app_mpu();
+
+                    let remaining_us = scheduler_timer.get_remaining_us();
+                    let used_us = timeslice_us.zip(remaining_us)
+                        .map_or(0xFFFFFFFF, |(allocated, remaining)| allocated - remaining);
+                    crate::trace!("switched back from process", &TraceData::ProcessSuspended(used_us));
 
                     // Now the process has returned back to the kernel. Check
                     // why and handle the process as appropriate.
