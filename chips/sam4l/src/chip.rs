@@ -247,6 +247,15 @@ impl<I: InterruptService<Task> + 'static> Chip for Sam4l<I> {
                         false => panic!("unhandled deferred call task"),
                     }
                 } else if let Some(interrupt) = cortexm4::nvic::next_pending() {
+                    // Do not emit traces for:
+                    // - DMA channels
+                    // - USART2
+                    if !((crate::nvic::PDCA0 <= interrupt && interrupt <= crate::nvic::PDCA15)
+                          || interrupt == crate::nvic::USART2)
+                    {
+                        kernel::trace!("kernel serviced an interrupt", &TraceData::InterruptServiced(interrupt));
+                    }
+
                     match self.interrupt_service.service_interrupt(interrupt) {
                         true => {}
                         false => panic!("unhandled interrupt"),
