@@ -615,6 +615,7 @@ impl Kernel {
                             {
                                 // Let process deal with it as appropriate.
                                 process.set_fault_state();
+                                update_process_trace(self.processes);
                             }
                         }
                         Some(ContextSwitchReason::SyscallFired { syscall }) => {
@@ -686,6 +687,7 @@ impl Kernel {
                             }
                         },
                     }
+                    update_process_trace(self.processes);
                 }
                 process::State::Faulted | process::State::Terminated => {
                     // We should never be scheduling a process in fault.
@@ -1185,4 +1187,21 @@ impl Kernel {
             },
         }
     }
+}
+
+fn update_process_trace(processes: &[Option<&dyn process::Process>]) {
+    let running_procs = processes.iter()
+        .filter_map(|opt_proc| {
+            opt_proc.map(|proc| {
+                let state = proc.get_state();
+                use process::State;
+                if state != State::Unstarted && state != State::Faulted {
+                    Some(true)
+                } else {
+                    None
+                }
+            })
+        })
+        .count();
+    crate::trace!("active process set changed", &TraceData::ActiveProcesses(running_procs as u32));
 }
