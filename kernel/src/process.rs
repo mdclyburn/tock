@@ -771,4 +771,5 @@ pub struct FunctionCall {
     pub argument2: usize,
     pub argument3: usize,
     pub pc: usize,
+    pub t_scheduled: Option<u32>,
 }

@@ -384,6 +384,13 @@ impl<C: Chip> Process for ProcessStandard<'_, C> {
         self.tasks.map_or(None, |tasks| {
             tasks.dequeue().map(|cb| {
                 self.kernel.decrement_work();
+                if let Task::FunctionCall(ref fc) = cb {
+                    if let Some(t) = fc.t_scheduled {
+                        let now = crate::hil::trace::now_us();
+                        crate::trace!("upcall serviced", &TraceData::UpcallServiced(now - t));
+                    }
+                }
+
                 cb
             })
         })
@@ -1730,6 +1737,7 @@ impl<C: 'static + Chip> ProcessStandard<'_, C> {
                 argument1: process.memory_start as usize,
                 argument2: process.memory_len,
                 argument3: process.app_break.get() as usize,
+                t_scheduled: None,
             }));
         });
 
@@ -1919,6 +1927,7 @@ impl<C: 'static + Chip> ProcessStandard<'_, C> {
                 argument1: self.mem_start() as usize,
                 argument2: self.memory_len,
                 argument3: self.app_break.get() as usize,
+                t_scheduled: None,
             }));
         });
 

@@ -133,6 +133,7 @@ impl Upcall {
                         argument2: r2,
                         argument3: self.appdata,
                         pc: fp.as_ptr() as usize,
+                        t_scheduled: Some(crate::hil::trace::now_us()),
                     }));
 
                 match enqueue_res {

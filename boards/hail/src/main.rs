@@ -360,6 +360,7 @@ pub unsafe fn main() {
         mux_alarm,
     )
     .finalize(components::alarm_component_helper!(sam4l::ast::Ast));
+    hil::trace::TIME_SOURCE = Some(&peripherals.ast);
 
     // FXOS8700CQ accelerometer, device address 0x1e
     let fxos8700_i2c = static_init!(I2CDevice, I2CDevice::new(sensors_i2c, 0x1e));
