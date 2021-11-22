@@ -1195,7 +1195,10 @@ fn update_process_trace(processes: &[Option<&dyn process::Process>]) {
             opt_proc.map(|proc| {
                 let state = proc.get_state();
                 use process::State;
-                if state != State::Unstarted && state != State::Faulted {
+                if !(state == State::Faulted
+                     || state == State::Terminated
+                     || state == State::Unstarted)
+                {
                     Some(true)
                 } else {
                     None
