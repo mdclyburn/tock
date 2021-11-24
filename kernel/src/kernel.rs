@@ -597,10 +597,7 @@ impl Kernel {
                     scheduler_timer.disarm();
                     chip.mpu().disable_app_mpu();
 
-                    let remaining_us = scheduler_timer.get_remaining_us();
-                    let used_us = timeslice_us.zip(remaining_us)
-                        .map_or(0xFFFFFFFF, |(allocated, remaining)| allocated - remaining);
-                    crate::trace!("switched back from process", &TraceData::ProcessSuspended(used_us));
+                    self.update_process_trace();
 
                     // Now the process has returned back to the kernel. Check
                     // why and handle the process as appropriate.
@@ -614,8 +611,9 @@ impl Kernel {
                                 .is_err()
                             {
                                 // Let process deal with it as appropriate.
+                                self.update_process_trace();
                                 process.set_fault_state();
-                                update_process_trace(self.processes);
+                                self.update_process_trace();
                             }
                         }
                         Some(ContextSwitchReason::SyscallFired { syscall }) => {
@@ -687,7 +685,7 @@ impl Kernel {
                             }
                         },
                     }
-                    update_process_trace(self.processes);
+                    self.update_process_trace();
                 }
                 process::State::Faulted | process::State::Terminated => {
                     // We should never be scheduling a process in fault.
@@ -1187,24 +1185,19 @@ impl Kernel {
             },
         }
     }
-}
 
-fn update_process_trace(processes: &[Option<&dyn process::Process>]) {
-    let running_procs = processes.iter()
-        .filter_map(|opt_proc| {
-            opt_proc.map(|proc| {
-                let state = proc.get_state();
+    pub fn update_process_trace(&self) {
+        let running_procs = self.processes.iter()
+            .filter(|opt_proc| opt_proc.is_some())
+            .map(|opt_proc| opt_proc.unwrap().get_state())
+            .filter(|proc_state| {
                 use process::State;
-                if !(state == State::Faulted
-                     || state == State::Terminated
-                     || state == State::Unstarted)
-                {
-                    Some(true)
-                } else {
-                    None
-                }
+                let proc_state = *proc_state;
+                proc_state != State::Terminated
+                    && proc_state != State::Faulted
+                    && proc_state != State::Unstarted
             })
-        })
-        .count();
-    crate::trace!("active process set changed", &TraceData::ActiveProcesses(running_procs as u32));
+            .count();
+        crate::trace!("active process set changed", &TraceData::ActiveProcesses(running_procs as u32));
+    }
 }

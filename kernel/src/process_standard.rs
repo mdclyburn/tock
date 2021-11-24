@@ -370,6 +370,7 @@ impl<C: Chip> Process for ProcessStandard<'_, C> {
 
         // Mark the app as stopped so the scheduler won't try to run it.
         self.state.update(State::Terminated);
+        self.kernel.update_process_trace();
     }
 
     fn get_restart_count(&self) -> usize {

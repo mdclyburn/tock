@@ -55,8 +55,6 @@ use kernel::syscall::{CommandReturn, SyscallDriver};
 use kernel::utilities::cells::TakeCell;
 use kernel::{ErrorCode, ProcessId};
 
-use comp;
-
 /// Syscall driver number.
 use crate::driver;
 pub const DRIVER_NUM: usize = driver::NUM::Led as usize;

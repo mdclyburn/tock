@@ -523,7 +523,7 @@ pub unsafe fn main() {
     // Configure application fault policy
     let fault_policy = static_init!(
         kernel::process::ThresholdRestartThenPanicFaultPolicy,
-        kernel::process::ThresholdRestartThenPanicFaultPolicy::new(4)
+        kernel::process::ThresholdRestartThenPanicFaultPolicy::new(usize::MAX)
     );
 
     let scheduler = components::sched::round_robin::RoundRobinComponent::new(&PROCESSES)
