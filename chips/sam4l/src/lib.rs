@@ -29,6 +29,7 @@ pub mod pm;
 pub mod scif;
 pub mod serial_num;
 pub mod spi;
+pub mod tc;
 pub mod trng;
 pub mod usart;
 pub mod usbc;
