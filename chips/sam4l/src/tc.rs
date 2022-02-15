@@ -2,6 +2,7 @@
 
 use core::cell::Cell;
 
+use kernel::debug;
 use kernel::errorcode::ErrorCode;
 use kernel::utilities::cells::NumericCellExt;
 use kernel::utilities::registers::interfaces::{
@@ -18,30 +19,33 @@ use kernel::utilities::registers::{
 };
 use kernel::utilities::StaticRef;
 
-#[repr(C)]
-pub struct Channel {
-    ccr: WriteOnly<u32, CCR::Register>,
-    cmr: ReadWrite<u32, CMR::Register>,
-    smcr: ReadWrite<u32, SMCR::Register>,
-    _reserved0: u32,
-    cv: ReadOnly<u32, CV::Register>,
-    ra: ReadWrite<u32, Rx::Register>,
-    rb: ReadWrite<u32, Rx::Register>,
-    rc: ReadWrite<u32, Rx::Register>,
-    sr: ReadOnly<u32, SR::Register>,
-    ier: WriteOnly<u32, IER::Register>,
-    idr: WriteOnly<u32, IDR::Register>,
-    imr: ReadOnly<u32, IMR::Register>,
-}
+use crate::pm;
 
 register_structs! {
+    ChannelRegisters {
+        (0x00 => ccr: WriteOnly<u32, CCR::Register>),
+        (0x04 => cmr: ReadWrite<u32, CMR::Register>),
+        (0x08 => smcr: ReadWrite<u32, SMCR::Register>),
+        (0x0c => _reserved0: u32),
+        (0x10 => cv: ReadOnly<u32, CV::Register>),
+        (0x14 => ra: ReadWrite<u32, Rx::Register>),
+        (0x18 => rb: ReadWrite<u32, Rx::Register>),
+        (0x1c => rc: ReadWrite<u32, Rx::Register>),
+        (0x20 => sr: ReadOnly<u32, SR::Register>),
+        (0x24 => ier: WriteOnly<u32, IER::Register>),
+        (0x28 => idr: WriteOnly<u32, IDR::Register>),
+        (0x2c => imr: ReadOnly<u32, IMR::Register>),
+
+        (0x30 => @END),
+    },
+
     /// TC block registers
-    TC {
-        (0x00 => channel0: Channel),
+    BlockRegisters {
+        (0x00 => channel0: ChannelRegisters),
         (0x30 => _reserved0: [u32; 4]),
-        (0x40 => channel1: Channel),
+        (0x40 => channel1: ChannelRegisters),
         (0x70 => _reserved1: [u32; 4]),
-        (0x80 => channel2: Channel),
+        (0x80 => channel2: ChannelRegisters),
         (0xb0 => _reserved2: [u32; 4]),
 
         (0xc0 => bcr: WriteOnly<u32, BCR::Register>),
@@ -51,18 +55,20 @@ register_structs! {
     }
 }
 
-impl Channel {
-    fn configure(&self, mode: Mode, trigger: Trigger) {
-        self.cmr.write(CMR::WAVE::Capture);
-    }
-}
-
 register_bitfields![
     u32,
     CCR [
-        SWTRG OFFSET(2) NUMBITS(1) [],
-        CLKDIS OFFSET(1) NUMBITS(1) [],
-        CLKEN OFFSET(0) NUMBITS(1) [],
+        SWTRG OFFSET(2) NUMBITS(1) [
+            ResetAndStart = 1
+        ],
+
+        CLKDIS OFFSET(1) NUMBITS(1) [
+            Disable = 1
+        ],
+
+        CLKEN OFFSET(0) NUMBITS(1) [
+            Enable = 1
+        ],
     ],
 
     CMR [
@@ -87,7 +93,7 @@ register_bitfields![
 
         CPCTRG OFFSET(14) NUMBITS(1) [
             None = 0,
-            ResetAndStartOnCompare = 1
+            ResetAndStartOnMatch = 1
         ],
 
         ABETRG OFFSET(10) NUMBITS(1) [
@@ -209,47 +215,175 @@ register_bitfields![
 ];
 
 const TC0_BASE_ADDRESS: usize = 0x4001_0000;
-#[allow(unused)]
 const TC1_BASE_ADDRESS: usize = 0x4001_4000;
 
-const REGISTERS: StaticRef<TC> =
-    unsafe { StaticRef::new(TC0_BASE_ADDRESS as *const TC) };
+const TC0_REGISTERS: StaticRef<BlockRegisters> =
+    unsafe { StaticRef::new(TC0_BASE_ADDRESS as *const BlockRegisters) };
+const TC1_REGISTERS: StaticRef<BlockRegisters> =
+    unsafe { StaticRef::new(TC1_BASE_ADDRESS as *const BlockRegisters) };
 
+#[derive(Copy, Clone)]
 pub enum Mode {
     Capture,
     Waveform,
 }
 
-pub enum Trigger {
-    Software,
-    Sync,
-    Compare(u16),
+#[repr(u32)]
+#[derive(Copy, Clone)]
+pub enum ClockSource {
+    /// Generic clock number 5 (TC0) or 8 (TC1).
+    TimerClock1 = 0,
+    /// PBA clock / 2
+    TimerClock2 = 1,
+    /// PBA clock / 8
+    TimerClock3 = 2,
+    /// PBA clock / 32
+    TimerClock4 = 3,
+    /// PBA clock / 128
+    TimerClock5 = 4,
+    /// TC0: PA14, PB13. TC1: PC06, PC21
+    XC0 = 5,
+    /// TC0: PA5, PB14. TC1: PC07, PC22
+    XC1 = 6,
+    /// TC0: PA16, PB15. TC1: PC08, PC23
+    XC2 = 7
 }
 
-pub struct TimerCounter;
+pub struct Parameters {
+    pub mode: Mode,
+    pub clock: ClockSource,
+    pub rc_compare_trigger: Option<u16>,
+}
+
+#[derive(Copy, Clone)]
+pub enum InterruptLine {
+    TC00,
+    TC01,
+    TC02,
+    TC10,
+    TC11,
+    TC12
+}
+
+pub struct Channel {
+    registers: &'static ChannelRegisters,
+}
+
+impl Channel {
+    const fn new(registers: &'static ChannelRegisters) -> Channel {
+        Channel {
+            registers
+        }
+    }
+
+    fn configure(&self, params: &Parameters) {
+        // Set the mode.
+        self.registers.cmr.write(match params.mode {
+            Mode::Capture => CMR::WAVE::Capture,
+            Mode::Waveform => unimplemented!(),
+        });
+
+        // Configure resets on compare.
+        if let Some(trigger_val) = params.rc_compare_trigger {
+            self.registers.rc.set(trigger_val as u32);
+            self.registers.cmr.write(CMR::CPCTRG::ResetAndStartOnMatch);
+        }
+
+        // Set the clock source.
+        self.registers.cmr.write(CMR::TCCLKS.val(params.clock as u32));
+
+        // Enable the clock, and ensure it is not disabled.
+        self.registers.ccr.write(CCR::CLKEN::Enable);
+        self.registers.ccr.write(CCR::SWTRG::ResetAndStart);
+
+        // TODO: clean up this mess.
+        // PM should be handling this clock configuration to enable the divided clocks to TC.
+        debug!("state");
+        debug!("CMR ({:#010X}): {:#010X}", &self.registers.cmr as *const _ as usize, self.registers.cmr.get());
+        debug!("val: {}", self.registers.cv.get());
+        unsafe {
+            *((0x400e0000+0x58) as *mut u32) = 0xAA00_0040;
+            *((0x400e0000+0x40) as *mut u32) = 0b01010101;
+        }
+        debug!("PM clock mask: {:#010X}", unsafe { *((0x400e0000+0x40) as usize as *const u32) });
+    }
+
+    fn handle_interrupt(&self) {
+        unimplemented!()
+    }
+
+    pub fn counter_value(&self) -> u16 {
+        self.registers.cv.get() as u16
+    }
+
+    pub fn status(&self) -> u32 {
+        self.registers.sr.get()
+    }
+}
+
+pub struct TimerCounter {
+    block0: [Channel; 3],
+    block1: [Channel; 3],
+}
 
 impl TimerCounter {
-    pub const fn new() -> TimerCounter {
-        TimerCounter {  }
+    pub fn new() -> TimerCounter {
+        TimerCounter {
+            block0: [
+                Channel::new(&TC0_REGISTERS.channel0),
+                Channel::new(&TC0_REGISTERS.channel1),
+                Channel::new(&TC0_REGISTERS.channel2)
+            ],
+            block1: [
+                Channel::new(&TC1_REGISTERS.channel0),
+                Channel::new(&TC1_REGISTERS.channel1),
+                Channel::new(&TC1_REGISTERS.channel2)
+            ]
+        }
+    }
+
+    fn channel(&self, block_no: u8, channel_no: u8) -> &Channel {
+        let block = match block_no {
+            0 => &self.block0,
+            1 => &self.block1,
+            _ => unimplemented!()
+        };
+
+        &block[channel_no as usize]
     }
 
     pub fn configure(
         &self,
+        block_no: u8,
         channel_no: u8,
-        mode: Mode,
-        trigger: Trigger
-    ) -> &'static Channel {
-        let channel = match channel_no {
-            0 => &REGISTERS.channel0,
-            1 => &REGISTERS.channel1,
-            2 => &REGISTERS.channel2,
-            _ => unimplemented!(),
-        };
+        params: &Parameters,
+    ) -> &Channel {
+        let req_clocks = [pm::Clock::PBA(pm::PBAClock::TC0),
+                          pm::Clock::PBA(pm::PBAClock::TC1)];
+        for clock in req_clocks {
+            if !pm::is_clock_enabled(clock) {
+                pm::enable_clock(clock);
+            }
+        }
 
-        channel.configure(mode, trigger);
+        let channel = self.channel(block_no, channel_no);
+        channel.configure(params);
+
         channel
     }
 
-    pub fn handle_interrupt(&self) {
+    pub fn enable_interrupt(&self, line: InterruptLine) {  }
+
+    pub fn handle_interrupt(&self, line: InterruptLine) {
+        debug!("handli");
+        let channel = match line {
+            InterruptLine::TC00 => &self.block0[0],
+            InterruptLine::TC01 => &self.block0[1],
+            InterruptLine::TC02 => &self.block0[2],
+            InterruptLine::TC10 => &self.block1[0],
+            InterruptLine::TC11 => &self.block1[1],
+            InterruptLine::TC12 => &self.block1[2]
+        };
+        channel.handle_interrupt();
     }
 }

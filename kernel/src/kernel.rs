@@ -513,7 +513,7 @@ impl Kernel {
     ) -> ! {
         resources.watchdog().setup();
         loop {
-            self.kernel_loop_operation(resources, chip, ipc, false, capability);
+            self.kernel_loop_operation(resources, chip, ipc, true, capability);
         }
     }
 

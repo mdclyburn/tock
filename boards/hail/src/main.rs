@@ -365,6 +365,14 @@ pub unsafe fn main() {
     )
     .finalize(components::alarm_component_helper!(sam4l::ast::Ast));
 
+    // Timer counter peripheral.
+    use sam4l::tc;
+    let tc_channel = peripherals.tc.configure(0, 0, &tc::Parameters {
+        mode: tc::Mode::Capture,
+        clock: tc::ClockSource::TimerClock2,
+        rc_compare_trigger: Some(65534),
+    });
+
     // FXOS8700CQ accelerometer, device address 0x1e
     let fxos8700_i2c = static_init!(I2CDevice, I2CDevice::new(sensors_i2c, 0x1e));
     let fxos8700 = static_init!(
@@ -520,6 +528,9 @@ pub unsafe fn main() {
 
     let scheduler = components::sched::round_robin::RoundRobinComponent::new(&PROCESSES)
         .finalize(components::rr_component_helper!(NUM_PROCS));
+
+    kernel::debug!("counter at {}", tc_channel.counter_value());
+    kernel::debug!("status is {:08b}", tc_channel.status());
 
     let hail = Hail {
         console,

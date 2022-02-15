@@ -49,6 +49,7 @@ pub struct Sam4lDefaultPeripherals {
     pub i2c2: crate::i2c::I2CHw,
     pub i2c3: crate::i2c::I2CHw,
     pub spi: crate::spi::SpiHw,
+    pub tc: crate::tc::TimerCounter,
     pub trng: crate::trng::Trng<'static>,
     pub usart0: crate::usart::USART<'static>,
     pub usart1: crate::usart::USART<'static>,
@@ -100,6 +101,7 @@ impl Sam4lDefaultPeripherals {
             i2c2: crate::i2c::I2CHw::new_i2c2(pm),
             i2c3: crate::i2c::I2CHw::new_i2c3(pm),
             spi: crate::spi::SpiHw::new(pm),
+            tc: crate::tc::TimerCounter::new(),
             trng: crate::trng::Trng::new(),
             usart0: crate::usart::USART::new_usart0(pm),
             usart1: crate::usart::USART::new_usart1(pm),
@@ -221,6 +223,14 @@ impl InterruptService<Task> for Sam4lDefaultPeripherals {
             nvic::EIC6 => self.eic.handle_interrupt(&crate::eic::Line::Ext6),
             nvic::EIC7 => self.eic.handle_interrupt(&crate::eic::Line::Ext7),
             nvic::EIC8 => self.eic.handle_interrupt(&crate::eic::Line::Ext8),
+
+            nvic::TC00 => self.tc.handle_interrupt(crate::tc::InterruptLine::TC00),
+            nvic::TC01 => self.tc.handle_interrupt(crate::tc::InterruptLine::TC01),
+            nvic::TC02 => self.tc.handle_interrupt(crate::tc::InterruptLine::TC02),
+            nvic::TC10 => self.tc.handle_interrupt(crate::tc::InterruptLine::TC10),
+            nvic::TC11 => self.tc.handle_interrupt(crate::tc::InterruptLine::TC11),
+            nvic::TC12 => self.tc.handle_interrupt(crate::tc::InterruptLine::TC12),
+
             _ => return false,
         }
         true
