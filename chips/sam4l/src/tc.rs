@@ -4,7 +4,8 @@ use core::cell::Cell;
 
 use kernel::debug;
 use kernel::errorcode::ErrorCode;
-use kernel::utilities::cells::NumericCellExt;
+use kernel::hil;
+use kernel::utilities::cells::{NumericCellExt, OptionalCell};
 use kernel::utilities::registers::interfaces::{
     ReadWriteable,
     Readable,
@@ -249,10 +250,48 @@ pub enum ClockSource {
     XC2 = 7
 }
 
-pub struct Parameters {
+#[derive(Copy, Clone)]
+#[repr(u32)]
+pub enum Interrupt {
+    /// When an external trigger has occured (ETRGS).
+    ExternalTrigger = 1 << 7,
+    /// When the RA register loads a value (LDRAS).
+    RALoad = 1 << 5,
+    /// When the RB register loads a value (LDRBS).
+    RBLoad = 1 << 6,
+    /// When an RC compare occurs (CPCS).
+    RCCompare = 1 << 4,
+    /// When an RB compare occurs and the counter is in Waveform mode (CPBS).
+    RBCompare = 1 << 3,
+    /// When an RA compare occurs and the counter is in Waveform mode (CPAS).
+    RACompare = 1 << 2,
+    /// When RA or RB have been loaded at least twice without any read of a corresponding register in Waveform mode (LOVRS).
+    LoadOverrun = 1 << 1,
+    /// When the counter overflows (COVFS).
+    CounterOverflow = 1 << 0,
+}
+
+impl Interrupt {
+    const fn mask(&self) -> u32 {
+        use Interrupt::*;
+        match self {
+            ExternalTrigger => 1 << 7,
+            RALoad => 1 << 5,
+            RBLoad => 1 << 6,
+            RCCompare => 1 << 4,
+            RBCompare => 1 << 3,
+            RACompare => 1 << 2,
+            LoadOverrun => 1 << 1,
+            CounterOverflow => 1 << 0,
+        }
+    }
+}
+
+pub struct Parameters<'a> {
     pub mode: Mode,
     pub clock: ClockSource,
     pub rc_compare_trigger: Option<u16>,
+    pub interrupt_on: &'a [Interrupt],
 }
 
 #[derive(Copy, Clone)]
@@ -267,12 +306,14 @@ pub enum InterruptLine {
 
 pub struct Channel {
     registers: &'static ChannelRegisters,
+    overflow_client: OptionalCell<&'static dyn hil::time::OverflowClient>,
 }
 
 impl Channel {
     const fn new(registers: &'static ChannelRegisters) -> Channel {
         Channel {
-            registers
+            registers,
+            overflow_client: OptionalCell::empty(),
         }
     }
 
@@ -289,12 +330,15 @@ impl Channel {
             self.registers.cmr.write(CMR::CPCTRG::ResetAndStartOnMatch);
         }
 
+        // Enable the interrupts.
+        let mut interrupt_mask: u32 = 0;
+        for source in params.interrupt_on {
+            interrupt_mask |= source.mask();
+        }
+        self.registers.ier.set(interrupt_mask);
+
         // Set the clock source.
         self.registers.cmr.write(CMR::TCCLKS.val(params.clock as u32));
-
-        // Enable the clock, and ensure it is not disabled.
-        self.registers.ccr.write(CCR::CLKEN::Enable);
-        self.registers.ccr.write(CCR::SWTRG::ResetAndStart);
 
         // TODO: clean up this mess.
         // PM should be handling this clock configuration to enable the divided clocks to TC.
@@ -305,11 +349,22 @@ impl Channel {
             *((0x400e0000+0x58) as *mut u32) = 0xAA00_0040;
             *((0x400e0000+0x40) as *mut u32) = 0b01010101;
         }
-        debug!("PM clock mask: {:#010X}", unsafe { *((0x400e0000+0x40) as usize as *const u32) });
+        debug!("PBASEL: {:#010X}", unsafe { *((0x400e0000+0x0c) as usize as *const u32) });
+        debug!("PBADIVMASK: {:#010X}", unsafe { *((0x400e0000+0x40) as usize as *const u32) });
     }
 
     fn handle_interrupt(&self) {
-        unimplemented!()
+        // Read the status register, this will clear the interrupt.
+        // Only look at interrupts that are enabled.
+        let mut status = self.registers.sr.get() & self.registers.imr.get();
+
+        // Service each pending interrupt reason.
+        // Counter overflow.
+        if SR::COVFS.is_set(status) {
+            if let Some(client) = self.overflow_client.extract() {
+                client.overflow();
+            }
+        }
     }
 
     pub fn counter_value(&self) -> u16 {
@@ -318,6 +373,43 @@ impl Channel {
 
     pub fn status(&self) -> u32 {
         self.registers.sr.get()
+    }
+}
+
+impl hil::time::Time for Channel {
+    type Frequency = hil::time::Freq375KHz;
+    type Ticks = hil::time::Ticks16;
+
+    fn now(&self) -> Self::Ticks {
+        Self::Ticks::from(self.registers.cv.get())
+    }
+}
+
+impl hil::time::Counter<'static> for Channel {
+    fn set_overflow_client(&self, client: &'static dyn hil::time::OverflowClient) {
+        self.overflow_client.set(client);
+    }
+
+    fn start(&self) -> Result<(), ErrorCode> {
+        // Enable the clock, and ensure it is not disabled.
+        self.registers.ccr.write(CCR::CLKEN::Enable);
+        self.registers.ccr.write(CCR::SWTRG::ResetAndStart);
+
+        Ok(())
+    }
+
+    fn stop(&self) -> Result<(), ErrorCode> {
+        self.registers.ccr.write(CCR::CLKDIS::Disable);
+        Ok(())
+    }
+
+    fn reset(&self) -> Result<(), ErrorCode> {
+        self.registers.ccr.write(CCR::SWTRG::ResetAndStart);
+        Ok(())
+    }
+
+    fn is_running(&self) -> bool {
+        self.registers.sr.read(SR::CLKSTA) == 1
     }
 }
 
@@ -375,7 +467,6 @@ impl TimerCounter {
     pub fn enable_interrupt(&self, line: InterruptLine) {  }
 
     pub fn handle_interrupt(&self, line: InterruptLine) {
-        debug!("handli");
         let channel = match line {
             InterruptLine::TC00 => &self.block0[0],
             InterruptLine::TC01 => &self.block0[1],
