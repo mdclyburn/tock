@@ -18,14 +18,14 @@ In the performance data format:
 use kernel::hil::uart::Transmit;
 
 /* Sized to accomodate the following payloads:
-- header: u8 + time upper mask: u8 + time lower mask: u8               =  9 bytes
+- header: u8 + time upper mask: u8 + time lower mask: u8               =  3 bytes
 - header: u8 + time upper mask: u32 + time lower mask: u32 + data: u32 = 13 bytes
  */
 /// Size required to send the the largest counter payload.
 pub const TX_BUFFER_LEN: usize = 13;
 
 const PAYLOAD_PERF_LEN: usize = 13;
-const PAYLOAD_SIGNAL_LEN: usize = 9;
+const PAYLOAD_SIGNAL_LEN: usize = 3;
 
 #[derive(Copy, Clone)]
 pub enum Message {

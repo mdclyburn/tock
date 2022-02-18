@@ -376,6 +376,14 @@ pub unsafe fn main() {
         interrupt_on: &[tc::Interrupt::CounterOverflow],
     });
     peripherals.usart2.set_mode(sam4l::usart::UsartMode::Uart);
+    use hil::uart::Configure;
+    peripherals.usart2.configure(hil::uart::Parameters {
+        baud_rate: 115200,
+        width: hil::uart::Width::Eight,
+        parity: hil::uart::Parity::Even,
+        stop_bits: hil::uart::StopBits::One,
+        hw_flow_control: false,
+    }).unwrap();
 
     let perf_counter = static_init!(
         PerformanceCounter<hil::time::Freq375KHz, hil::time::Ticks16>,
