@@ -10,4 +10,5 @@ components = { path = "../components" }
 cortexm4 = { path = "../../arch/cortex-m4" }
 capsules = { path = "../../capsules" }
 kernel = { path = "../../kernel" }
+perf = { path = "../../perf" }
 sam4l = { path = "../../chips/sam4l" }

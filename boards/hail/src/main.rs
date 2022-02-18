@@ -22,9 +22,11 @@ use kernel::hil::Controller;
 use kernel::platform::{KernelResources, SyscallDriverLookup};
 use kernel::scheduler::round_robin::RoundRobinSched;
 #[allow(unused_imports)]
-use kernel::{create_capability, debug, debug_gpio, static_init};
+use kernel::{create_capability, debug, debug_gpio, static_init, static_buf};
 use sam4l::adc::Channel;
 use sam4l::chip::Sam4lDefaultPeripherals;
+
+use perf::PerformanceCounter;
 
 /// Support routines for debugging I/O.
 ///
@@ -369,9 +371,19 @@ pub unsafe fn main() {
     use sam4l::tc;
     let tc_channel = peripherals.tc.configure(0, 0, &tc::Parameters {
         mode: tc::Mode::Capture,
-        clock: tc::ClockSource::TimerClock2,
-        rc_compare_trigger: Some(65534),
+        clock: tc::ClockSource::TimerClock5,
+        rc_compare_trigger: None,
+        interrupt_on: &[tc::Interrupt::CounterOverflow],
     });
+    peripherals.usart2.set_mode(sam4l::usart::UsartMode::Uart);
+
+    let perf_counter = static_init!(
+        PerformanceCounter<hil::time::Freq375KHz, hil::time::Ticks16>,
+        PerformanceCounter::new(
+            tc_channel,
+            &peripherals.usart2,
+            static_buf!([u8; perf::TX_BUFFER_LEN]).initialize([0; perf::TX_BUFFER_LEN])));
+    perf_counter.start();
 
     // FXOS8700CQ accelerometer, device address 0x1e
     let fxos8700_i2c = static_init!(I2CDevice, I2CDevice::new(sensors_i2c, 0x1e));

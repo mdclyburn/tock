@@ -18,7 +18,7 @@ In the performance data format:
 use kernel::hil::uart::Transmit;
 
 /* Sized to accomodate the following payloads:
-- header: u8 + time upper mask: u32 + time lower mask: u32             =  9 bytes
+- header: u8 + time upper mask: u8 + time lower mask: u8               =  9 bytes
 - header: u8 + time upper mask: u32 + time lower mask: u32 + data: u32 = 13 bytes
  */
 /// Size required to send the the largest counter payload.
@@ -40,6 +40,14 @@ pub fn put_header(out_buffer: &mut [u8], message_type: Message) {
         Message::Start => 0,
         Message::PerformanceData(trace_id) =>
             0b1000_0000 | ((trace_id & 0b111) << 3),
+    }
+}
+
+pub fn put_signal(out_buffer: &mut [u8], time_upper_bits: u8, time_lower_bits: u8) {
+    let mut i = 0;
+    for field in [time_upper_bits, time_lower_bits] {
+        out_buffer[i] = field;
+        i += 1;
     }
 }
 

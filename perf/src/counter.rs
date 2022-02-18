@@ -80,6 +80,13 @@ impl<F: Frequency, T: Ticks> PerformanceCounter<F, T> {
         self.tx.set_transmit_client(self);
     }
 
+    pub fn start(&'static self) {
+        let buffer = self.tx_buffer.take().unwrap();
+        proto::put_header(&mut buffer[0..1], Message::Start);
+        proto::put_signal(&mut buffer[1..], 32, 16);
+        proto::send(self.tx, buffer);
+    }
+
     fn account(&'static self, id: u8, val: u32) {
         // Grab the current timestamp.
         let (time_upper, time_lower) = (
