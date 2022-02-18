@@ -45,7 +45,7 @@ pub struct PerformanceCounter<F: 'static + Frequency, T: 'static + Ticks> {
     counter: &'static dyn Counter<'static, Frequency = F, Ticks = T>,
     stat: OptionalCell<Stat>,
     tx: &'static dyn Transmit<'static>,
-    tx_buffer: TakeCell<'static, [u8; proto::TX_BUFFER_LEN]>,
+    tx_buffer: TakeCell<'static, [u8]>,
     stats: MapCell<[Stat; 8]>,
 }
 
@@ -135,5 +135,6 @@ impl<F: Frequency, T: Ticks> TransmitClient for PerformanceCounter<F, T> {
         tx_len: usize,
         rval: Result<(), ErrorCode>)
     {
+        self.tx_buffer.put(Some(tx_buffer));
     }
 }
