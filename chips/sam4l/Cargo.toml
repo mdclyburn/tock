@@ -7,3 +7,4 @@ edition = "2021"
 [dependencies]
 cortexm4 = { path = "../../arch/cortex-m4" }
 kernel = { path = "../../kernel" }
+perf = { path = "../../perf" }
