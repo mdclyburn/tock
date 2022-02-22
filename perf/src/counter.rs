@@ -41,7 +41,7 @@ impl Stat {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq)]
 enum CollectionState {
     Collecting,
     Freezing(u8),
@@ -141,13 +141,15 @@ impl<F: Frequency, T: Ticks> PerformanceCounter<F, T> {
         }
     }
 
-    fn send(&'static self) {
+    fn send(&self) {
         // If the transmit buffer is present, then we can begin transfer immediately.
         // When the UART is still sending the previous payload we cannot start a new send.
         if let Some(tx_buffer) = self.tx_buffer.take() {
             let len = self.stats.map(|stats| serialize_stats(tx_buffer, self.t_start.get(), &*stats))
                 .unwrap();
             self.tx.transmit_buffer(tx_buffer, len);
+
+            // Reset all stats and the the starting reference for the next round of stat collection.
             self.stats.map(|stats| {
                 for s in stats {
                     s.reset();
@@ -177,7 +179,11 @@ impl<F: Frequency, T: Ticks> TransmitClient for PerformanceCounter<F, T> {
         rval: Result<(), ErrorCode>)
     {
         self.tx_buffer.put(Some(tx_buffer));
-        // TODO: start any waiting transmission.
+
+        // Start transmitting stats waiting to be sent.
+        if self.state.get() == CollectionState::Waiting {
+            self.send();
+        }
     }
 }
 
