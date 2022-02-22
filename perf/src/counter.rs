@@ -10,7 +10,6 @@ use kernel::utilities::cells::{MapCell, OptionalCell, TakeCell};
 struct Stat {
     acc: u32,
     t_latest: u64,
-    is_frozen: bool,
 }
 
 impl Stat {
@@ -18,24 +17,16 @@ impl Stat {
         Stat {
             acc: 0,
             t_latest: 0,
-            is_frozen: false,
         }
-    }
-
-    fn freeze(&mut self) {
-        self.is_frozen = true;
     }
 
     fn reset(&mut self) {
         self.acc = 0;
-        self.is_frozen = false;
     }
 
     fn account(&mut self, time: u64, val: u32) {
-        if !self.is_frozen {
-            self.acc += val;
-            self.t_latest = time;
-        }
+        self.acc += val;
+        self.t_latest = time;
     }
 }
 
