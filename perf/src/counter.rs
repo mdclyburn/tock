@@ -93,18 +93,18 @@ impl<F: Frequency, T: Ticks> PerformanceCounter<F, T> {
         self.tx.set_transmit_client(self);
     }
 
-    pub fn start(&'static self) {
+    pub fn start(&self) {
         let buffer = self.tx_buffer.take().unwrap();
         proto::put_header(&mut buffer[0..1], Message::Start);
         proto::put_signal(&mut buffer[1..], 32, 16);
         proto::send(self.tx, buffer);
     }
 
-    pub fn freeze(&'static self) {
+    pub fn freeze(&self) {
         self.state.set(CollectionState::Freezing(0));
     }
 
-    fn account(&'static self, id: u8, val: u32) {
+    fn account(&self, id: u8, val: u32) {
         // Grab the current timestamp.
         let now = self.counter.now().into_u32() as u64
             | ((self.overflow_count.get() as u64) << 32);
