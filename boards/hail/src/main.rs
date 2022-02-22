@@ -386,11 +386,12 @@ pub unsafe fn main() {
     }).unwrap();
 
     let perf_counter = static_init!(
-        PerformanceCounter<hil::time::Freq375KHz, hil::time::Ticks16>,
+        PerformanceCounter<hil::time::Freq16KHz>,
         PerformanceCounter::new(
-            tc_channel,
+            &peripherals.ast,
+            2,
             &peripherals.usart2,
-            static_buf!([u8; perf::TX_BUFFER_LEN]).initialize([0; perf::TX_BUFFER_LEN])));
+            static_buf!([u8; perf::TX_BUFFER_BYTE_LEN]).initialize([0; perf::TX_BUFFER_BYTE_LEN])));
     perf_counter.start();
 
     // FXOS8700CQ accelerometer, device address 0x1e

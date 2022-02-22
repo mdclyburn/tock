@@ -1,12 +1,9 @@
 use core::cell::Cell;
 
 use kernel::errorcode::ErrorCode;
-use kernel::hil::time::{Counter, Frequency, Ticks, OverflowClient};
+use kernel::hil::time::{Counter, Frequency, Ticks, Ticks32, OverflowClient};
 use kernel::hil::uart::{Transmit, TransmitClient};
 use kernel::utilities::cells::{MapCell, OptionalCell, TakeCell};
-
-use crate::proto;
-use crate::proto::Message;
 
 #[derive(Copy, Clone)]
 struct Stat {
@@ -43,14 +40,15 @@ impl Stat {
 
 #[derive(Copy, Clone, PartialEq)]
 enum CollectionState {
+    Uninitialized,
     Collecting,
     Freezing(u8),
     Waiting,
 }
 
-pub struct PerformanceCounter<F: 'static + Frequency, T: 'static + Ticks> {
+pub struct PerformanceCounter<F: 'static + Frequency> {
     overflow_count: Cell<u32>,
-    counter: &'static dyn Counter<'static, Frequency = F, Ticks = T>,
+    counter: &'static dyn Counter<'static, Frequency = F, Ticks = Ticks32>,
     state: Cell<CollectionState>,
     no_waypoints: u8,
     tx: &'static dyn Transmit<'static>,
@@ -59,13 +57,13 @@ pub struct PerformanceCounter<F: 'static + Frequency, T: 'static + Ticks> {
     t_start: Cell<u64>,
 }
 
-impl<F: Frequency, T: Ticks> PerformanceCounter<F, T> {
+impl<F: Frequency> PerformanceCounter<F> {
     pub fn new(
-        counter: &'static dyn Counter<Frequency = F, Ticks = T>,
+        counter: &'static dyn Counter<Frequency = F, Ticks = Ticks32>,
         no_waypoints: u8,
         tx: &'static dyn Transmit<'static>,
-        tx_buffer: &'static mut [u8; proto::TX_BUFFER_LEN],
-    ) -> PerformanceCounter<F, T>
+        tx_buffer: &'static mut [u8; TX_BUFFER_BYTE_LEN],
+    ) -> PerformanceCounter<F>
     {
         PerformanceCounter {
             overflow_count: Cell::new(0),
@@ -94,13 +92,17 @@ impl<F: Frequency, T: Ticks> PerformanceCounter<F, T> {
     }
 
     pub fn start(&self) {
+        // Grab the transmission buffer.
+        // This should definitely be here, and start() should only run once;
+        // before any transmissions have begun.
         let buffer = self.tx_buffer.take().unwrap();
-        proto::put_header(&mut buffer[0..1], Message::Start);
-        proto::put_signal(&mut buffer[1..], 32, 16);
-        proto::send(self.tx, buffer);
+        let len = serialize_init(buffer, F::frequency());
+        self.tx.transmit_buffer(buffer, len);
     }
 
     pub fn freeze(&self) {
+        // We must be in the collecting state to transition to the freeze.
+        if self.state.get() != CollectionState::Collecting { panic!(); }
         self.state.set(CollectionState::Freezing(0));
     }
 
@@ -112,7 +114,12 @@ impl<F: Frequency, T: Ticks> PerformanceCounter<F, T> {
         // Accumulate the quantity in the stat counter.
         // We must either be in the Collecting state or the freeze must not have reached the given `id`.
         match self.state.get() {
-            CollectionState::Collecting => { self.stats.map(|s| s[id as usize].account(now, val)); },
+            // It is fine to collect stats when uninitialized,
+            // just not OK to try sending them when initialization has not occured.
+            CollectionState::Uninitialized
+                | CollectionState::Collecting => {
+                    self.stats.map(|s| s[id as usize].account(now, val));
+                },
 
             CollectionState::Freezing(frozen_high) => {
                 self.stats.map(|s| s[id as usize].account(now, val));
@@ -137,6 +144,8 @@ impl<F: Frequency, T: Ticks> PerformanceCounter<F, T> {
             // There is nothing we can do to hold this new data.
             // The current set of stats are waiting for serialization to an outstanding buffer.
             // This is the "drop the data path".
+            // A better solution might be to use two buffers (stats and [u8]),
+            // but this comes at the cost of complexity.
             CollectionState::Waiting => {  }
         }
     }
@@ -165,27 +174,41 @@ impl<F: Frequency, T: Ticks> PerformanceCounter<F, T> {
     }
 }
 
-impl<F: 'static + Frequency, T: 'static + Ticks> OverflowClient for PerformanceCounter<F, T> {
+impl<F: 'static + Frequency> OverflowClient for PerformanceCounter<F> {
     fn overflow(&self) {
         self.overflow_count.set(self.overflow_count.get()+1);
     }
 }
 
-impl<F: Frequency, T: Ticks> TransmitClient for PerformanceCounter<F, T> {
+impl<F: Frequency> TransmitClient for PerformanceCounter<F> {
     fn transmitted_buffer(
         &self,
         tx_buffer: &'static mut [u8],
         tx_len: usize,
         rval: Result<(), ErrorCode>)
     {
+        // Put the buffer back.
         self.tx_buffer.put(Some(tx_buffer));
 
-        // Start transmitting stats waiting to be sent.
+        // Trigger another transmission if another set of stats are waiting to be sent.
         if self.state.get() == CollectionState::Waiting {
             self.send();
         }
+
+        // System is free to start collecting samples now.
+        // The stats structures are guaranteed to be free at this point.
+        self.state.set(CollectionState::Collecting);
     }
 }
+
+/* Initialization payload format
+
+Header, 1 byte
+B7 - payload type bit, set to 0
+
+Counter frequency, 4 bytes
+B31:B0 - frequency of the underlying counter
+ */
 
 /* Performance data payload format
 
@@ -199,6 +222,28 @@ Performance data, 12 bytes
 B95:B32 - end time for data collection
 B31:B0  - stat value
  */
+
+pub const TX_BUFFER_BYTE_LEN: usize =
+    // Header
+    1
+    // Start time
+    + 8
+    // Stats
+    + (8 * (8 + 4));
+
+fn serialize_init(out_buffer: &mut [u8], counter_freq: u32) -> usize {
+    // Write the header.
+    out_buffer[0] = 0;
+
+    let mut b_no = 1;
+
+    // Write the counter frequency.
+    serialize_u32(&mut out_buffer[1..], counter_freq);
+    b_no += 4;
+
+    b_no
+}
+
 fn serialize_stats(out_buffer: &mut [u8], t0: u64, stats: &[Stat]) -> usize {
     // Write the header.
     out_buffer[0] = 1 << 7;
