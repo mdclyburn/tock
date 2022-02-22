@@ -5,6 +5,7 @@ use kernel::hil::time::{Counter, Frequency, Ticks, Ticks32, OverflowClient};
 use kernel::hil::uart::{Transmit, TransmitClient};
 use kernel::utilities::cells::{MapCell, OptionalCell, TakeCell};
 
+/// Container for performance data.
 #[derive(Copy, Clone)]
 struct Stat {
     acc: u32,
@@ -38,11 +39,16 @@ impl Stat {
     }
 }
 
+/// FSM states for stat collection.
 #[derive(Copy, Clone, PartialEq)]
 enum CollectionState {
+    /// Performance counter is not completely initialized.
     Uninitialized,
+    /// Collecting performance data from trace points.
     Collecting,
+    /// Selectively collecting performance data from unfrozen trace points, rejecting others.
     Freezing(u8),
+    /// Unable to collect stat information due to TX buffer being in-flight.
     Waiting,
 }
 
@@ -58,6 +64,7 @@ pub struct PerformanceCounter<F: 'static + Frequency> {
 }
 
 impl<F: Frequency> PerformanceCounter<F> {
+    /// Create a performance counting instance.
     pub fn new(
         counter: &'static dyn Counter<Frequency = F, Ticks = Ticks32>,
         no_waypoints: u8,
@@ -86,11 +93,12 @@ impl<F: Frequency> PerformanceCounter<F> {
         }
     }
 
-    pub fn configure(&'static self) {
+    fn configure(&'static self) {
         self.counter.set_overflow_client(self);
         self.tx.set_transmit_client(self);
     }
 
+    /// Perform the initialization step, triggering a transfer to the host.
     pub fn start(&self) {
         // Grab the transmission buffer.
         // This should definitely be here, and start() should only run once;
@@ -100,13 +108,15 @@ impl<F: Frequency> PerformanceCounter<F> {
         self.tx.transmit_buffer(buffer, len);
     }
 
+    /// Begin the freezing process, aggregating stats to send to the test host.
     pub fn freeze(&self) {
         // We must be in the collecting state to transition to the freeze.
         if self.state.get() != CollectionState::Collecting { panic!(); }
         self.state.set(CollectionState::Freezing(0));
     }
 
-    fn account(&self, id: u8, val: u32) {
+    /// Accumulate data in a stat counter.
+    pub fn account(&self, id: u8, val: u32) {
         // Grab the current timestamp.
         let now = self.counter.now().into_u32() as u64
             | ((self.overflow_count.get() as u64) << 32);
@@ -150,6 +160,7 @@ impl<F: Frequency> PerformanceCounter<F> {
         }
     }
 
+    /// Send stats to the host.
     fn send(&self) {
         // If the transmit buffer is present, then we can begin transfer immediately.
         // When the UART is still sending the previous payload we cannot start a new send.
@@ -175,6 +186,7 @@ impl<F: Frequency> PerformanceCounter<F> {
 }
 
 impl<F: 'static + Frequency> OverflowClient for PerformanceCounter<F> {
+    /// Count the overflows that occur to widen the time range.
     fn overflow(&self) {
         self.overflow_count.set(self.overflow_count.get()+1);
     }
