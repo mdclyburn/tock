@@ -3,32 +3,10 @@ use core::cell::Cell;
 use kernel::errorcode::ErrorCode;
 use kernel::hil::time::{Counter, Frequency, Ticks, Ticks32, OverflowClient};
 use kernel::hil::uart::{Transmit, TransmitClient};
-use kernel::utilities::cells::{MapCell, OptionalCell, TakeCell};
+use kernel::utilities::cells::{MapCell, TakeCell};
 
-/// Container for performance data.
-#[derive(Copy, Clone)]
-struct Stat {
-    acc: u32,
-    t_latest: u64,
-}
-
-impl Stat {
-    fn new() -> Stat {
-        Stat {
-            acc: 0,
-            t_latest: 0,
-        }
-    }
-
-    fn reset(&mut self) {
-        self.acc = 0;
-    }
-
-    fn account(&mut self, time: u64, val: u32) {
-        self.acc += val;
-        self.t_latest = time;
-    }
-}
+use crate::proto;
+use crate::proto::Stat;
 
 /// FSM states for stat collection.
 #[derive(Copy, Clone, PartialEq)]
@@ -60,7 +38,7 @@ impl<F: Frequency> PerformanceCounter<F> {
         counter: &'static dyn Counter<Frequency = F, Ticks = Ticks32>,
         no_waypoints: u8,
         tx: &'static dyn Transmit<'static>,
-        tx_buffer: &'static mut [u8; TX_BUFFER_BYTE_LEN],
+        tx_buffer: &'static mut [u8; proto::TX_BUFFER_BYTE_LEN],
     ) -> PerformanceCounter<F>
     {
         PerformanceCounter {
@@ -95,7 +73,7 @@ impl<F: Frequency> PerformanceCounter<F> {
         // This should definitely be here, and start() should only run once;
         // before any transmissions have begun.
         let buffer = self.tx_buffer.take().unwrap();
-        let len = serialize_init(buffer, F::frequency());
+        let len = proto::serialize_init(buffer, F::frequency());
         self.tx.transmit_buffer(buffer, len);
     }
 
@@ -103,51 +81,23 @@ impl<F: Frequency> PerformanceCounter<F> {
     pub fn freeze(&self) {
         // We must be in the collecting state to transition to the freeze.
         if self.state.get() != CollectionState::Collecting { panic!(); }
-        self.state.set(CollectionState::Freezing(0));
-    }
 
-    /// Accumulate data in a stat counter.
-    pub fn account(&self, id: u8, val: u32) {
-        // Grab the current timestamp.
-        let now = self.counter.now().into_u32() as u64
-            | ((self.overflow_count.get() as u64) << 32);
+        // Find out how far down the sequence we can freeze stats.
+        let freeze_up_to = self.stats.map(|stats| {
+            let target = stats[0].accumulated();
+            let mut i: u8 = 0;
+            while stats[i as usize].accumulated() == target && i < self.no_waypoints { i += 1; }
 
-        // Accumulate the quantity in the stat counter.
-        // We must either be in the Collecting state or the freeze must not have reached the given `id`.
-        match self.state.get() {
-            // It is fine to collect stats when uninitialized,
-            // just not OK to try sending them when initialization has not occured.
-            CollectionState::Uninitialized
-                | CollectionState::Collecting => {
-                    self.stats.map(|s| s[id as usize].account(now, val));
-                },
+            i - 1 // Invariant: i >= 1
+        }).unwrap();
 
-            CollectionState::Freezing(frozen_high) => {
-                self.stats.map(|s| s[id as usize].account(now, val));
-                // Decide if we can freeze this stat counter.
-                // It must be the next counter in the sequence
-                // and have reached the amount of data in the previous counter.
-                let (is_next, saturated) = (
-                    frozen_high + 1 == id,
-                    self.stats.map(|s| s[id as usize].acc == s[frozen_high as usize].acc)
-                        .unwrap()
-                );
-
-                if is_next && saturated {
-                    self.state.set(CollectionState::Freezing(id));
-                    // Start a transmission once we have frozen all counters.
-                    if id == self.no_waypoints - 1 {
-                        self.send();
-                    }
-                }
-            },
-
-            // There is nothing we can do to hold this new data.
-            // The current set of stats are waiting for serialization to an outstanding buffer.
-            // This is the "drop the data path".
-            // A better solution might be to use two buffers (stats and [u8]),
-            // but this comes at the cost of complexity.
-            CollectionState::Waiting => {  }
+        // If we are unable to freeze all stats up to self.no_waypoints,
+        // then we only set the state to Freezing(index of highest frozen stat)
+        // and do not trigger a transmission.
+        if freeze_up_to == self.no_waypoints {
+            self.send()
+        } else {
+            self.state.set(CollectionState::Freezing(freeze_up_to));
         }
     }
 
@@ -156,7 +106,7 @@ impl<F: Frequency> PerformanceCounter<F> {
         // If the transmit buffer is present, then we can begin transfer immediately.
         // When the UART is still sending the previous payload we cannot start a new send.
         if let Some(tx_buffer) = self.tx_buffer.take() {
-            let len = self.stats.map(|stats| serialize_stats(tx_buffer, self.t_start.get(), &*stats))
+            let len = self.stats.map(|stats| proto::serialize_stats(tx_buffer, self.t_start.get(), &*stats))
                 .unwrap();
             self.tx.transmit_buffer(tx_buffer, len);
 
@@ -204,79 +154,77 @@ impl<F: Frequency> TransmitClient for PerformanceCounter<F> {
     }
 }
 
-/* Initialization payload format
-
-Header, 1 byte
-B7 - payload type bit, set to 0
-
-Counter frequency, 4 bytes
-B31:B0 - frequency of the underlying counter
- */
-
-/* Performance data payload format
-
-Header, 1 byte
-B7 - payload type bit, set to 1
-
-Start time, 8 bytes
-B63:B0 - implementation-specific, up-to-64-bit counter value
-
-Performance data, 12 bytes
-B95:B32 - end time for data collection
-B31:B0  - stat value
- */
-
-pub const TX_BUFFER_BYTE_LEN: usize =
-    // Header
-    1
-    // Start time
-    + 8
-    // Stats
-    + (8 * (8 + 4));
-
-fn serialize_init(out_buffer: &mut [u8], counter_freq: u32) -> usize {
-    // Write the header.
-    out_buffer[0] = 0;
-
-    let mut b_no = 1;
-
-    // Write the counter frequency.
-    serialize_u32(&mut out_buffer[1..], counter_freq);
-    b_no += 4;
-
-    b_no
+pub trait Accumulate {
+    fn account(&self, id: u8, val: u32);
 }
 
-fn serialize_stats(out_buffer: &mut [u8], t0: u64, stats: &[Stat]) -> usize {
-    // Write the header.
-    out_buffer[0] = 1 << 7;
+impl<F: Frequency> Accumulate for PerformanceCounter<F> {
+    fn account(&self, id: u8, val: u32) {
+        // Grab the current timestamp.
+        let now = self.counter.now().into_u32() as u64
+            | ((self.overflow_count.get() as u64) << 32);
 
-    let mut b_no = 1;
+        // Accumulate the quantity in the stat counter.
+        // We must either be in the Collecting state or the freeze must not have reached the given `id`.
+        match self.state.get() {
+            // It is fine to collect stats when uninitialized,
+            // just not OK to try sending them when initialization has not occured.
+            CollectionState::Uninitialized
+                | CollectionState::Collecting => {
+                    self.stats.map(|s| s[id as usize].account(now, val));
+                },
 
-    // Write the start time.
-    serialize_u64(&mut out_buffer[b_no..b_no+8], t0);
-    b_no += 8;
+            CollectionState::Freezing(frozen_high) => {
+                self.stats.map(|s| s[id as usize].account(now, val));
+                // Decide if we can freeze this stat counter.
+                // It must be the next counter in the sequence
+                // and have reached the amount of data in the previous counter.
+                let (is_next, saturated) = (
+                    frozen_high + 1 == id,
+                    self.stats.map(|s| s[id as usize].accumulated() == s[frozen_high as usize].accumulated())
+                        .unwrap()
+                );
 
-    // Write each performance stat.
-    for stat in stats {
-        serialize_u64(&mut out_buffer[b_no..b_no+8], stat.t_latest);
-        serialize_u32(&mut out_buffer[b_no+8..b_no+12], stat.acc);
-        b_no += 8 + 4;
-    }
+                if is_next && saturated {
+                    self.state.set(CollectionState::Freezing(id));
+                    // Start a transmission once we have frozen all counters.
+                    if id == self.no_waypoints - 1 {
+                        self.send();
+                    }
+                }
+            },
 
-    b_no
-}
-
-#[inline]
-fn serialize_u64(out_buffer: &mut [u8], val: u64) {
-    for i in 0..8 {
-        out_buffer[i] = ((val >> (8 * i)) & 0xFF) as u8;
+            // There is nothing we can do to hold this new data.
+            // The current set of stats are waiting for serialization to an outstanding buffer.
+            // This is the "drop the data path".
+            // A better solution might be to use two buffers (stats and [u8]),
+            // but this comes at the cost of complexity.
+            CollectionState::Waiting => {  }
+        }
     }
 }
 
-#[inline]
-fn serialize_u32(out_buffer: &mut [u8], val: u32) {
-    for i in 0..4 {
-        out_buffer[i] = ((val >> (8 * i)) & 0xFF) as u8;
+pub static mut INSTANCE: Option<&'static dyn Accumulate> = None;
+
+pub unsafe fn use_instance(instance: &'static dyn Accumulate) {
+    if INSTANCE.is_some() {
+        // Double-set, not good.
+        panic!()
+    } else {
+        INSTANCE = Some(instance)
     }
+}
+
+#[macro_export]
+macro_rules! count {
+    ($id:expr, $val:expr, $check:expr) => {{
+        let check = ($check);
+        let id = ($id);
+        let val = ($val);
+
+        if check {
+            let instance = unsafe { perf::INSTANCE.unwrap() };
+            instance.account(id, val);
+        }
+    }}
 }
