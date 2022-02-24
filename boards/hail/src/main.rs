@@ -389,11 +389,11 @@ pub unsafe fn main() {
         PerformanceCounter<hil::time::Freq16KHz>,
         PerformanceCounter::new(
             &peripherals.ast,
-            2,
+            1,
             &peripherals.usart2,
             static_buf!([u8; perf::TX_BUFFER_BYTE_LEN]).initialize([0; perf::TX_BUFFER_BYTE_LEN])));
+    perf::use_instance(perf_counter);
     perf_counter.start();
-    perf::count!(0, 5, { 1 > 2 });
 
     // FXOS8700CQ accelerometer, device address 0x1e
     let fxos8700_i2c = static_init!(I2CDevice, I2CDevice::new(sensors_i2c, 0x1e));

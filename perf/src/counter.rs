@@ -68,37 +68,14 @@ impl<F: Frequency> PerformanceCounter<F> {
     }
 
     /// Perform the initialization step, triggering a transfer to the host.
-    pub fn start(&self) {
+    pub fn start(&'static self) {
+        self.configure();
         // Grab the transmission buffer.
         // This should definitely be here, and start() should only run once;
         // before any transmissions have begun.
         let buffer = self.tx_buffer.take().unwrap();
         let len = proto::serialize_init(buffer, F::frequency());
         self.tx.transmit_buffer(buffer, len);
-    }
-
-    /// Begin the freezing process, aggregating stats to send to the test host.
-    pub fn freeze(&self) {
-        // We must be in the collecting state to transition to the freeze.
-        if self.state.get() != CollectionState::Collecting { panic!(); }
-
-        // Find out how far down the sequence we can freeze stats.
-        let freeze_up_to = self.stats.map(|stats| {
-            let target = stats[0].accumulated();
-            let mut i: u8 = 0;
-            while stats[i as usize].accumulated() == target && i < self.no_waypoints { i += 1; }
-
-            i - 1 // Invariant: i >= 1
-        }).unwrap();
-
-        // If we are unable to freeze all stats up to self.no_waypoints,
-        // then we only set the state to Freezing(index of highest frozen stat)
-        // and do not trigger a transmission.
-        if freeze_up_to == self.no_waypoints {
-            self.send()
-        } else {
-            self.state.set(CollectionState::Freezing(freeze_up_to));
-        }
     }
 
     /// Send stats to the host.
@@ -156,6 +133,8 @@ impl<F: Frequency> TransmitClient for PerformanceCounter<F> {
 
 pub trait Accumulate {
     fn account(&self, id: u8, val: u32);
+
+    fn freeze(&self);
 }
 
 impl<F: Frequency> Accumulate for PerformanceCounter<F> {
@@ -202,6 +181,33 @@ impl<F: Frequency> Accumulate for PerformanceCounter<F> {
             CollectionState::Waiting => {  }
         }
     }
+
+    /// Begin the freezing process, aggregating stats to send to the test host.
+    fn freeze(&self) {
+        // We must be in the collecting state to transition to the freeze.
+        // And if we are already freezing, there is no need to do this.
+        if self.state.get() != CollectionState::Collecting {
+            return;
+        }
+
+        // Find out how far down the sequence we can freeze stats.
+        let highest_frozen = self.stats.map(|stats| {
+            let target = stats[0].accumulated();
+            let mut i: u8 = 0;
+            while stats[i as usize].accumulated() == target && i < self.no_waypoints { i += 1; }
+
+            i - 1 // Invariant: i >= 1
+        }).unwrap();
+
+        // If we are unable to freeze all stats up to self.no_waypoints,
+        // then we only set the state to Freezing(index of highest frozen stat)
+        // and do not trigger a transmission.
+        if highest_frozen + 1 == self.no_waypoints {
+            self.send()
+        } else {
+            self.state.set(CollectionState::Freezing(highest_frozen))
+        }
+    }
 }
 
 pub static mut INSTANCE: Option<&'static dyn Accumulate> = None;
@@ -217,6 +223,13 @@ pub unsafe fn use_instance(instance: &'static dyn Accumulate) {
 
 #[macro_export]
 macro_rules! count {
+    ($id:expr, $val:expr) => {{
+        let id = ($id);
+        let val = ($val);
+        let instance = unsafe { perf::INSTANCE.unwrap() };
+        instance.account(id, val);
+    }};
+
     ($id:expr, $val:expr, $check:expr) => {{
         let check = ($check);
         let id = ($id);
@@ -225,6 +238,21 @@ macro_rules! count {
         if check {
             let instance = unsafe { perf::INSTANCE.unwrap() };
             instance.account(id, val);
+        }
+    }}
+}
+
+#[macro_export]
+macro_rules! freeze {
+    () => {{
+        let instance = unsafe { perf::INSTANCE.unwrap() };
+        instance.freeze();
+    }};
+
+    ($check:expr) => {{
+        if ($check) {
+            let instance = unsafe { perf::INSTANCE.unwrap() };
+            instance.freeze();
         }
     }}
 }
