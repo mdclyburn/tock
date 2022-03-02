@@ -136,6 +136,7 @@ pub struct MPU<const NUM_REGIONS: usize, const MIN_REGION_SIZE: usize> {
     /// is currently configured for so that the MPU can skip updating when the
     /// kernel returns to the same app.
     hardware_is_configured_for: OptionalCell<ProcessId>,
+    ignore: Cell<bool>,
 }
 
 impl<const NUM_REGIONS: usize, const MIN_REGION_SIZE: usize> MPU<NUM_REGIONS, MIN_REGION_SIZE> {
@@ -143,6 +144,7 @@ impl<const NUM_REGIONS: usize, const MIN_REGION_SIZE: usize> MPU<NUM_REGIONS, MI
         Self {
             registers: MPU_BASE_ADDRESS,
             hardware_is_configured_for: OptionalCell::empty(),
+            ignore: Cell::new(false),
         }
     }
 }
@@ -378,17 +380,21 @@ impl<const NUM_REGIONS: usize, const MIN_REGION_SIZE: usize> mpu::MPU
     }
 
     fn enable_app_mpu(&self) {
-        // Enable the MPU, disable it during HardFault/NMI handlers, and allow
-        // privileged code access to all unprotected memory.
-        self.registers
-            .ctrl
-            .write(Control::ENABLE::SET + Control::HFNMIENA::CLEAR + Control::PRIVDEFENA::SET);
+        if !self.ignore.get() {
+            // Enable the MPU, disable it during HardFault/NMI handlers, and allow
+            // privileged code access to all unprotected memory.
+            self.registers
+                .ctrl
+                .write(Control::ENABLE::SET + Control::HFNMIENA::CLEAR + Control::PRIVDEFENA::SET);
+        }
     }
 
     fn disable_app_mpu(&self) {
-        // The MPU is not enabled for privileged mode, so we don't have to do
-        // anything
-        self.registers.ctrl.write(Control::ENABLE::CLEAR);
+        if !self.ignore.get() {
+            // The MPU is not enabled for privileged mode, so we don't have to do
+            // anything
+            self.registers.ctrl.write(Control::ENABLE::CLEAR);
+        }
     }
 
     fn number_total_regions(&self) -> usize {
@@ -733,5 +739,9 @@ impl<const NUM_REGIONS: usize, const MIN_REGION_SIZE: usize> mpu::MPU
             self.hardware_is_configured_for.set(*app_id);
             config.is_dirty.set(false);
         }
+    }
+
+    fn ignore_configuration(&self) {
+        self.ignore.set(true);
     }
 }

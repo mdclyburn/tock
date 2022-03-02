@@ -280,6 +280,9 @@ pub trait MPU {
     /// - `app_id`: ProcessId of the process that the MPU is configured for
     #[allow(unused_variables)]
     fn configure_mpu(&self, config: &Self::MpuConfig, app_id: &ProcessId) {}
+
+    /// Tell the MPU to never apply configurations, effectively disabling the MPU.
+    fn ignore_configuration(&self) { unimplemented!(); }
 }
 
 /// Implement default MPU trait for unit.
