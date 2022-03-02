@@ -394,6 +394,8 @@ pub unsafe fn main() {
             static_buf!([u8; perf::TX_BUFFER_BYTE_LEN]).initialize([0; perf::TX_BUFFER_BYTE_LEN])));
     perf::use_instance(perf_counter);
     perf_counter.start();
+    use kernel::platform::{chip::Chip, mpu::MPU};
+    chip.mpu().ignore_configuration();
 
     // FXOS8700CQ accelerometer, device address 0x1e
     let fxos8700_i2c = static_init!(I2CDevice, I2CDevice::new(sensors_i2c, 0x1e));
