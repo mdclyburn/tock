@@ -3,6 +3,9 @@ use core::cell::Cell;
 use kernel::errorcode::ErrorCode;
 use kernel::hil::time::{Counter, Frequency, Ticks, Ticks32, OverflowClient};
 use kernel::hil::uart::{Transmit, TransmitClient};
+use kernel::platform::chip::Chip;
+use kernel::platform::mpu::MPU;
+use kernel::process::Process;
 use kernel::utilities::cells::{MapCell, TakeCell};
 
 use crate::proto;
@@ -67,8 +70,11 @@ impl<F: Frequency> PerformanceCounter<F> {
         self.tx.set_transmit_client(self);
     }
 
-    /// Perform the initialization step, triggering a transfer to the host.
-    pub fn start(&'static self) {
+    /// Perform the benchmarking initialization, triggering a transfer to the host.
+    pub fn start<C: Chip>(&'static self, chip: &C) {
+        unsafe { use_instance(self) };
+        chip.mpu().ignore_configuration();
+
         self.configure();
         // Grab the transmission buffer.
         // This should definitely be here, and start() should only run once;
@@ -212,7 +218,7 @@ impl<F: Frequency> Accumulate for PerformanceCounter<F> {
 
 pub static mut INSTANCE: Option<&'static dyn Accumulate> = None;
 
-pub unsafe fn use_instance(instance: &'static dyn Accumulate) {
+unsafe fn use_instance(instance: &'static dyn Accumulate) {
     if INSTANCE.is_some() {
         // Double-set, not good.
         panic!()
