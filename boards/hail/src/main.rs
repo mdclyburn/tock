@@ -83,6 +83,7 @@ struct Hail {
     dac: &'static capsules::dac::Dac<'static>,
     scheduler: &'static RoundRobinSched<'static>,
     systick: cortexm4::systick::SysTick,
+    perf_support: &'static capsules::performance::PerformanceSupport,
 }
 
 /// Mapping of integer syscalls to objects that implement syscalls.
@@ -105,6 +106,7 @@ impl SyscallDriverLookup for Hail {
             capsules::humidity::DRIVER_NUM => f(Some(self.humidity)),
             capsules::temperature::DRIVER_NUM => f(Some(self.temp)),
             capsules::ninedof::DRIVER_NUM => f(Some(self.ninedof)),
+            capsules::performance::DRIVER_NUM => f(Some(self.perf_support)),
 
             capsules::rng::DRIVER_NUM => f(Some(self.rng)),
 
@@ -579,6 +581,8 @@ pub unsafe fn main() {
         dac,
         scheduler,
         systick: cortexm4::systick::SysTick::new(),
+        perf_support: static_init!(capsules::performance::PerformanceSupport,
+                                   capsules::performance::PerformanceSupport::new()),
     };
 
     // Setup the UART bus for nRF51 serialization..

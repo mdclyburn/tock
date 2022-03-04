@@ -226,7 +226,7 @@ macro_rules! count {
     ($id:expr, $val:expr) => {{
         let id = ($id);
         let val = ($val);
-        let instance = unsafe { perf::INSTANCE.unwrap() };
+        let instance = unsafe { $crate::INSTANCE.unwrap() };
         instance.account(id, val);
     }};
 
@@ -236,7 +236,7 @@ macro_rules! count {
         let val = ($val);
 
         if check {
-            let instance = unsafe { perf::INSTANCE.unwrap() };
+            let instance = unsafe { $crate::INSTANCE.unwrap() };
             instance.account(id, val);
         }
     }}
@@ -245,14 +245,16 @@ macro_rules! count {
 #[macro_export]
 macro_rules! freeze {
     () => {{
-        let instance = unsafe { perf::INSTANCE.unwrap() };
+        let instance = unsafe { $crate::INSTANCE.unwrap() };
         instance.freeze();
     }};
 
     ($check:expr) => {{
         if ($check) {
-            let instance = unsafe { perf::INSTANCE.unwrap() };
+            let instance = unsafe { $crate::INSTANCE.unwrap() };
             instance.freeze();
         }
     }}
 }
+
+pub extern "C" fn account_ffi(id: u8, val: u32) { count!(id, val); }
