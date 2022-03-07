@@ -5,7 +5,6 @@ use kernel::hil::time::{Counter, Frequency, Ticks, Ticks32, OverflowClient};
 use kernel::hil::uart::{Transmit, TransmitClient};
 use kernel::platform::chip::Chip;
 use kernel::platform::mpu::MPU;
-use kernel::process::Process;
 use kernel::utilities::cells::{MapCell, TakeCell};
 
 use crate::proto;
@@ -47,7 +46,7 @@ impl<F: Frequency> PerformanceCounter<F> {
         PerformanceCounter {
             overflow_count: Cell::new(0),
             counter,
-            state: Cell::new(CollectionState::Collecting),
+            state: Cell::new(CollectionState::Uninitialized),
             no_waypoints,
             tx,
             tx_buffer: TakeCell::new(tx_buffer),
@@ -71,8 +70,8 @@ impl<F: Frequency> PerformanceCounter<F> {
     }
 
     /// Perform the benchmarking initialization, triggering a transfer to the host.
-    pub fn start<C: Chip>(&'static self, chip: &C) {
-        unsafe { use_instance(self) };
+    pub unsafe fn start<C: Chip>(&'static self, chip: &C) {
+        use_instance(self);
         chip.mpu().ignore_configuration();
 
         self.configure();
@@ -81,7 +80,8 @@ impl<F: Frequency> PerformanceCounter<F> {
         // before any transmissions have begun.
         let buffer = self.tx_buffer.take().unwrap();
         let len = proto::serialize_init(buffer, F::frequency());
-        self.tx.transmit_buffer(buffer, len);
+        self.tx.transmit_buffer(buffer, len)
+            .unwrap();
     }
 
     /// Send stats to the host.
@@ -91,7 +91,8 @@ impl<F: Frequency> PerformanceCounter<F> {
         if let Some(tx_buffer) = self.tx_buffer.take() {
             let len = self.stats.map(|stats| proto::serialize_stats(tx_buffer, self.t_start.get(), &*stats))
                 .unwrap();
-            self.tx.transmit_buffer(tx_buffer, len);
+            self.tx.transmit_buffer(tx_buffer, len)
+                .unwrap();
 
             // Reset all stats and the the starting reference for the next round of stat collection.
             self.stats.map(|stats| {
@@ -120,9 +121,12 @@ impl<F: Frequency> TransmitClient for PerformanceCounter<F> {
     fn transmitted_buffer(
         &self,
         tx_buffer: &'static mut [u8],
-        tx_len: usize,
+        _tx_len: usize,
         rval: Result<(), ErrorCode>)
     {
+        // Just unwrap this to make sure it is not an error.
+        let _rval_check = rval.unwrap();
+
         // Put the buffer back.
         self.tx_buffer.put(Some(tx_buffer));
 

@@ -1,13 +1,10 @@
 //! 16-bit timer counter (TC)
 
-use core::cell::Cell;
-
 use kernel::debug;
 use kernel::errorcode::ErrorCode;
 use kernel::hil;
-use kernel::utilities::cells::{NumericCellExt, OptionalCell};
+use kernel::utilities::cells::OptionalCell;
 use kernel::utilities::registers::interfaces::{
-    ReadWriteable,
     Readable,
     Writeable
 };
@@ -356,7 +353,7 @@ impl Channel {
     fn handle_interrupt(&self) {
         // Read the status register, this will clear the interrupt.
         // Only look at interrupts that are enabled.
-        let mut status = self.registers.sr.get() & self.registers.imr.get();
+        let status = self.registers.sr.get() & self.registers.imr.get();
 
         // Service each pending interrupt reason.
         // Counter overflow.
@@ -463,8 +460,6 @@ impl TimerCounter {
 
         channel
     }
-
-    pub fn enable_interrupt(&self, line: InterruptLine) {  }
 
     pub fn handle_interrupt(&self, line: InterruptLine) {
         let channel = match line {
