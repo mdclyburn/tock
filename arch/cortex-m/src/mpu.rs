@@ -742,6 +742,7 @@ impl<const NUM_REGIONS: usize, const MIN_REGION_SIZE: usize> mpu::MPU
     }
 
     fn ignore_configuration(&self) {
+        self.clear_mpu();
         self.ignore.set(true);
     }
 }
