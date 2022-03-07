@@ -145,6 +145,12 @@ pub trait Accumulate {
 
 impl<F: Frequency> Accumulate for PerformanceCounter<F> {
     fn account(&self, id: u8, val: u32) {
+        // Ensure that the ID of this waypoint is valid.
+        // If it is not valid, the counter could send confusing timestamps and data.
+        if id >= self.no_waypoints {
+            panic!();
+        }
+
         // Grab the current timestamp.
         let now = self.counter.now().into_u32() as u64
             | ((self.overflow_count.get() as u64) << 32);
@@ -160,21 +166,24 @@ impl<F: Frequency> Accumulate for PerformanceCounter<F> {
                 },
 
             CollectionState::Freezing(frozen_high) => {
-                self.stats.map(|s| s[id as usize].account(now, val));
-                // Decide if we can freeze this stat counter.
-                // It must be the next counter in the sequence
-                // and have reached the amount of data in the previous counter.
-                let (is_next, saturated) = (
-                    frozen_high + 1 == id,
-                    self.stats.map(|s| s[id as usize].accumulated() == s[frozen_high as usize].accumulated())
-                        .unwrap()
-                );
+                if id > frozen_high {
+                    self.stats.map(|s| s[id as usize].account(now, val));
+                    // Decide if we can freeze this stat counter.
+                    // It must be the next counter in the sequence
+                    // and have reached the amount of data in the previous counter.
+                    let (is_next, saturated) = (
+                        frozen_high + 1 == id,
+                        self.stats.map(|s| s[id as usize].accumulated() == s[frozen_high as usize].accumulated())
+                            .unwrap()
+                    );
 
-                if is_next && saturated {
-                    self.state.set(CollectionState::Freezing(id));
-                    // Start a transmission once we have frozen all counters.
-                    if id == self.no_waypoints - 1 {
-                        self.send();
+                    if is_next && saturated {
+                        self.state.set(CollectionState::Freezing(id));
+                        kernel::debug!("saturated co. {}", id);
+                        // Start a transmission once we have frozen all counters.
+                        if id == self.no_waypoints - 1 {
+                            self.send();
+                        }
                     }
                 }
             },
@@ -208,6 +217,7 @@ impl<F: Frequency> Accumulate for PerformanceCounter<F> {
         // If we are unable to freeze all stats up to self.no_waypoints,
         // then we only set the state to Freezing(index of highest frozen stat)
         // and do not trigger a transmission.
+        kernel::debug!("hifroz = {}", highest_frozen);
         if highest_frozen + 1 == self.no_waypoints {
             self.send()
         } else {
