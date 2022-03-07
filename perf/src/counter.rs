@@ -6,6 +6,7 @@ use kernel::hil::uart::{Transmit, TransmitClient};
 use kernel::platform::chip::Chip;
 use kernel::platform::mpu::MPU;
 use kernel::utilities::cells::{MapCell, TakeCell};
+use perf_support::Accumulate;
 
 use crate::proto;
 use crate::proto::Stat;
@@ -141,12 +142,6 @@ impl<F: Frequency> TransmitClient for PerformanceCounter<F> {
     }
 }
 
-pub trait Accumulate {
-    fn account(&self, id: u8, val: u32);
-
-    fn freeze(&self);
-}
-
 impl<F: Frequency> Accumulate for PerformanceCounter<F> {
     fn account(&self, id: u8, val: u32) {
         // Ensure that the ID of this waypoint is valid.
@@ -234,30 +229,28 @@ pub static mut INSTANCE: Option<&'static dyn Accumulate> = None;
 
 unsafe fn use_instance(instance: &'static dyn Accumulate) {
     if INSTANCE.is_some() {
-        // Double-set, not good.
-        panic!()
+        panic!();
     } else {
-        INSTANCE = Some(instance)
+        INSTANCE = Some(instance);
+        perf_support::use_instance(instance);
     }
 }
 
 #[macro_export]
 macro_rules! count {
     ($id:expr, $val:expr) => {{
-        let id = ($id);
-        let val = ($val);
-        let instance = unsafe { $crate::INSTANCE.unwrap() };
-        instance.account(id, val);
+        unsafe {
+            $crate::INSTANCE.unwrap()
+                .account(($id), ($val));
+        }
     }};
 
     ($id:expr, $val:expr, $check:expr) => {{
-        let check = ($check);
-        let id = ($id);
-        let val = ($val);
-
-        if check {
-            let instance = unsafe { $crate::INSTANCE.unwrap() };
-            instance.account(id, val);
+        if ($check) {
+            unsafe {
+                $crate::INSTANCE.unwrap()
+                    .account(($id), ($val));
+            }
         }
     }}
 }
@@ -265,14 +258,18 @@ macro_rules! count {
 #[macro_export]
 macro_rules! freeze {
     () => {{
-        let instance = unsafe { $crate::INSTANCE.unwrap() };
-        instance.freeze();
+        unsafe {
+            $crate::INSTANCE.unwrap()
+                .freeze();
+        }
     }};
 
     ($check:expr) => {{
         if ($check) {
-            let instance = unsafe { $crate::INSTANCE.unwrap() };
-            instance.freeze();
+            unsafe {
+                $crate::INSTANCE.unwrap()
+                    .freeze()
+            }
         }
     }}
 }

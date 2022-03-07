@@ -5,3 +5,4 @@ edition = "2021"
 
 [dependencies]
 kernel = { path = "../kernel" }
+perf_support = { path = "../perf_support" }

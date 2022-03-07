@@ -72,6 +72,7 @@ members = [
     "libraries/tock-register-interface",
     "libraries/tickv",
     "perf",
+    "perf_support",
 ]
 exclude = [
     "tools/alert_codes",
