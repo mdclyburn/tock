@@ -11,6 +11,9 @@ use perf_support::Accumulate;
 use crate::proto;
 use crate::proto::Stat;
 
+/// Performance benchmarking instance.
+pub static mut INSTANCE: Option<&'static dyn Accumulate> = None;
+
 /// FSM states for stat collection.
 #[derive(Copy, Clone, PartialEq)]
 enum CollectionState {
@@ -178,7 +181,6 @@ impl<F: Frequency> Accumulate for PerformanceCounter<F> {
 
                     if is_next && saturated {
                         self.state.set(CollectionState::Freezing(id));
-                        kernel::debug!("saturated co. {}", id);
                         // Start a transmission once we have frozen all counters.
                         if id == self.no_waypoints - 1 {
                             self.send();
@@ -216,7 +218,6 @@ impl<F: Frequency> Accumulate for PerformanceCounter<F> {
         // If we are unable to freeze all stats up to self.no_waypoints,
         // then we only set the state to Freezing(index of highest frozen stat)
         // and do not trigger a transmission.
-        kernel::debug!("hifroz = {}", highest_frozen);
         if highest_frozen + 1 == self.no_waypoints {
             self.send()
         } else {
@@ -224,8 +225,6 @@ impl<F: Frequency> Accumulate for PerformanceCounter<F> {
         }
     }
 }
-
-pub static mut INSTANCE: Option<&'static dyn Accumulate> = None;
 
 unsafe fn use_instance(instance: &'static dyn Accumulate) {
     if INSTANCE.is_some() {
@@ -274,4 +273,5 @@ macro_rules! freeze {
     }}
 }
 
+/// Call for Tock-external code to provide performance data
 pub extern "C" fn account_ffi(id: u8, val: u32) { count!(id, val); }
