@@ -78,6 +78,9 @@ impl<F: Frequency> PerformanceCounter<F> {
         use_instance(self);
         chip.mpu().ignore_configuration();
 
+        // Set the start value.
+        self.t_start.set(self.counter.now().into_u32() as u64);
+
         self.configure();
         // Grab the transmission buffer.
         // This should definitely be here, and start() should only run once;
@@ -93,7 +96,7 @@ impl<F: Frequency> PerformanceCounter<F> {
         // If the transmit buffer is present, then we can begin transfer immediately.
         // When the UART is still sending the previous payload we cannot start a new send.
         if let Some(tx_buffer) = self.tx_buffer.take() {
-            let len = self.stats.map(|stats| proto::serialize_stats(tx_buffer, self.t_start.get(), &*stats))
+            let len = self.stats.map(|stats| proto::serialize_stats(tx_buffer, self.t_start.get(), &stats[0..(self.no_waypoints as usize)]))
                 .unwrap();
             self.tx.transmit_buffer(tx_buffer, len)
                 .unwrap();
