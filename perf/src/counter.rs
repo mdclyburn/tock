@@ -27,7 +27,8 @@ enum CollectionState {
     Waiting,
 }
 
-pub struct PerformanceCounter<F: 'static + Frequency> {
+pub struct PerformanceCounter<CHIP: 'static + Chip, F: 'static + Frequency> {
+    chip: &'static CHIP,
     overflow_count: Cell<u32>,
     counter: &'static dyn Counter<'static, Frequency = F, Ticks = Ticks32>,
     state: Cell<CollectionState>,
@@ -38,16 +39,18 @@ pub struct PerformanceCounter<F: 'static + Frequency> {
     t_start: Cell<u64>,
 }
 
-impl<F: Frequency> PerformanceCounter<F> {
+impl<CHIP: 'static + Chip, F: Frequency> PerformanceCounter<CHIP, F> {
     /// Create a performance counting instance.
     pub fn new(
+        chip: &'static CHIP,
         counter: &'static dyn Counter<Frequency = F, Ticks = Ticks32>,
         no_waypoints: u8,
         tx: &'static dyn Transmit<'static>,
         tx_buffer: &'static mut [u8; proto::TX_BUFFER_BYTE_LEN],
-    ) -> PerformanceCounter<F>
+    ) -> PerformanceCounter<CHIP, F>
     {
         PerformanceCounter {
+            chip,
             overflow_count: Cell::new(0),
             counter,
             state: Cell::new(CollectionState::Uninitialized),
@@ -74,7 +77,7 @@ impl<F: Frequency> PerformanceCounter<F> {
     }
 
     /// Perform the benchmarking initialization, triggering a transfer to the host.
-    pub unsafe fn start<C: Chip>(&'static self, chip: &C) {
+    pub unsafe fn start<C: 'static + Chip>(&'static self, chip: &C) {
         use_instance(self);
         chip.mpu().ignore_configuration();
 
@@ -117,14 +120,14 @@ impl<F: Frequency> PerformanceCounter<F> {
     }
 }
 
-impl<F: 'static + Frequency> OverflowClient for PerformanceCounter<F> {
+impl<CHIP: 'static + Chip, F: 'static + Frequency> OverflowClient for PerformanceCounter<CHIP, F> {
     /// Count the overflows that occur to widen the time range.
     fn overflow(&self) {
         self.overflow_count.set(self.overflow_count.get()+1);
     }
 }
 
-impl<F: Frequency> TransmitClient for PerformanceCounter<F> {
+impl<CHIP: 'static + Chip, F: Frequency> TransmitClient for PerformanceCounter<CHIP, F> {
     fn transmitted_buffer(
         &self,
         tx_buffer: &'static mut [u8],
@@ -148,7 +151,7 @@ impl<F: Frequency> TransmitClient for PerformanceCounter<F> {
     }
 }
 
-impl<F: Frequency> Accumulate for PerformanceCounter<F> {
+impl<CHIP: 'static + Chip, F: Frequency> Accumulate for PerformanceCounter<CHIP, F> {
     fn account(&self, id: u8, val: u32) {
         // Ensure that the ID of this waypoint is valid.
         // If it is not valid, the counter could send confusing timestamps and data.
