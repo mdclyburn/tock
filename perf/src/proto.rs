@@ -46,7 +46,7 @@ pub struct Stat {
 }
 
 impl Stat {
-    pub fn new() -> Stat {
+    pub const fn new() -> Stat {
         Stat {
             acc: 0,
             t_latest: 0,

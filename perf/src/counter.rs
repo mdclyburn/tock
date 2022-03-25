@@ -27,6 +27,9 @@ enum CollectionState {
     Waiting,
 }
 
+/// Stat containers for profiling.
+static mut STATS: [Stat; 8] = [Stat::new(); 8];
+
 pub struct PerformanceCounter<CHIP: 'static + Chip, F: 'static + Frequency> {
     chip: &'static CHIP,
     overflow_count: Cell<u32>,
@@ -35,13 +38,12 @@ pub struct PerformanceCounter<CHIP: 'static + Chip, F: 'static + Frequency> {
     no_waypoints: u8,
     tx: &'static dyn Transmit<'static>,
     tx_buffer: TakeCell<'static, [u8]>,
-    stats: MapCell<[Stat; 8]>,
     t_start: Cell<u64>,
 }
 
 impl<CHIP: 'static + Chip, F: Frequency> PerformanceCounter<CHIP, F> {
     /// Create a performance counting instance.
-    pub fn new(
+    pub unsafe fn new(
         chip: &'static CHIP,
         counter: &'static dyn Counter<Frequency = F, Ticks = Ticks32>,
         no_waypoints: u8,
@@ -57,16 +59,6 @@ impl<CHIP: 'static + Chip, F: Frequency> PerformanceCounter<CHIP, F> {
             no_waypoints,
             tx,
             tx_buffer: TakeCell::new(tx_buffer),
-            stats: MapCell::new([
-                Stat::new(),
-                Stat::new(),
-                Stat::new(),
-                Stat::new(),
-                Stat::new(),
-                Stat::new(),
-                Stat::new(),
-                Stat::new(),
-            ]),
             t_start: Cell::new(0),
         }
     }
@@ -99,19 +91,27 @@ impl<CHIP: 'static + Chip, F: Frequency> PerformanceCounter<CHIP, F> {
         // If the transmit buffer is present, then we can begin transfer immediately.
         // When the UART is still sending the previous payload we cannot start a new send.
         if let Some(tx_buffer) = self.tx_buffer.take() {
-            let len = self.stats.map(|stats| proto::serialize_stats(tx_buffer, self.t_start.get(), &stats[0..(self.no_waypoints as usize)]))
-                .unwrap();
+            let len = proto::serialize_stats(
+                tx_buffer,
+                self.t_start.get(),
+                // We are effectively reading all stat container values.
+                // This is fine in this function because we only call send() when all counters are frozen.
+                unsafe { &STATS[0..(self.no_waypoints as usize)] });
             self.tx.transmit_buffer(tx_buffer, len)
                 .unwrap();
 
             // Reset all stats and the the starting reference for the next round of stat collection.
-            self.stats.map(|stats| {
-                for s in stats {
-                    s.reset();
-                }
-                self.t_start.set((self.overflow_count.get() as u64) << 32
-                                 | self.counter.now().into_u32() as u64);
-            });
+            // Write to Stat containers.
+            // All Stats are still frozen at this point, so this is okay,
+            // as no instrumentation points will be able to write to their respective container.
+            let iter = unsafe { STATS.iter_mut() };
+            for s in iter {
+                s.reset();
+            }
+            self.t_start.set((self.overflow_count.get() as u64) << 32
+                             | self.counter.now().into_u32() as u64);
+
+            // Ready to start collecting data once again.
             self.state.set(CollectionState::Collecting);
         } else {
             // We just return and have the callback trigger this for us.
@@ -170,19 +170,28 @@ impl<CHIP: 'static + Chip, F: Frequency> Accumulate for PerformanceCounter<CHIP,
             // just not OK to try sending them when initialization has not occured.
             CollectionState::Uninitialized
                 | CollectionState::Collecting => {
-                    self.stats.map(|s| s[id as usize].account(now, val));
+                    // Writing to a single stat container.
+                    // This is fine as long as the tester ensures that there is
+                    // only one instrumentation point writing to a container at a time.
+                    unsafe { STATS[id as usize].account(now, val) };
                 },
 
             CollectionState::Freezing(frozen_high) => {
                 if id > frozen_high {
-                    self.stats.map(|s| s[id as usize].account(now, val));
+                    // Write to a single stat container.
+                    // Okay under the single-instrumentation-point assumption.
+                    unsafe { STATS[id as usize].account(now, val) };
+
                     // Decide if we can freeze this stat counter.
                     // It must be the next counter in the sequence
                     // and have reached the amount of data in the previous counter.
                     let (is_next, saturated) = (
                         frozen_high + 1 == id,
-                        self.stats.map(|s| s[id as usize].accumulated() == s[frozen_high as usize].accumulated())
-                            .unwrap()
+                        // Reading from two stat containers.
+                        // The read of STATS[id] is okay since its agent is doing the read.
+                        // The second read is okay because it is the data for a frozen stat
+                        // which will not change from under us.
+                        unsafe { STATS[id as usize].accumulated() == STATS[frozen_high as usize].accumulated() }
                     );
 
                     if is_next && saturated {
@@ -206,28 +215,48 @@ impl<CHIP: 'static + Chip, F: Frequency> Accumulate for PerformanceCounter<CHIP,
 
     /// Begin the freezing process, aggregating stats to send to the test host.
     fn freeze(&self) {
-        // We must be in the collecting state to transition to the freeze.
-        // And if we are already freezing, there is no need to do this.
-        if self.state.get() != CollectionState::Collecting {
-            return;
-        }
+        // There are a couple of reasons for this all-encompassing atomicity...
+        //
+        // We must at least atomically freeze the first instrumentation point.
+        // This is necessary since we will shortly be using its value to decide
+        // how to advance the freeze. If the value changes in the meantime, i.e.,
+        // we receive additional data to account, the 0th stat would have a later timestamp
+        // than the correct timestamp.
+        //
+        // We must also read all other stat containers' values to know how far
+        // the freeze can proceed.
+        //
+        // We must change the collection state to one that prevents instrumentation
+        // points from changing stat container values.
+        let no_frozen: usize = unsafe { self.chip.atomic(|| {
+            // We must be in the collecting state to transition to the freeze.
+            // And if we are already freezing, there is no need to do this.
+            if self.state.get() != CollectionState::Collecting {
+                // A zero here will always prevent the send from occurring;
+                0
+            } else {
+                // Find out how far down the sequence we can freeze stats.
+                let highest_frozen: usize = {
+                    // Decide the value all containers must reach.
+                    // It is fine to read the 0th stat container because it is frozen.
+                    let target = STATS[0].accumulated();
 
-        // Find out how far down the sequence we can freeze stats.
-        let highest_frozen = self.stats.map(|stats| {
-            let target = stats[0].accumulated();
-            let mut i: u8 = 0;
-            while stats[i as usize].accumulated() == target && i < self.no_waypoints { i += 1; }
+                    let mut i: usize = 0;
+                    // TODO: start the iteration at 1 since 0 is guaranteed to be frozen?
+                    while STATS[i].accumulated() == target && i < self.no_waypoints as usize { i += 1; }
+                    i - 1
+                };
 
-            i - 1 // Invariant: i >= 1
-        }).unwrap();
+                self.state.set(CollectionState::Freezing(highest_frozen as u8));
+                highest_frozen + 1
+            }
+        }) };
 
-        // If we are unable to freeze all stats up to self.no_waypoints,
-        // then we only set the state to Freezing(index of highest frozen stat)
-        // and do not trigger a transmission.
-        if highest_frozen + 1 == self.no_waypoints {
-            self.send()
-        } else {
-            self.state.set(CollectionState::Freezing(highest_frozen))
+        // Only trigger the transmission if we are able to freeze all stats.
+        // If this is not the case, then the rest of the freeze will happen
+        // incrementally as we finish accumulating data.
+        if no_frozen == self.no_waypoints as usize {
+            self.send();
         }
     }
 }
