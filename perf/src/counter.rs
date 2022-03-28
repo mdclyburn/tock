@@ -87,6 +87,9 @@ impl<CHIP: 'static + Chip, F: Frequency> PerformanceCounter<CHIP, F> {
     }
 
     /// Send stats to the host.
+    ///
+    /// # Safety
+    /// Only call this function in an atomic context to guarantee counters will not change.
     fn send(&self) {
         // If the transmit buffer is present, then we can begin transfer immediately.
         // When the UART is still sending the previous payload we cannot start a new send.
@@ -141,13 +144,14 @@ impl<CHIP: 'static + Chip, F: Frequency> TransmitClient for PerformanceCounter<C
         self.tx_buffer.put(Some(tx_buffer));
 
         // Trigger another transmission if another set of stats are waiting to be sent.
-        if self.state.get() == CollectionState::Waiting {
+        let collection_state = unsafe { self.chip.atomic(|| self.state.get()) };
+        if collection_state == CollectionState::Waiting {
             self.send();
         }
 
         // System is free to start collecting samples now.
         // The stats structures are guaranteed to be free at this point.
-        self.state.set(CollectionState::Collecting);
+        unsafe { self.chip.atomic(|| self.state.set(CollectionState::Collecting)) }
     }
 }
 
@@ -159,58 +163,68 @@ impl<CHIP: 'static + Chip, F: Frequency> Accumulate for PerformanceCounter<CHIP,
             panic!();
         }
 
-        // Grab the current timestamp.
-        let now = self.counter.now().into_u32() as u64
-            | ((self.overflow_count.get() as u64) << 32);
+        // This block of code is inspecting state (the CollectionState);
+        // not performing the accounting atomically would introduce a race.
+        // It would also be undesirable to have the timestamp collected before
+        // being interrupted by some other event.
+        let ma = unsafe { self.chip.atomic(|| {
+            // Grab the current timestamp.
+            let now = self.counter.now().into_u32() as u64
+                | ((self.overflow_count.get() as u64) << 32);
 
-        // Accumulate the quantity in the stat counter.
-        // We must either be in the Collecting state or the freeze must not have reached the given `id`.
-        match self.state.get() {
-            // It is fine to collect stats when uninitialized,
-            // just not OK to try sending them when initialization has not occured.
-            CollectionState::Uninitialized
-                | CollectionState::Collecting => {
-                    // Writing to a single stat container.
-                    // This is fine as long as the tester ensures that there is
-                    // only one instrumentation point writing to a container at a time.
-                    unsafe { STATS[id as usize].account(now, val) };
-                },
+            // Accumulate the quantity in the stat counter.
+            // We must either be in the Collecting state or the freeze must not have reached the given `id`.
+            match self.state.get() {
+                // It is fine to collect stats when uninitialized,
+                // just not OK to try sending them when initialization has not occured.
+                CollectionState::Uninitialized
+                    | CollectionState::Collecting => {
+                        // Writing to a single stat container.
+                        // This is fine as long as the tester ensures that there is
+                        // only one instrumentation point writing to a container at a time.
+                        unsafe { STATS[id as usize].account(now, val) };
+                    },
 
-            CollectionState::Freezing(frozen_high) => {
-                if id > frozen_high {
-                    // Write to a single stat container.
-                    // Okay under the single-instrumentation-point assumption.
-                    unsafe { STATS[id as usize].account(now, val) };
+                CollectionState::Freezing(frozen_high) => {
+                    if id > frozen_high {
+                        // Write to a single stat container.
+                        // Okay under the single-instrumentation-point assumption.
+                        unsafe { STATS[id as usize].account(now, val) };
 
-                    // Decide if we can freeze this stat counter.
-                    // It must be the next counter in the sequence
-                    // and have reached the amount of data in the previous counter.
-                    let (is_next, saturated) = (
-                        frozen_high + 1 == id,
-                        // Reading from two stat containers.
-                        // The read of STATS[id] is okay since its agent is doing the read.
-                        // The second read is okay because it is the data for a frozen stat
-                        // which will not change from under us.
-                        unsafe { STATS[id as usize].accumulated() == STATS[frozen_high as usize].accumulated() }
-                    );
+                        // Decide if we can freeze this stat counter.
+                        // It must be the next counter in the sequence
+                        // and have reached the amount of data in the previous counter.
+                        let (is_next, saturated) = (
+                            frozen_high + 1 == id,
+                            // Reading from two stat containers.
+                            // The read of STATS[id] is okay since its agent is doing the read.
+                            // The second read is okay because it is the data for a frozen stat
+                            // which will not change from under us.
+                            unsafe { STATS[id as usize].accumulated() == STATS[frozen_high as usize].accumulated() }
+                        );
 
-                    if is_next && saturated {
-                        self.state.set(CollectionState::Freezing(id));
-                        // Start a transmission once we have frozen all counters.
-                        if id == self.no_waypoints - 1 {
-                            self.send();
+                        if is_next && saturated {
+                            self.state.set(CollectionState::Freezing(id));
+                            // Start a transmission once we have frozen all counters.
+                            if id == self.no_waypoints - 1 {
+                                self.send();
+                            }
                         }
                     }
-                }
-            },
+                },
 
-            // There is nothing we can do to hold this new data.
-            // The current set of stats are waiting for serialization to an outstanding buffer.
-            // This is the "drop the data path".
-            // A better solution might be to use two buffers (stats and [u8]),
-            // but this comes at the cost of complexity.
-            CollectionState::Waiting => {  }
-        }
+                // There is nothing we can do to hold this new data.
+                // The current set of stats are waiting for serialization to an outstanding buffer.
+                // This is the "drop the data path".
+                // A better solution might be to use two buffers (stats and [u8]),
+                // but this comes at the cost of complexity.
+                CollectionState::Waiting => {  }
+            };
+
+            STATS[0].accumulated() == 1114
+        }) };
+
+        if ma { self.freeze(); }
     }
 
     /// Begin the freezing process, aggregating stats to send to the test host.
@@ -256,6 +270,8 @@ impl<CHIP: 'static + Chip, F: Frequency> Accumulate for PerformanceCounter<CHIP,
         // If this is not the case, then the rest of the freeze will happen
         // incrementally as we finish accumulating data.
         if no_frozen == self.no_waypoints as usize {
+            // It is OK for this call to send() to be outside of an atomic context.
+            // All stat counters are frozen and will not change in the mean time.
             self.send();
         }
     }
