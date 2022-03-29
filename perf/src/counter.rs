@@ -167,7 +167,7 @@ impl<CHIP: 'static + Chip, F: Frequency> Accumulate for PerformanceCounter<CHIP,
         // not performing the accounting atomically would introduce a race.
         // It would also be undesirable to have the timestamp collected before
         // being interrupted by some other event.
-        let ma = unsafe { self.chip.atomic(|| {
+        unsafe { self.chip.atomic(|| {
             // Grab the current timestamp.
             let now = self.counter.now().into_u32() as u64
                 | ((self.overflow_count.get() as u64) << 32);
@@ -220,11 +220,7 @@ impl<CHIP: 'static + Chip, F: Frequency> Accumulate for PerformanceCounter<CHIP,
                 // but this comes at the cost of complexity.
                 CollectionState::Waiting => {  }
             };
-
-            STATS[0].accumulated() == 1114
-        }) };
-
-        if ma { self.freeze(); }
+        }); };
     }
 
     /// Begin the freezing process, aggregating stats to send to the test host.
@@ -324,5 +320,8 @@ macro_rules! freeze {
     }}
 }
 
-/// Call for Tock-external code to provide performance data
+/// Call for Tock-external code to provide performance data.
 pub extern "C" fn account_ffi(id: u8, val: u32) { count!(id, val); }
+
+/// Call for Tock-external code to begin aggregating performance data for transmission.
+pub extern "C" fn freeze_ffi() { freeze!(); }

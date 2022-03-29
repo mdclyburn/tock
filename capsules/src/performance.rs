@@ -27,6 +27,7 @@ impl SyscallDriver for PerformanceSupport {
         match command_no {
             0 => CommandReturn::success(),
             1 => CommandReturn::success_u32(perf::account_ffi as usize as u32),
+            2 => CommandReturn::success_u32(perf::freeze_ffi as usize as u32),
             _ => CommandReturn::failure(ErrorCode::INVAL),
         }
     }
