@@ -81,7 +81,7 @@ impl<CHIP: 'static + Chip, F: Frequency> PerformanceCounter<CHIP, F> {
         // This should definitely be here, and start() should only run once;
         // before any transmissions have begun.
         let buffer = self.tx_buffer.take().unwrap();
-        let len = proto::serialize_init(buffer, F::frequency());
+        let len = proto::serialize_init(buffer, F::frequency(), self.no_waypoints);
         self.tx.transmit_buffer(buffer, len)
             .unwrap();
     }

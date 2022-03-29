@@ -67,9 +67,11 @@ impl Stat {
     }
 }
 
-pub fn serialize_init(out_buffer: &mut [u8], counter_freq: u32) -> usize {
+pub fn serialize_init(out_buffer: &mut [u8], counter_freq: u32, no_stats: u8) -> usize {
     // Write the header.
-    out_buffer[0] = 0;
+    out_buffer[0] =
+        // Number of stat containers we use.
+        (no_stats & 0b0000_1111);
 
     let mut b_no = 1;
 
