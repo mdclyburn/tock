@@ -287,7 +287,7 @@ macro_rules! count {
     ($id:expr, $val:expr) => {{
         unsafe {
             $crate::INSTANCE.unwrap()
-                .account(($id), ($val));
+                .account(($id), ($val) as u32);
         }
     }};
 
@@ -295,7 +295,7 @@ macro_rules! count {
         if ($check) {
             unsafe {
                 $crate::INSTANCE.unwrap()
-                    .account(($id), ($val));
+                    .account(($id), ($val) as u32);
             }
         }
     }}
