@@ -33,35 +33,44 @@ B31:B0  - stat value
 pub const TX_BUFFER_BYTE_LEN: usize =
     // Header
     1
-    // Start time
-    + 8
-    // Stats
-    + (8 * (8 + 4));
+    // 8 stats (accumulator + start time + last time)
+    + (8 * (4 + 8 + 8));
 
 /// Container for performance data.
 #[derive(Copy, Clone)]
 pub struct Stat {
     acc: u32,
+    t_start: u64,
     t_latest: u64,
 }
 
 impl Stat {
+    /// Create a new Stat counter.
     pub const fn new() -> Stat {
         Stat {
             acc: 0,
+            t_start: 0,
             t_latest: 0,
         }
     }
 
+    /// Reset the stat counter.
     pub fn reset(&mut self) {
         self.acc = 0;
     }
 
+    /// Add an amount to the counter.
     pub fn account(&mut self, time: u64, val: u32) {
+        // Set the start time when this is the first accumulation.
+        if self.acc == 0 {
+            self.t_start = time;
+        }
+
         self.acc += val;
         self.t_latest = time;
     }
 
+    /// Return the current total accumulated value.
     pub fn accumulated(&self) -> u32 {
         self.acc
     }
@@ -88,15 +97,12 @@ pub fn serialize_stats(out_buffer: &mut [u8], t0: u64, stats: &[Stat]) -> usize 
 
     let mut b_no = 1;
 
-    // Write the start time.
-    serialize_u64(&mut out_buffer[b_no..b_no+8], t0);
-    b_no += 8;
-
     // Write each performance stat.
     for stat in stats {
-        serialize_u64(&mut out_buffer[b_no..b_no+8], stat.t_latest);
-        serialize_u32(&mut out_buffer[b_no+8..b_no+12], stat.acc);
-        b_no += 8 + 4;
+        serialize_u64(&mut out_buffer[b_no..b_no+8], stat.t_start);
+        serialize_u64(&mut out_buffer[b_no+8..b_no+16], stat.t_latest);
+        serialize_u32(&mut out_buffer[b_no+16..b_no+20], stat.acc);
+        b_no += 8 + 8 + 4;
     }
 
     b_no
