@@ -67,6 +67,7 @@ pub mod public_key_crypto;
 pub mod read_only_state;
 pub mod rf233;
 pub mod rf233_const;
+pub mod rfm69;
 pub mod rng;
 pub mod screen;
 pub mod sdcard;

@@ -79,6 +79,7 @@ struct Hail {
     ipc: kernel::ipc::IPC<NUM_PROCS>,
     crc: &'static capsules::crc::CrcDriver<'static, sam4l::crccu::Crccu<'static>>,
     dac: &'static capsules::dac::Dac<'static>,
+    ism_radio: &'static capsules::rfm69::RFM69,
     scheduler: &'static RoundRobinSched<'static>,
     systick: cortexm4::systick::SysTick,
 }
@@ -109,6 +110,8 @@ impl SyscallDriverLookup for Hail {
             capsules::crc::DRIVER_NUM => f(Some(self.crc)),
 
             capsules::dac::DRIVER_NUM => f(Some(self.dac)),
+
+            capsules::rfm69::DRIVER_NUM => f(Some(self.ism_radio)),
 
             kernel::ipc::DRIVER_NUM => f(Some(&self.ipc)),
             _ => f(None),
@@ -512,6 +515,14 @@ pub unsafe fn main() {
     // );
     // peripherals.pa[16].set_client(debug_process_restart);
 
+    let radio_spi = components::spi::SpiComponent::new(mux_spi, 0)
+        .finalize(components::spi_component_helper!(sam4l::spi::SpiHw));
+    let ism_radio = static_init!(
+        capsules::rfm69::RFM69,
+        capsules::rfm69::RFM69::new(
+            board_kernel.create_grant(capsules::rfm69::DRIVER_NUM, &memory_allocation_capability),
+            radio_spi));
+
     // Configure application fault policy
     let fault_policy = static_init!(
         kernel::process::ThresholdRestartThenPanicFaultPolicy,
@@ -542,6 +553,7 @@ pub unsafe fn main() {
         ),
         crc,
         dac,
+        ism_radio,
         scheduler,
         systick: cortexm4::systick::SysTick::new(),
     };
