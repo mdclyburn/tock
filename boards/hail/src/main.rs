@@ -79,7 +79,7 @@ struct Hail {
     ipc: kernel::ipc::IPC<NUM_PROCS>,
     crc: &'static capsules::crc::CrcDriver<'static, sam4l::crccu::Crccu<'static>>,
     dac: &'static capsules::dac::Dac<'static>,
-    ism_radio: &'static capsules::rfm69::RFM69,
+    ism_radio: &'static capsules::rfm69::RFM69<hil::time::Freq16KHz, hil::time::Ticks32>,
     scheduler: &'static RoundRobinSched<'static>,
     systick: cortexm4::systick::SysTick,
 }
@@ -473,8 +473,9 @@ pub unsafe fn main() {
         capsules::gpio::DRIVER_NUM,
         components::gpio_component_helper!(
             sam4l::gpio::GPIOPin,
-            0 => &peripherals.pb[14], // D0
-            1 => &peripherals.pb[15], // D1
+            // Using these pins for the ISM radio.
+            // 0 => &peripherals.pb[14], // D0
+            // 1 => &peripherals.pb[15], // D1
             2 => &peripherals.pb[11], // D6
             3 => &peripherals.pb[12]  // D7
         ),
@@ -518,10 +519,17 @@ pub unsafe fn main() {
     let radio_spi = components::spi::SpiComponent::new(mux_spi, 0)
         .finalize(components::spi_component_helper!(sam4l::spi::SpiHw));
     let ism_radio = static_init!(
-        capsules::rfm69::RFM69,
+        capsules::rfm69::RFM69<hil::time::Freq16KHz, hil::time::Ticks32>,
         capsules::rfm69::RFM69::new(
             board_kernel.create_grant(capsules::rfm69::DRIVER_NUM, &memory_allocation_capability),
-            radio_spi));
+            radio_spi,
+            // Pin D0
+            &peripherals.pb[14],
+            // Pin D1
+            &peripherals.pb[15],
+            &peripherals.ast,
+        ));
+    ism_radio.initialize();
 
     // Configure application fault policy
     let fault_policy = static_init!(
