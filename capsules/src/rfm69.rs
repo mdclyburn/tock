@@ -106,16 +106,14 @@ enum Mode {
     Receive,
 }
 
-impl TryFrom<u8> for Mode {
-    type Error = ();
-
-    fn try_from(v: u8) -> core::result::Result<Mode, ()> {
-        match v {
-            0 => Ok(Mode::Sleep),
-            1 => Ok(Mode::Standby),
-            3 => Ok(Mode::Transmit),
-            4 => Ok(Mode::Receive),
-            _ => Err(()),
+impl From<Mode> for u8 {
+    fn from(mode: Mode) -> u8 {
+        use Mode::*;
+        match mode {
+            Sleep => 0,
+            Standby => 1,
+            Transmit => 3,
+            Receive => 4,
         }
     }
 }
@@ -282,9 +280,10 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         }
     }
 
-    // fn set_mode(&self, target_mode: Mode) {
-    //     self.write(register::OpMode,
-    // }
+    fn set_mode(&self, target_mode: Mode) -> Result<()> {
+        let mode_val = u8::from(target_mode);
+        self.modify(register::OpMode, 0b00011100, mode_val)
+    }
 }
 
 impl<A: 'static + time::Frequency, B: 'static + time::Ticks> spi::SpiMasterClient for RFM69<A, B> {
