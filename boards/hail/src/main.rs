@@ -22,7 +22,7 @@ use kernel::hil::Controller;
 use kernel::platform::{KernelResources, SyscallDriverLookup};
 use kernel::scheduler::round_robin::RoundRobinSched;
 #[allow(unused_imports)]
-use kernel::{create_capability, debug, debug_gpio, static_init};
+use kernel::{create_capability, debug, debug_gpio, static_buf, static_init};
 use sam4l::adc::Channel;
 use sam4l::chip::Sam4lDefaultPeripherals;
 
@@ -516,6 +516,7 @@ pub unsafe fn main() {
     // );
     // peripherals.pa[16].set_client(debug_process_restart);
 
+    let radio_buffers = (static_buf!([u8; 2]).initialize([0; 2]), static_buf!([u8; 2]).initialize([0; 2]));
     let radio_spi = components::spi::SpiComponent::new(mux_spi, 0)
         .finalize(components::spi_component_helper!(sam4l::spi::SpiHw));
     let ism_radio = static_init!(
@@ -528,6 +529,7 @@ pub unsafe fn main() {
             // Pin D1
             &peripherals.pb[15],
             &peripherals.ast,
+            radio_buffers,
         ));
     ism_radio.initialize();
 

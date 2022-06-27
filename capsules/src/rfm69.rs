@@ -5,7 +5,9 @@
  * The host communicates with the radio over an SPI interface.
  */
 
-use kernel::ProcessId;
+use core::cell::Cell;
+
+use kernel::{ErrorCode, ProcessId};
 use kernel::grant::{
     AllowRoCount,
     AllowRwCount,
@@ -13,6 +15,7 @@ use kernel::grant::{
     UpcallCount,
 };
 use kernel::hil::gpio;
+use kernel::hil::spi;
 use kernel::hil::spi::SpiMasterDevice;
 use kernel::hil::time;
 use kernel::hil::time::ConvertTicks as _;
@@ -21,8 +24,31 @@ use kernel::syscall::{
     SyscallDriver,
     SyscallReturn,
 };
+use kernel::utilities::cells::TakeCell;
 
 pub const DRIVER_NUM: usize = crate::driver::NUM::Ism as usize;
+
+type Result<T> = core::result::Result<T, RadioError>;
+
+#[derive(Debug)]
+enum RadioError {
+    Busy,
+    Inconsistent,
+    System(ErrorCode),
+}
+
+/// Register addresses.
+#[allow(non_upper_case_globals, unused)]
+mod register {
+    pub const FIFO: u8                = 0x00;
+    pub const OpMode: u8              = 0x01;
+    pub const PALevel: u8             = 0x11;
+    pub const DIOMapping0: u8         = 0x25;
+    pub const DIOMapping1: u8         = 0x26;
+    pub const IRQFlags1: u8           = 0x27;
+    pub const IRQFlags2: u8           = 0x28;
+    pub const SyncConfig: u8          = 0x2E;
+}
 
 /// Packet format, either fixed- or variable-length.
 #[derive(Clone, Copy)]
@@ -64,6 +90,36 @@ impl Default for AppData {
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum Status {
+    Idle,
+    WriteRegister(u8, u8),
+    ConfirmRegister(u8),
+    ModifyRegister(u8, u8, u8),
+}
+
+#[derive(Clone, Copy)]
+enum Mode {
+    Sleep,
+    Standby,
+    Transmit,
+    Receive,
+}
+
+impl TryFrom<u8> for Mode {
+    type Error = ();
+
+    fn try_from(v: u8) -> core::result::Result<Mode, ()> {
+        match v {
+            0 => Ok(Mode::Sleep),
+            1 => Ok(Mode::Standby),
+            3 => Ok(Mode::Transmit),
+            4 => Ok(Mode::Receive),
+            _ => Err(()),
+        }
+    }
+}
+
 /// Helper trait for obtaining a configurable output GPIO pin.
 pub trait ResetPin: 'static + gpio::Configure + gpio::Output {  }
 impl<T: 'static + gpio::Configure + gpio::Output> ResetPin for T {  }
@@ -79,6 +135,8 @@ pub struct RFM69<A: 'static + time::Frequency, B: 'static + time::Ticks> {
     interrupt_pin: &'static dyn InterruptPin,
     reset_pin: &'static dyn ResetPin,
     time_source: &'static dyn time::Time<Frequency = A, Ticks = B>,
+    buffers: (TakeCell<'static, [u8]>, TakeCell<'static, [u8]>),
+    status: Cell<Status>,
 }
 
 impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
@@ -89,6 +147,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         interrupt_pin: &'static dyn InterruptPin,
         reset_pin: &'static dyn ResetPin,
         time_source: &'static dyn time::Time<Frequency = A, Ticks = B>,
+        buffers: (&'static mut [u8; 2], &'static mut [u8; 2]),
     ) -> RFM69<A, B>
     {
         // Configure pins.
@@ -97,22 +156,34 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         interrupt_pin.make_input();
         interrupt_pin.enable_interrupts(gpio::InterruptEdge::RisingEdge);
 
+        // Configure SPI.
+        spi.configure(spi::ClockPolarity::IdleLow, spi::ClockPhase::SampleLeading, 1000)
+            .unwrap();
+
+        let (rbuf, wbuf) = buffers;
+
         RFM69 {
             grants,
             spi,
             interrupt_pin,
             reset_pin,
             time_source,
+            buffers: (TakeCell::new(rbuf), TakeCell::new(wbuf)),
+            status: Cell::new(Status::Idle),
         }
     }
 
     /// Ensure the radio is present and put it to sleep.
-    pub fn initialize(&self) {
+    pub fn initialize(&'static self) {
         // Reset the radio and synchronously wait.
         self.reset_pin.set();
         self.busy_wait(1);
         self.reset_pin.clear();
         self.busy_wait(5);
+
+        self.spi.set_client(self);
+
+        // Place the radio in sleep.
     }
 
     #[inline]
@@ -123,10 +194,123 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
             if self.time_source.now() > t_end { break; }
         }
     }
+
+    fn read(&self, address: u8) -> Result<()> {
+        let (rbuf, wbuf) = (self.buffers.0.take().ok_or(RadioError::Busy)?,
+                            self.buffers.1.take().ok_or(RadioError::Busy)?);
+        wbuf[0] = 0b0111_1111 & address;
+
+        if let Err((error, buf_a, buf_b)) = self.spi.read_write_bytes(wbuf, Some(rbuf), 2) {
+            self.buffers.0.put(Some(buf_a));
+            self.buffers.1.put(buf_b);
+            Err(RadioError::System(error))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn write(&self, address: u8, val: u8) -> Result<()> {
+        let (rbuf, wbuf) = (self.buffers.0.take().ok_or(RadioError::Busy)?,
+                            self.buffers.1.take().ok_or(RadioError::Busy)?);
+        *wbuf.get_mut(0).unwrap() = 0b1000_0000 | address;
+        *wbuf.get_mut(1).unwrap() = val;
+
+        if let Err((error, buf_a, buf_b)) = self.spi.read_write_bytes(wbuf, Some(rbuf), 2) {
+            self.buffers.0.put(Some(buf_a));
+            self.buffers.1.put(buf_b);
+            Err(RadioError::System(error))
+        } else {
+            self.status.set(Status::WriteRegister(address, val));
+            Ok(())
+        }
+    }
+
+    /// Update bits in a register.
+    ///
+    /// Change only the bits in the mask.
+    /// `val` will be shifted up to proper offset in the mask.
+    fn modify(&self, address: u8, mask: u8, val: u8) -> Result<()> {
+        if self.status.get() != Status::Idle {
+            Err(RadioError::Busy)
+        } else {
+            assert!(mask != 0);
+            let mut s = 0;
+            while (mask >> s) & 1 != 1 { s += 1; }
+
+            self.status.set(Status::ModifyRegister(address, mask, val << s));
+            self.read(address).or_else(|e| {
+                self.status.set(Status::Idle);
+                Err(e)
+            })
+        }
+    }
+
+    fn process_callback(&self) -> Result<()> {
+        use Status::*;
+        let current_status = self.status.get();
+        match current_status {
+            // Somehow, the driver was doing something yet the status reflects it as being idle.
+            // This is a logic bug for the driver.
+            Idle => panic!(),
+
+            // Completed writing the requested register to a specific value.
+            // Read the value back to confirm that it is, in fact, correct.
+            WriteRegister(addr, val) => {
+                self.status.set(Status::ConfirmRegister(val));
+                self.read(addr)
+            },
+
+            // Completed reading a register to confirm a value.
+            // Compare the value to make sure it matches up.
+            ConfirmRegister(written) => {
+                self.status.set(Status::Idle);
+                let actual = self.buffers.0.map(|buf| *buf.get(1).unwrap()).unwrap();
+                if written == actual {
+                    Ok(())
+                } else {
+                    Err(RadioError::Inconsistent)
+                }
+            },
+
+            // Completed reading the current register value.
+            // Update the register's current value and perform the write.
+            ModifyRegister(addr, mask, val) => {
+                let current = self.buffers.0.map(|buf| *buf.get(1).unwrap()).unwrap();
+                let new_val = (current & !mask) | val;
+                self.write(addr, new_val)
+            }
+        }
+    }
+
+    // fn set_mode(&self, target_mode: Mode) {
+    //     self.write(register::OpMode,
+    // }
+}
+
+impl<A: 'static + time::Frequency, B: 'static + time::Ticks> spi::SpiMasterClient for RFM69<A, B> {
+    fn read_write_done(
+        &self,
+        write_buffer: &'static mut [u8],
+        read_buffer: Option<&'static mut [u8]>,
+        _len: usize,
+        status: core::result::Result<(), ErrorCode>)
+    {
+        self.buffers.0.put(read_buffer);
+        self.buffers.1.put(Some(write_buffer));
+
+        if let Err(e) = status {
+            kernel::debug!("SPI failed: {:?}", e);
+        } else {
+            // Perform the next step of the operation.
+            if let Err(e) = self.process_callback() {
+                kernel::debug!("Radio callback processing failed: {:?}", e);
+            }
+        }
+    }
 }
 
 impl<A: 'static + time::Frequency, B: 'static + time::Ticks> SyscallDriver for RFM69<A, B> {
-    fn allocate_grant(&self, pid: ProcessId) -> Result<(), kernel::process::Error> {
+    fn allocate_grant(&self, pid: ProcessId) -> core::result::Result<(), kernel::process::Error> {
         self.grants.enter(pid, |_, _| {  })
     }
 }
