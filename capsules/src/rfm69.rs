@@ -132,7 +132,7 @@ pub struct RFM69<A: 'static + time::Frequency, B: 'static + time::Ticks> {
     spi: &'static dyn SpiMasterDevice,
     interrupt_pin: &'static dyn InterruptPin,
     reset_pin: &'static dyn ResetPin,
-    time_source: &'static dyn time::Time<Frequency = A, Ticks = B>,
+    time_source: &'static dyn time::Counter<'static, Frequency = A, Ticks = B>,
     buffers: (TakeCell<'static, [u8]>, TakeCell<'static, [u8]>),
     status: Cell<Status>,
 }
@@ -144,9 +144,10 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         spi: &'static dyn SpiMasterDevice,
         interrupt_pin: &'static dyn InterruptPin,
         reset_pin: &'static dyn ResetPin,
-        time_source: &'static dyn time::Time<Frequency = A, Ticks = B>,
+        time_source: &'static dyn time::Counter<Frequency = A, Ticks = B>,
         buffers: (&'static mut [u8; 2], &'static mut [u8; 2]),
     ) -> RFM69<A, B>
+
     {
         // Configure pins.
         reset_pin.make_output();
@@ -155,6 +156,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         interrupt_pin.enable_interrupts(gpio::InterruptEdge::RisingEdge);
 
         // Configure SPI.
+        kernel::debug!("Configuring SPI. {}", time_source.now().into_u32());
         spi.configure(spi::ClockPolarity::IdleLow, spi::ClockPhase::SampleLeading, 1000)
             .unwrap();
 
@@ -173,6 +175,12 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
 
     /// Ensure the radio is present and put it to sleep.
     pub fn initialize(&'static self) {
+        if !self.time_source.is_running() {
+            self.time_source.start().unwrap();
+            kernel::debug!("Radio started counter.");
+        }
+
+        kernel::debug!("Resetting radio...");
         // Reset the radio and synchronously wait.
         self.reset_pin.set();
         self.busy_wait(1);
@@ -181,10 +189,11 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
 
         self.spi.set_client(self);
 
+        kernel::debug!("Putting radio to sleep mode.");
         // Place the radio in sleep.
+        self.set_mode(Mode::Sleep).unwrap();
     }
 
-    #[inline]
     fn busy_wait(&self, duration_ms: u32) {
         let t_end = self.time_source.now()
             .wrapping_add(self.time_source.ticks_from_ms(duration_ms));
@@ -254,6 +263,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
             // Completed writing the requested register to a specific value.
             // Read the value back to confirm that it is, in fact, correct.
             WriteRegister(addr, val) => {
+                kernel::debug!("Write: completed writing new value");
                 self.status.set(Status::ConfirmRegister(val));
                 self.read(addr)
             },
@@ -261,6 +271,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
             // Completed reading a register to confirm a value.
             // Compare the value to make sure it matches up.
             ConfirmRegister(written) => {
+                kernel::debug!("Confirm: completed reading new value; confirming...");
                 self.status.set(Status::Idle);
                 let actual = self.buffers.0.map(|buf| *buf.get(1).unwrap()).unwrap();
                 if written == actual {
@@ -273,6 +284,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
             // Completed reading the current register value.
             // Update the register's current value and perform the write.
             ModifyRegister(addr, mask, val) => {
+                kernel::debug!("Modify: completed reading current value");
                 let current = self.buffers.0.map(|buf| *buf.get(1).unwrap()).unwrap();
                 let new_val = (current & !mask) | val;
                 self.write(addr, new_val)
