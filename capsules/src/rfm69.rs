@@ -43,11 +43,50 @@ mod register {
     pub const FIFO: u8                = 0x00;
     pub const OpMode: u8              = 0x01;
     pub const PALevel: u8             = 0x11;
+    pub const LNA: u8                 = 0x18;
+    pub const RxBW: u8                = 0x19;
+    pub const AFCBW: u8               = 0x1A;
     pub const DIOMapping0: u8         = 0x25;
     pub const DIOMapping1: u8         = 0x26;
     pub const IRQFlags1: u8           = 0x27;
+    pub const RSSIThresh: u8          = 0x29;
     pub const IRQFlags2: u8           = 0x28;
+    pub const PreambleMSB: u8         = 0x2C;
+    pub const PreambleLSB: u8         = 0x2D;
     pub const SyncConfig: u8          = 0x2E;
+    pub const PacketConfig1: u8       = 0x37;
+    pub const FIFOThresh: u8          = 0x3C;
+    pub const TestDAGC: u8            = 0x6F;
+
+    /// Register masks.
+    pub mod mask {
+        pub const OpMode_Mode: u8 = 0b00011100;
+
+        // Refer to section 3.3.7 of datasheet.
+        pub const PALevel_PA0On: u8 = 0b10000000;
+        pub const PALevel_PA1On: u8 = 0b01000000;
+        pub const PALevel_PA2On: u8 = 0b00100000;
+        pub const PALevel_OutputPower: u8 = 0b00011111;
+
+        // See table 21 and table 22.
+        pub const DIOMapping0_DIO0: u8 = 0b11000000;
+        pub const DIOMapping0_DIO1: u8 = 0b00110000;
+        pub const DIOMapping0_DIO2: u8 = 0b00001100;
+        pub const DIOMapping0_DIO3: u8 = 0b00000011;
+        pub const DIOMapping1_DIO4: u8 = 0b11000000;
+        pub const DIOMapping1_DIO5: u8 = 0b00110000;
+
+        pub const IRQFlags1_ModeReady: u8 = 0b10000000;
+        pub const IRQFlags1_RXReady: u8 = 0b01000000;
+        pub const IRQFlags1_TXReady: u8 = 0b00100000;
+
+        pub const IRQFlags2_FIFOFull: u8 = 0b10000000;
+        pub const IRQFlags2_FIFONotEmpty: u8 = 0b01000000;
+        pub const IRQFlags2_PacketSent: u8 = 0b00001000;
+
+        pub const SyncConfig_SyncOn: u8 = 0b10000000;
+        pub const SyncConfig_SyncSize: u8 = 0b00111000;
+    }
 }
 
 /// Packet format, either fixed- or variable-length.
@@ -90,12 +129,22 @@ impl Default for AppData {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+/// State of the split-phase operation the driver is doing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Operation {
+    /// Writing a value to a register, (address, value).
+    Write(u8, u8),
+    /// Checking that a read value matches expected value, (expected value).
+    Confirm(u8),
+    /// Updating a value in a register, (address, mask, shifted value).
+    Modify(u8, u8, u8),
+}
+
+/// Overall status of the driver.
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Status {
     Idle,
-    WriteRegister(u8, u8),
-    ConfirmRegister(u8),
-    ModifyRegister(u8, u8, u8),
+    Busy(Operation),
 }
 
 #[derive(Clone, Copy)]
@@ -135,6 +184,7 @@ pub struct RFM69<A: 'static + time::Frequency, B: 'static + time::Ticks> {
     time_source: &'static dyn time::Counter<'static, Frequency = A, Ticks = B>,
     buffers: (TakeCell<'static, [u8]>, TakeCell<'static, [u8]>),
     status: Cell<Status>,
+    pending: [Cell<Option<Operation>>; 8],
 }
 
 impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
@@ -156,7 +206,6 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         interrupt_pin.enable_interrupts(gpio::InterruptEdge::RisingEdge);
 
         // Configure SPI.
-        kernel::debug!("Configuring SPI. {}", time_source.now().into_u32());
         spi.configure(spi::ClockPolarity::IdleLow, spi::ClockPhase::SampleLeading, 1000)
             .unwrap();
 
@@ -170,6 +219,16 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
             time_source,
             buffers: (TakeCell::new(rbuf), TakeCell::new(wbuf)),
             status: Cell::new(Status::Idle),
+            pending: [
+                Cell::new(None),
+                Cell::new(None),
+                Cell::new(None),
+                Cell::new(None),
+                Cell::new(None),
+                Cell::new(None),
+                Cell::new(None),
+                Cell::new(None),
+            ],
         }
     }
 
@@ -177,10 +236,8 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
     pub fn initialize(&'static self) {
         if !self.time_source.is_running() {
             self.time_source.start().unwrap();
-            kernel::debug!("Radio started counter.");
         }
 
-        kernel::debug!("Resetting radio...");
         // Reset the radio and synchronously wait.
         self.reset_pin.set();
         self.busy_wait(1);
@@ -189,9 +246,15 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
 
         self.spi.set_client(self);
 
-        kernel::debug!("Putting radio to sleep mode.");
-        // Place the radio in sleep.
-        self.set_mode(Mode::Sleep).unwrap();
+        // Start setting the recommended settings.
+        // Begin writing this sequence of settings by manually calling write().
+        self.pending[0].set(Some(Operation::Write(register::LNA, 0x88)));
+        self.pending[1].set(Some(Operation::Write(register::RxBW, 0x55)));
+        self.pending[2].set(Some(Operation::Write(register::AFCBW, 0x8B)));
+        self.pending[3].set(Some(Operation::Write(register::RSSIThresh, 0xE4)));
+        self.pending[4].set(Some(Operation::Write(register::TestDAGC, 0x30)));
+        self.pending[5].set(Some(Operation::Write(register::PreambleLSB, 0x40)));
+        self.write(register::LNA, 0x88).unwrap();
     }
 
     fn busy_wait(&self, duration_ms: u32) {
@@ -205,6 +268,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
     fn read(&self, address: u8) -> Result<()> {
         let (rbuf, wbuf) = (self.buffers.0.take().ok_or(RadioError::Busy)?,
                             self.buffers.1.take().ok_or(RadioError::Busy)?);
+        rbuf[0] = 0xEE; rbuf[1] = 0xEE;
         wbuf[0] = 0b0111_1111 & address;
 
         if let Err((error, buf_a, buf_b)) = self.spi.read_write_bytes(wbuf, Some(rbuf), 2) {
@@ -227,7 +291,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
             self.buffers.1.put(buf_b);
             Err(RadioError::System(error))
         } else {
-            self.status.set(Status::WriteRegister(address, val));
+            self.status.set(Status::Busy(Operation::Write(address, val)));
             Ok(())
         }
     }
@@ -237,6 +301,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
     /// Change only the bits in the mask.
     /// `val` will be shifted up to proper offset in the mask.
     fn modify(&self, address: u8, mask: u8, val: u8) -> Result<()> {
+        kernel::debug!("Modifying {:#X} ({:#08b}, {:#X})", address, mask, val);
         if self.status.get() != Status::Idle {
             Err(RadioError::Busy)
         } else {
@@ -244,7 +309,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
             let mut s = 0;
             while (mask >> s) & 1 != 1 { s += 1; }
 
-            self.status.set(Status::ModifyRegister(address, mask, val << s));
+            self.status.set(Status::Busy(Operation::Modify(address, mask, val << s)));
             self.read(address).or_else(|e| {
                 self.status.set(Status::Idle);
                 Err(e)
@@ -260,41 +325,76 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
             // This is a logic bug for the driver.
             Idle => panic!(),
 
-            // Completed writing the requested register to a specific value.
-            // Read the value back to confirm that it is, in fact, correct.
-            WriteRegister(addr, val) => {
-                kernel::debug!("Write: completed writing new value");
-                self.status.set(Status::ConfirmRegister(val));
-                self.read(addr)
-            },
+            Busy(operation) => match operation {
+                // Completed writing the requested register to a specific value.
+                // Read the value back to confirm that it is, in fact, correct.
+                Operation::Write(addr, val) => {
+                    // Remove the write from the pending queue.
+                    self.pending.iter()
+                        .find(|w| {
+                            if let Some(op) = w.get() {
+                                match op {
+                                    Operation::Write(op_addr, _val) => op_addr == addr,
+                                    Operation::Modify(op_addr, _mask, _val) => op_addr == addr,
+                                    // Should only see writes and modifies in the queue.
+                                    _ => panic!(),
+                                }
+                            } else {
+                                false
+                            }
+                        })
+                        .map_or_else(
+                            || { kernel::debug!("Last command was not in queue."); },
+                            |entry| { entry.set(None); });
 
-            // Completed reading a register to confirm a value.
-            // Compare the value to make sure it matches up.
-            ConfirmRegister(written) => {
-                kernel::debug!("Confirm: completed reading new value; confirming...");
-                self.status.set(Status::Idle);
-                let actual = self.buffers.0.map(|buf| *buf.get(1).unwrap()).unwrap();
-                if written == actual {
-                    Ok(())
-                } else {
-                    Err(RadioError::Inconsistent)
+                    self.status.set(Status::Busy(Operation::Confirm(val)));
+                    self.read(addr)
+                },
+
+                // Completed reading a register to confirm a value.
+                // Compare the value to make sure it matches up.
+                Operation::Confirm(written) => {
+                    self.status.set(Status::Idle);
+                    let actual = self.buffers.0.map(|buf| *buf.get(1).unwrap()).unwrap();
+                    if written == actual {
+                        // Possibly pull a pending write off the queue.
+                        let mut next = self.pending.iter()
+                            .filter(|w| w.get().is_some())
+                            .map(|w| w.get())
+                            .nth(0)
+                            .unwrap_or(None);
+                        if let Some(pending_write) = next {
+                            match pending_write {
+                                Operation::Write(addr, val) => self.write(addr, val),
+                                Operation::Modify(addr, mask, val) => self.modify(addr, mask, val),
+                                // A pending operation that is not write or modify made it into the queue.
+                                // This is a logic bug.
+                                // The driver should only place Write or Modify operations into the queue.
+                                _ => panic!(),
+                            }
+                        } else {
+                            Ok(())
+                        }
+                    } else {
+                        kernel::debug!("Inconsistent values (exp. v. actual): {:#X} != {:#X}", written, actual);
+                        Err(RadioError::Inconsistent)
+                    }
+                },
+
+                // Completed reading the current register value.
+                // Update the register's current value and perform the write.
+                Operation::Modify(addr, mask, val) => {
+                    let current = self.buffers.0.map(|buf| *buf.get(1).unwrap()).unwrap();
+                    let new_val = (current & !mask) | val;
+                    self.write(addr, new_val)
                 }
-            },
-
-            // Completed reading the current register value.
-            // Update the register's current value and perform the write.
-            ModifyRegister(addr, mask, val) => {
-                kernel::debug!("Modify: completed reading current value");
-                let current = self.buffers.0.map(|buf| *buf.get(1).unwrap()).unwrap();
-                let new_val = (current & !mask) | val;
-                self.write(addr, new_val)
             }
         }
     }
 
     fn set_mode(&self, target_mode: Mode) -> Result<()> {
         let mode_val = u8::from(target_mode);
-        self.modify(register::OpMode, 0b00011100, mode_val)
+        self.modify(register::OpMode, register::mask::OpMode_Mode, mode_val)
     }
 }
 
@@ -321,6 +421,14 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> spi::SpiMasterClien
 }
 
 impl<A: 'static + time::Frequency, B: 'static + time::Ticks> SyscallDriver for RFM69<A, B> {
+    fn command(&self, command_no: usize, r2: usize, r3: usize, pid: ProcessId) -> CommandReturn {
+        match command_no {
+            // Driver check.
+            0 => CommandReturn::success(),
+            _ => CommandReturn::failure(ErrorCode::INVAL),
+        }
+    }
+
     fn allocate_grant(&self, pid: ProcessId) -> core::result::Result<(), kernel::process::Error> {
         self.grants.enter(pid, |_, _| {  })
     }
