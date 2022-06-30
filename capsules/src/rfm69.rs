@@ -143,8 +143,14 @@ enum Operation {
 /// Overall status of the driver.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Status {
+    /// Driver is not doing anything.
     Idle,
-    Busy(Operation),
+    /// In the middle of a read/write/modify operation.
+    Transaction(Operation),
+    /// Radio is in receive mode.
+    Receive,
+    /// Radio is in transmit mode.
+    Transmit,
 }
 
 #[derive(Clone, Copy)]
@@ -245,16 +251,18 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         self.busy_wait(5);
 
         self.spi.set_client(self);
+        self.interrupt_pin.set_client(self);
 
         // Start setting the recommended settings.
-        // Begin writing this sequence of settings by manually calling write().
         self.pending[0].set(Some(Operation::Write(register::LNA, 0x88)));
         self.pending[1].set(Some(Operation::Write(register::RxBW, 0x55)));
         self.pending[2].set(Some(Operation::Write(register::AFCBW, 0x8B)));
         self.pending[3].set(Some(Operation::Write(register::RSSIThresh, 0xE4)));
         self.pending[4].set(Some(Operation::Write(register::TestDAGC, 0x30)));
         self.pending[5].set(Some(Operation::Write(register::PreambleLSB, 0x40)));
-        self.write(register::LNA, 0x88).unwrap();
+        // And put the radio into sleep mode.
+        self.pending[6].set(Some(Operation::Modify(register::OpMode, register::mask::OpMode_Mode, u8::from(Mode::Sleep))));
+        self.start_queue().unwrap();
     }
 
     fn busy_wait(&self, duration_ms: u32) {
@@ -286,12 +294,13 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         *wbuf.get_mut(0).unwrap() = 0b1000_0000 | address;
         *wbuf.get_mut(1).unwrap() = val;
 
+        self.status.set(Status::Transaction(Operation::Write(address, val)));
         if let Err((error, buf_a, buf_b)) = self.spi.read_write_bytes(wbuf, Some(rbuf), 2) {
+            self.status.set(Status::Idle);
             self.buffers.0.put(Some(buf_a));
             self.buffers.1.put(buf_b);
             Err(RadioError::System(error))
         } else {
-            self.status.set(Status::Busy(Operation::Write(address, val)));
             Ok(())
         }
     }
@@ -301,7 +310,6 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
     /// Change only the bits in the mask.
     /// `val` will be shifted up to proper offset in the mask.
     fn modify(&self, address: u8, mask: u8, val: u8) -> Result<()> {
-        kernel::debug!("Modifying {:#X} ({:#08b}, {:#X})", address, mask, val);
         if self.status.get() != Status::Idle {
             Err(RadioError::Busy)
         } else {
@@ -309,7 +317,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
             let mut s = 0;
             while (mask >> s) & 1 != 1 { s += 1; }
 
-            self.status.set(Status::Busy(Operation::Modify(address, mask, val << s)));
+            self.status.set(Status::Transaction(Operation::Modify(address, mask, val << s)));
             self.read(address).or_else(|e| {
                 self.status.set(Status::Idle);
                 Err(e)
@@ -317,15 +325,23 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         }
     }
 
+    fn start_queue(&self) -> Result<()> {
+        // Get the first operation off of the queue and start the operations.
+        // This must exist, if not, there is a bug in the driver.
+        let operation = self.pending[0].get().unwrap();
+        match operation {
+            Operation::Write(addr, val) => self.write(addr, val),
+            Operation::Modify(addr, mask, val) => self.modify(addr, mask, val),
+            // Invalid operation queued up.
+            _ => panic!(),
+        }
+    }
+
     fn process_callback(&self) -> Result<()> {
         use Status::*;
         let current_status = self.status.get();
         match current_status {
-            // Somehow, the driver was doing something yet the status reflects it as being idle.
-            // This is a logic bug for the driver.
-            Idle => panic!(),
-
-            Busy(operation) => match operation {
+            Transaction(operation) => match operation {
                 // Completed writing the requested register to a specific value.
                 // Read the value back to confirm that it is, in fact, correct.
                 Operation::Write(addr, val) => {
@@ -347,7 +363,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                             || { kernel::debug!("Last command was not in queue."); },
                             |entry| { entry.set(None); });
 
-                    self.status.set(Status::Busy(Operation::Confirm(val)));
+                    self.status.set(Status::Transaction(Operation::Confirm(val)));
                     self.read(addr)
                 },
 
@@ -389,12 +405,11 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                     self.write(addr, new_val)
                 }
             }
-        }
-    }
 
-    fn set_mode(&self, target_mode: Mode) -> Result<()> {
-        let mode_val = u8::from(target_mode);
-        self.modify(register::OpMode, register::mask::OpMode_Mode, mode_val)
+            // Driver was not doing an SPI operation yet received an interrupt.
+            // This is a logic bug for the driver.
+            _ => panic!()
+        }
     }
 }
 
@@ -431,5 +446,29 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> SyscallDriver for R
 
     fn allocate_grant(&self, pid: ProcessId) -> core::result::Result<(), kernel::process::Error> {
         self.grants.enter(pid, |_, _| {  })
+    }
+}
+
+impl<A: 'static + time::Frequency, B: 'static + time::Ticks> gpio::Client for RFM69<A, B> {
+    fn fired(&self) {
+        // Interrupt for GPIO pin fired.
+        // Reason depends on the radio's operating mode,
+        // which corresponds to the state of the driver.
+        match self.status.get() {
+            // Radio/driver is not doing anything, nor were we expecting an interrupt.
+            Status::Idle => {  },
+
+            // Driver in the middle of reading/writing registers.
+            // This is also an unexpected state to be in and receive an interrupt.
+            Status::Transaction(_op) => {  },
+
+            // Radio is in receive mode.
+            // The interrupt means we have received a packet.
+            Status::Receive => unimplemented!(),
+
+            // Radio is in transmit mode.
+            // The interrupt means we have completed transmitting a packet.
+            Status::Transmit => unimplemented!(),
+        }
     }
 }
