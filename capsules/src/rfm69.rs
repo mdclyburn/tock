@@ -547,29 +547,41 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                                             Ok(ro_buffer.len())
                                         }
                                     })
-                            });
+                            }).unwrap();
 
                             // The grant operations yield a result wrapping the message length
                             // doubly-nested by results.
-                            let msg_length = match grant_result {
-                                Ok(buffer_result) => match buffer_result {
-                                    Ok(op_result) => op_result?,
-                                    Err(e) => unimplemented!(),
+                            match grant_result {
+                                Ok(len_result) => {
+                                    // Write the data into the FIFO.
+                                    // If either of the buffers are missing, there is a bug because
+                                    // we were just handling the write buffer, and this function gets
+                                    // called by the read_write_done function, which puts buffers back.
+                                    let wbuf = self.buffers.1.take().unwrap();
+                                    // And this one... produces some complex error management issues
+                                    // should we handle a failure here. Likely do a callback to the
+                                    // app to notify it that the transmission failed.
+                                    self.status.set(Status::Transmit);
+                                    self.spi.read_write_bytes(wbuf, None, 1+len_result?).unwrap();
                                 },
 
-                                Err(e) => unimplemented!(),
-                            };
+                                Err(err) => match err {
+                                    // If these errors are the cause, the driver stops the system here.
+                                    kernel::process::Error::KernelError
+                                        | kernel::process::Error::AlreadyInUse => panic!(),
 
-                            // Write the data into the FIFO.
-                            // If either of the buffers are missing, there is a bug because
-                            // we were just handling the write buffer, and this function gets
-                            // called by the read_write_done function, which puts buffers back.
-                            let wbuf = self.buffers.1.take().unwrap();
-                            // And this one... produces some complex error management issues
-                            // should we handle a failure here. Likely do a callback to the
-                            // app to notify it that the transmission failed.
-                            self.status.set(Status::Transmit);
-                            self.spi.read_write_bytes(wbuf, None, 1+msg_length).unwrap();
+                                    // All other errors should cancel the operation.
+                                    // Leave the driver in the idle state.
+                                    kernel::process::Error::AddressOutOfBounds
+                                        | kernel::process::Error::OutOfMemory
+                                        | kernel::process::Error::NoSuchApp
+                                        | kernel::process::Error::InactiveApp => {
+                                            // Do not rely on the earlier set.
+                                            self.status.set(Status::Idle);
+                                            kernel::debug!("RFM69: grant action failed: {:?}", err);
+                                        }
+                                }
+                            };
 
                             Ok(())
                         } else {
