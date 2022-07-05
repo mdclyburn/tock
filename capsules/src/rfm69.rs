@@ -19,12 +19,13 @@ use kernel::hil::spi;
 use kernel::hil::spi::SpiMasterDevice;
 use kernel::hil::time;
 use kernel::hil::time::ConvertTicks as _;
+use kernel::processbuffer::ReadableProcessBuffer as _;
 use kernel::syscall::{
     CommandReturn,
     SyscallDriver,
     SyscallReturn,
 };
-use kernel::utilities::cells::TakeCell;
+use kernel::utilities::cells::{OptionalCell, TakeCell};
 
 pub const DRIVER_NUM: usize = crate::driver::NUM::Ism as usize;
 
@@ -34,14 +35,24 @@ type Result<T> = core::result::Result<T, RadioError>;
 enum RadioError {
     Busy,
     Inconsistent,
+    Process(kernel::process::Error),
     System(ErrorCode),
+    QueueFull,
 }
+
+// impl core::convert::From<kernel::process::Error> for RadioError {
+//     fn from(e: kernel::process::Error) -> RadioError {
+//         RadioError::Process(e)
+//     }
+// }
 
 /// Register addresses.
 #[allow(non_upper_case_globals, unused)]
 mod register {
     pub const FIFO: u8                = 0x00;
     pub const OpMode: u8              = 0x01;
+    pub const BitrateMSB: u8          = 0x03;
+    pub const BitrateLSB: u8          = 0x04;
     pub const PALevel: u8             = 0x11;
     pub const LNA: u8                 = 0x18;
     pub const RxBW: u8                = 0x19;
@@ -54,8 +65,12 @@ mod register {
     pub const PreambleMSB: u8         = 0x2C;
     pub const PreambleLSB: u8         = 0x2D;
     pub const SyncConfig: u8          = 0x2E;
+    pub const SyncValue1: u8          = 0x2F;
     pub const PacketConfig1: u8       = 0x37;
+    pub const PayloadLength: u8       = 0x38;
     pub const FIFOThresh: u8          = 0x3C;
+    pub const PacketConfig2: u8       = 0x3D;
+    pub const AESKey1: u8             = 0x3E;
     pub const TestDAGC: u8            = 0x6F;
 
     /// Register masks.
@@ -84,6 +99,10 @@ mod register {
         pub const IRQFlags2_FIFONotEmpty: u8 = 0b01000000;
         pub const IRQFlags2_PacketSent: u8 = 0b00001000;
 
+        pub const PacketConfig1_PacketFormat: u8 = 0b10000000;
+
+        pub const PacketConfig2_AESOn: u8 = 0b00000001;
+
         pub const SyncConfig_SyncOn: u8 = 0b10000000;
         pub const SyncConfig_SyncSize: u8 = 0b00111000;
     }
@@ -98,16 +117,18 @@ enum PacketFormat {
     Variable,
 }
 
+const BUFFER_RW_ALLOW_NO_FIFO: usize = 0;
+
 /// RFM69 per-app grant data.
 pub struct AppData {
     /// Whether receive mode is active for the application.
     awaiting_rx: bool,
-    /// Bit rate setting (see datasheet for valid values.
+    /// Bit rate setting (see datasheet for valid values).
     bit_rate: u16,
     /// Packet format used by the application.
     packet_format: PacketFormat,
     /// Synchronization word.
-    sync_word: u64,
+    sync_word: Option<(u8, u64)>,
     /// Node and broadcast address for filtering.
     address: Option<(u8, Option<u8>)>,
     /// AES encryption key.
@@ -122,7 +143,7 @@ impl Default for AppData {
             bit_rate: 0x00D5,
             packet_format: PacketFormat::Variable,
             // This is the default sync word.
-            sync_word: 1 << (7 * 8),
+            sync_word: None,
             address: None,
             enc_key: None,
         }
@@ -147,9 +168,7 @@ enum Status {
     Idle,
     /// In the middle of a read/write/modify operation.
     Transaction(Operation),
-    /// Radio is in receive mode.
-    Receive,
-    /// Radio is in transmit mode.
+    /// Radio is transmitting a packet.
     Transmit,
 }
 
@@ -181,6 +200,8 @@ impl<T: 'static + gpio::Configure + gpio::Output> ResetPin for T {  }
 pub trait InterruptPin: 'static + gpio::Configure + gpio::Interrupt<'static> {  }
 impl<T: 'static + gpio::Configure + gpio::Interrupt<'static>> InterruptPin for T {  }
 
+const FIFO_LENGTH: usize = 66;
+
 /// RFM69 ISM radio driver.
 pub struct RFM69<A: 'static + time::Frequency, B: 'static + time::Ticks> {
     grants: Grant<AppData, UpcallCount<1>, AllowRoCount<0>, AllowRwCount<1>>,
@@ -190,7 +211,9 @@ pub struct RFM69<A: 'static + time::Frequency, B: 'static + time::Ticks> {
     time_source: &'static dyn time::Counter<'static, Frequency = A, Ticks = B>,
     buffers: (TakeCell<'static, [u8]>, TakeCell<'static, [u8]>),
     status: Cell<Status>,
-    pending: [Cell<Option<Operation>>; 8],
+    pending: [Cell<Option<Operation>>; 24],
+    fifo_write_pending: Cell<bool>,
+    configured_for: OptionalCell<ProcessId>,
 }
 
 impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
@@ -201,7 +224,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         interrupt_pin: &'static dyn InterruptPin,
         reset_pin: &'static dyn ResetPin,
         time_source: &'static dyn time::Counter<Frequency = A, Ticks = B>,
-        buffers: (&'static mut [u8; 2], &'static mut [u8; 2]),
+        buffers: (&'static mut [u8; 2], &'static mut [u8; FIFO_LENGTH+1]),
     ) -> RFM69<A, B>
 
     {
@@ -234,7 +257,25 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                 Cell::new(None),
                 Cell::new(None),
                 Cell::new(None),
+                Cell::new(None),
+                Cell::new(None),
+                Cell::new(None),
+                Cell::new(None),
+                Cell::new(None),
+                Cell::new(None),
+                Cell::new(None),
+                Cell::new(None),
+                Cell::new(None),
+                Cell::new(None),
+                Cell::new(None),
+                Cell::new(None),
+                Cell::new(None),
+                Cell::new(None),
+                Cell::new(None),
+                Cell::new(None),
             ],
+            fifo_write_pending: Cell::new(false),
+            configured_for: OptionalCell::<ProcessId>::empty(),
         }
     }
 
@@ -261,7 +302,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         self.pending[4].set(Some(Operation::Write(register::TestDAGC, 0x30)));
         self.pending[5].set(Some(Operation::Write(register::PreambleLSB, 0x40)));
         // And put the radio into sleep mode.
-        self.pending[6].set(Some(Operation::Modify(register::OpMode, register::mask::OpMode_Mode, u8::from(Mode::Sleep))));
+        self.queue_mode_change(Mode::Sleep).unwrap();
         self.start_queue().unwrap();
     }
 
@@ -337,6 +378,101 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         }
     }
 
+    fn queue(&self, operation: Operation) -> Result<()> {
+        for i in 0..self.pending.len() {
+            if self.pending[i].get().is_none() {
+                self.pending[i].set(Some(operation));
+                return Ok(());
+            }
+        }
+
+        Err(RadioError::QueueFull)
+    }
+
+    fn queue_write(&self, address: u8, val: u8) -> Result<()> {
+        self.queue(Operation::Write(address, val))
+    }
+
+    fn queue_modify(&self, address: u8, mask: u8, val: u8) -> Result<()> {
+        self.queue(Operation::Modify(address, mask, val))
+    }
+
+    #[inline]
+    fn queue_mode_change(&self, mode: Mode) -> Result<()> {
+        self.queue_modify(register::OpMode, register::mask::OpMode_Mode, u8::from(mode))?;
+
+        Ok(())
+    }
+
+    fn transmit(&self, pid: ProcessId) -> Result<()> {
+        // Check the current configuration.
+        // Apply the application's configuration if the app has updated its configuration
+        // or a different app has used the radio since.
+        if Some(pid) != self.configured_for.extract() {
+            // Update configuration.
+            self.grants.enter(pid, |grant, _ko_data| {
+                // Bit rate.
+                self.queue_write(register::BitrateMSB, (grant.bit_rate >> 8) as u8)?;
+                self.queue_write(register::BitrateLSB, (grant.bit_rate & 0xFF) as u8)?;
+                // Packet format.
+                self.queue_modify(
+                    register::PacketConfig1,
+                    register::mask::PacketConfig1_PacketFormat,
+                    // Also update the payload length value if fixed-length.
+                    if let PacketFormat::Fixed(p_len) = grant.packet_format {
+                        self.queue_write(register::PayloadLength, p_len)?;
+                        0 // Evaluate zero for fixed-length in PacketFormat.
+                    } else {
+                        1 // Evaluate one for variable-length in PacketFormat.
+                    })?;
+                // AES encryption.
+                self.queue_modify(
+                    register::PacketConfig2,
+                    register::mask::PacketConfig2_AESOn,
+                    if let Some(ref enc_key) = grant.enc_key {
+                        for (byte, offset) in enc_key.iter().copied().zip(0..) {
+                            self.queue_write(register::AESKey1 + offset, byte)?;
+                        }
+                        1 // Evaluate one for AES on.
+                    } else {
+                        0 // Evaluate zero for AES off.
+                    })?;
+
+                // Sync word.
+                self.queue_modify(
+                    register::SyncConfig,
+                    register::mask::SyncConfig_SyncOn,
+                    if let Some((s_len, word)) = grant.sync_word {
+                        self.queue_modify(
+                            register::SyncConfig,
+                            register::mask::SyncConfig_SyncSize,
+                            s_len)?;
+                        for offset in 0..s_len {
+                            self.queue_write(
+                                register::SyncValue1 + offset,
+                                ((word >> (8 * offset)) & 0xFF) as u8)?;
+                        }
+
+                        1 // Evaluate one for sync on.
+                    } else {
+                        0 // Evaluate zero for sync off.
+                    })?;
+
+                Ok(())
+            }).unwrap()?;
+
+            // Upon completing the register updates, we need to write to the FIFO.
+            self.fifo_write_pending.set(true);
+
+            self.configured_for.set(pid);
+        }
+
+        // Go to transmit mode.
+        self.queue_mode_change(Mode::Transmit)?;
+
+        self.start_queue()
+    }
+
     fn process_callback(&self) -> Result<()> {
         use Status::*;
         let current_status = self.status.get();
@@ -373,7 +509,11 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                     self.status.set(Status::Idle);
                     let actual = self.buffers.0.map(|buf| *buf.get(1).unwrap()).unwrap();
                     if written == actual {
-                        // Possibly pull a pending write off the queue.
+                        // Now the driver will:
+                        // a) possibly pull a pending write off the queue,
+                        // b) check if it can stay in an idle state,
+                        //    - when the fifo_write_pending flag is set, we write to the FIFO,
+                        //    - when not set, the driver stays idle.
                         let mut next = self.pending.iter()
                             .filter(|w| w.get().is_some())
                             .map(|w| w.get())
@@ -388,6 +528,50 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                                 // The driver should only place Write or Modify operations into the queue.
                                 _ => panic!(),
                             }
+                        } else if self.fifo_write_pending.get() {
+                            self.fifo_write_pending.set(false);
+                            // If the fifo_write_pending flag is set, the driver must be configured for an
+                            // application set by the transmit() function.
+                            let pid = self.configured_for.unwrap_or_panic();
+                            let grant_result = self.grants.enter(pid, |_grant, ko_data| {
+                                // Copy data into the FIFO.
+                                ko_data.get_readwrite_processbuffer(BUFFER_RW_ALLOW_NO_FIFO)?
+                                    .enter(|ro_buffer| {
+                                        if ro_buffer.len() > FIFO_LENGTH {
+                                            Err(RadioError::System(ErrorCode::INVAL))
+                                        } else {
+                                            let wbuf = self.buffers.1.take().unwrap();
+                                            wbuf[0] = 0b1000_0000; // Write to FIFO address.
+                                            ro_buffer.copy_to_slice(&mut wbuf[1..ro_buffer.len()]);
+                                            self.buffers.1.put(Some(wbuf));
+                                            Ok(ro_buffer.len())
+                                        }
+                                    })
+                            });
+
+                            // The grant operations yield a result wrapping the message length
+                            // doubly-nested by results.
+                            let msg_length = match grant_result {
+                                Ok(buffer_result) => match buffer_result {
+                                    Ok(op_result) => op_result?,
+                                    Err(e) => unimplemented!(),
+                                },
+
+                                Err(e) => unimplemented!(),
+                            };
+
+                            // Write the data into the FIFO.
+                            // If either of the buffers are missing, there is a bug because
+                            // we were just handling the write buffer, and this function gets
+                            // called by the read_write_done function, which puts buffers back.
+                            let wbuf = self.buffers.1.take().unwrap();
+                            // And this one... produces some complex error management issues
+                            // should we handle a failure here. Likely do a callback to the
+                            // app to notify it that the transmission failed.
+                            self.status.set(Status::Transmit);
+                            self.spi.read_write_bytes(wbuf, None, 1+msg_length).unwrap();
+
+                            Ok(())
                         } else {
                             Ok(())
                         }
@@ -406,7 +590,15 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                 }
             }
 
-            // Driver was not doing an SPI operation yet received an interrupt.
+            // Completed a transmission we previously triggered.
+            // Put the radio back to a low-power state.
+            Status::Transmit => {
+                self.status.set(Status::Idle);
+                self.queue_mode_change(Mode::Sleep)?;
+                self.start_queue()
+            }
+
+            // Driver was not doing a recognized SPI operation yet received an interrupt.
             // This is a logic bug for the driver.
             _ => panic!()
         }
@@ -461,10 +653,6 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> gpio::Client for RF
             // Driver in the middle of reading/writing registers.
             // This is also an unexpected state to be in and receive an interrupt.
             Status::Transaction(_op) => {  },
-
-            // Radio is in receive mode.
-            // The interrupt means we have received a packet.
-            Status::Receive => unimplemented!(),
 
             // Radio is in transmit mode.
             // The interrupt means we have completed transmitting a packet.

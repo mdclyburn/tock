@@ -516,7 +516,8 @@ pub unsafe fn main() {
     // );
     // peripherals.pa[16].set_client(debug_process_restart);
 
-    let radio_buffers = (static_buf!([u8; 2]).initialize([0; 2]), static_buf!([u8; 2]).initialize([0; 2]));
+    let radio_buffers = (static_buf!([u8; 2]).initialize([0; 2]),
+                         static_buf!([u8; 67]).initialize([0; 67]));
     let radio_spi = components::spi::SpiComponent::new(mux_spi, 0)
         .finalize(components::spi_component_helper!(sam4l::spi::SpiHw));
     let ism_radio = static_init!(
