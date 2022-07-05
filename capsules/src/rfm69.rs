@@ -40,12 +40,6 @@ enum RadioError {
     QueueFull,
 }
 
-// impl core::convert::From<kernel::process::Error> for RadioError {
-//     fn from(e: kernel::process::Error) -> RadioError {
-//         RadioError::Process(e)
-//     }
-// }
-
 /// Register addresses.
 #[allow(non_upper_case_globals, unused)]
 mod register {
@@ -142,13 +136,14 @@ impl Default for AppData {
             // Use 150 kbps.
             bit_rate: 0x00D5,
             packet_format: PacketFormat::Variable,
-            // This is the default sync word.
             sync_word: None,
             address: None,
             enc_key: None,
         }
     }
 }
+
+const SYNC_WORD_DEFAULT: u64 = 0x01010101_01010101;
 
 /// State of the split-phase operation the driver is doing.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -562,6 +557,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                                     // should we handle a failure here. Likely do a callback to the
                                     // app to notify it that the transmission failed.
                                     self.status.set(Status::Transmit);
+                                    // +1 for the address of the FIFO before FIFO contents.
                                     self.spi.read_write_bytes(wbuf, None, 1+len_result?).unwrap();
                                 },
 
@@ -644,6 +640,54 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> SyscallDriver for R
         match command_no {
             // Driver check.
             0 => CommandReturn::success(),
+
+            // Set synchronization word length.
+            // If R2 is ZERO, disables the sync word.
+            40 => {
+                let (sync_length, _) = (r2, r3);
+                if sync_length > 8 {
+                    CommandReturn::failure(ErrorCode::INVAL)
+                } else {
+                    self.grants.enter(pid, |data, _ko_data| {
+                        if sync_length == 0 {
+                            data.sync_word = None;
+                            CommandReturn::success()
+                        } else {
+                            data.sync_word = Some(
+                                (sync_length as u8,
+                                 data.sync_word.map(|(l, s)| s).unwrap_or(SYNC_WORD_DEFAULT)));
+                            CommandReturn::success()
+                        }
+                    }).unwrap_or(CommandReturn::failure(ErrorCode::FAIL))
+                }
+            },
+
+            // Set synchronization word.
+            // If both parameters are ZERO, disables the sync word.
+            41 => {
+                let (sync_msb, sync_lsb) = (r2, r3);
+                let new_sync_word: u64 = ((sync_msb as u64) << 32) | sync_lsb as u64;
+
+                if self.status.get() != Status::Idle {
+                    CommandReturn::failure(ErrorCode::BUSY)
+                } else {
+                    self.grants.enter(pid, |data, _ko_data| {
+                        if let Some((len, _old_word)) = data.sync_word {
+                            data.sync_word = Some((len, new_sync_word));
+                            if self.configured_for.map_or(false, |p| pid == *p) {
+                                self.configured_for.clear();
+                            }
+
+                            CommandReturn::success()
+                        } else {
+                            // The sync word was set to None.
+                            // The length needs to be set first.
+                            CommandReturn::failure(ErrorCode::INVAL)
+                        }
+                    }).unwrap_or(CommandReturn::failure(ErrorCode::FAIL))
+                }
+            },
+
             _ => CommandReturn::failure(ErrorCode::INVAL),
         }
     }
