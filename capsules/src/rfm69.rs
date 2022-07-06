@@ -468,6 +468,15 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         self.start_queue()
     }
 
+    /// Clear the configured_for value if it matches the given PID.
+    fn invalidate_configuration(&self, pid: ProcessId) {
+        if let Some(configured_pid) = self.configured_for.extract() {
+            if configured_pid == pid {
+                self.configured_for.clear();
+            }
+        }
+    }
+
     fn process_callback(&self) -> Result<()> {
         use Status::*;
         let current_status = self.status.get();
@@ -637,28 +646,30 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> spi::SpiMasterClien
 
 impl<A: 'static + time::Frequency, B: 'static + time::Ticks> SyscallDriver for RFM69<A, B> {
     fn command(&self, command_no: usize, r2: usize, r3: usize, pid: ProcessId) -> CommandReturn {
-        match command_no {
+        // `config_change` gets set to true when a configuration change happens and
+        // configuration may need to be updated on the radio.
+        let (result, config_change): (CommandReturn, bool) = match command_no {
             // Driver check.
-            0 => CommandReturn::success(),
+            0 => (CommandReturn::success(), false),
 
             // Set synchronization word length.
             // If R2 is ZERO, disables the sync word.
             40 => {
                 let (sync_length, _) = (r2, r3);
                 if sync_length > 8 {
-                    CommandReturn::failure(ErrorCode::INVAL)
+                    (CommandReturn::failure(ErrorCode::INVAL), false)
                 } else {
                     self.grants.enter(pid, |data, _ko_data| {
                         if sync_length == 0 {
                             data.sync_word = None;
-                            CommandReturn::success()
+                            (CommandReturn::success(), true)
                         } else {
                             data.sync_word = Some(
                                 (sync_length as u8,
                                  data.sync_word.map(|(l, s)| s).unwrap_or(SYNC_WORD_DEFAULT)));
-                            CommandReturn::success()
+                            (CommandReturn::success(), true)
                         }
-                    }).unwrap_or(CommandReturn::failure(ErrorCode::FAIL))
+                    }).unwrap_or((CommandReturn::failure(ErrorCode::FAIL), false))
                 }
             },
 
@@ -669,7 +680,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> SyscallDriver for R
                 let new_sync_word: u64 = ((sync_msb as u64) << 32) | sync_lsb as u64;
 
                 if self.status.get() != Status::Idle {
-                    CommandReturn::failure(ErrorCode::BUSY)
+                    (CommandReturn::failure(ErrorCode::BUSY), false)
                 } else {
                     self.grants.enter(pid, |data, _ko_data| {
                         if let Some((len, _old_word)) = data.sync_word {
@@ -678,18 +689,97 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> SyscallDriver for R
                                 self.configured_for.clear();
                             }
 
-                            CommandReturn::success()
+                            (CommandReturn::success(), true)
                         } else {
                             // The sync word was set to None.
                             // The length needs to be set first.
-                            CommandReturn::failure(ErrorCode::INVAL)
+                            (CommandReturn::failure(ErrorCode::INVAL), false)
                         }
-                    }).unwrap_or(CommandReturn::failure(ErrorCode::FAIL))
+                    }).unwrap_or((CommandReturn::failure(ErrorCode::FAIL), false))
                 }
             },
 
-            _ => CommandReturn::failure(ErrorCode::INVAL),
+            // Set the packet format.
+            45 => {
+                let (sel, packet_len) = (r2, r3);
+                self.grants.enter(pid, |d, _ko_d| {
+                    match (sel, packet_len) {
+                        // Fixed length.
+                        (0, len) => if len < 1 || 66 < len {
+                            (CommandReturn::failure(ErrorCode::INVAL), false)
+                        } else {
+                            d.packet_format = PacketFormat::Fixed(len as u8);
+                            (CommandReturn::success(), true)
+                        },
+
+                        // Variable length.
+                        (1, _len) => {
+                            d.packet_format = PacketFormat::Variable;
+                            (CommandReturn::success(), true)
+                        },
+
+                        (_, _len) => (CommandReturn::failure(ErrorCode::INVAL), false),
+                    }
+                }).unwrap_or((CommandReturn::failure(ErrorCode::FAIL), false))
+            },
+
+            // Set node address, broadcast address.
+            // r2 = node address; set to 256 to disable filtering.
+            // r3 = broadcast address; set to 256 to disable broadcast filtering.
+            50 => {
+                let (addr, baddr) = (r2, r3);
+
+                self.grants.enter(pid, |d, _ko_d| {
+                    if addr == 256 {
+                        d.address = None;
+                        (CommandReturn::success(), true)
+                    } else if 0 <= addr && addr <= 255 {
+                        if 0 <= baddr && baddr <= 255 {
+                            d.address = Some((addr as u8, Some(baddr as u8)));
+                            (CommandReturn::success(), true)
+                        } else if baddr == 256 {
+                            d.address = Some((addr as u8, None));
+                            (CommandReturn::success(), true)
+                        } else {
+                            (CommandReturn::failure(ErrorCode::INVAL), false)
+                        }
+                    } else {
+                        (CommandReturn::failure(ErrorCode::INVAL), false)
+                    }
+                }).unwrap_or((CommandReturn::failure(ErrorCode::INVAL), false))
+            },
+
+            // Set encryption key.
+            // r2 = byte index (0 to 15).
+            // r3 = value
+            60 => {
+                let (idx, val) = (r2, r3);
+                if idx >= 16 || val > 255 {
+                    (CommandReturn::failure(ErrorCode::INVAL), false)
+                } else {
+                    self.grants.enter(pid, |d, _ko_d| {
+                        d.enc_key.get_or_insert([0; 16])[idx] = val as u8;
+                        (CommandReturn::success(), true)
+                    }).unwrap_or((CommandReturn::failure(ErrorCode::FAIL), false))
+                }
+            },
+
+            // Clear and disable the encryption key.
+            61 => {
+                self.grants.enter(pid, |d, _ko_d| {
+                    d.enc_key = None;
+                    (CommandReturn::success(), true)
+                }).unwrap_or((CommandReturn::failure(ErrorCode::FAIL), false))
+            },
+
+            _ => (CommandReturn::failure(ErrorCode::INVAL), false),
+        };
+
+        if config_change {
+            self.invalidate_configuration(pid);
         }
+
+        result
     }
 
     fn allocate_grant(&self, pid: ProcessId) -> core::result::Result<(), kernel::process::Error> {
