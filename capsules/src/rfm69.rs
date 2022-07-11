@@ -399,73 +399,96 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         Ok(())
     }
 
+    #[inline]
+    fn driver_busy(&self) -> bool {
+        // Status is set to Idle.
+        let is_idle = self.status.get() == Status::Idle;
+        // No pending FIFO operation.
+        let no_pending_fifo_operation = !self.fifo_write_pending.get();
+        // No pending register operations.
+        let pending_queue_empty = self.pending.iter()
+            .find(|slot| slot.get().is_some())
+            .is_none();
+
+        is_idle
+            && no_pending_fifo_operation
+            && pending_queue_empty
+    }
+
     fn transmit(&self, pid: ProcessId) -> Result<()> {
-        // Check the current configuration.
-        // Apply the application's configuration if the app has updated its configuration
-        // or a different app has used the radio since.
-        if Some(pid) != self.configured_for.extract() {
-            // Update configuration.
-            self.grants.enter(pid, |grant, _ko_data| {
-                // Bit rate.
-                self.queue_write(register::BitrateMSB, (grant.bit_rate >> 8) as u8)?;
-                self.queue_write(register::BitrateLSB, (grant.bit_rate & 0xFF) as u8)?;
-                // Packet format.
-                self.queue_modify(
-                    register::PacketConfig1,
-                    register::mask::PacketConfig1_PacketFormat,
-                    // Also update the payload length value if fixed-length.
-                    if let PacketFormat::Fixed(p_len) = grant.packet_format {
-                        self.queue_write(register::PayloadLength, p_len)?;
-                        0 // Evaluate zero for fixed-length in PacketFormat.
-                    } else {
-                        1 // Evaluate one for variable-length in PacketFormat.
-                    })?;
-                // AES encryption.
-                self.queue_modify(
-                    register::PacketConfig2,
-                    register::mask::PacketConfig2_AESOn,
-                    if let Some(ref enc_key) = grant.enc_key {
-                        for (byte, offset) in enc_key.iter().copied().zip(0..) {
-                            self.queue_write(register::AESKey1 + offset, byte)?;
-                        }
-                        1 // Evaluate one for AES on.
-                    } else {
-                        0 // Evaluate zero for AES off.
-                    })?;
+        // Make sure the driver is not busy doing anything else at the moment.
+        if self.driver_busy() {
+            Err(RadioError::Busy)
+        } else {
+            // Check the current configuration.
+            // Apply the application's configuration if the app has updated its configuration
+            // or a different app has used the radio since.
+            if Some(pid) != self.configured_for.extract() {
+                // Update configuration.
+                self.grants.enter(pid, |grant, _ko_data| {
+                    // Bit rate.
+                    self.queue_write(register::BitrateMSB, (grant.bit_rate >> 8) as u8)?;
+                    self.queue_write(register::BitrateLSB, (grant.bit_rate & 0xFF) as u8)?;
 
-                // Sync word.
-                self.queue_modify(
-                    register::SyncConfig,
-                    register::mask::SyncConfig_SyncOn,
-                    if let Some((s_len, word)) = grant.sync_word {
-                        self.queue_modify(
-                            register::SyncConfig,
-                            register::mask::SyncConfig_SyncSize,
-                            s_len)?;
-                        for offset in 0..s_len {
-                            self.queue_write(
-                                register::SyncValue1 + offset,
-                                ((word >> (8 * offset)) & 0xFF) as u8)?;
-                        }
+                    // Packet format.
+                    self.queue_modify(
+                        register::PacketConfig1,
+                        register::mask::PacketConfig1_PacketFormat,
+                        // Also update the payload length value if fixed-length.
+                        if let PacketFormat::Fixed(p_len) = grant.packet_format {
+                            self.queue_write(register::PayloadLength, p_len)?;
+                            0 // Evaluate zero for fixed-length in PacketFormat.
+                        } else {
+                            1 // Evaluate one for variable-length in PacketFormat.
+                        })?;
 
-                        1 // Evaluate one for sync on.
-                    } else {
-                        0 // Evaluate zero for sync off.
-                    })?;
+                    // AES encryption.
+                    self.queue_modify(
+                        register::PacketConfig2,
+                        register::mask::PacketConfig2_AESOn,
+                        if let Some(ref enc_key) = grant.enc_key {
+                            for (byte, offset) in enc_key.iter().copied().zip(0..) {
+                                self.queue_write(register::AESKey1 + offset, byte)?;
+                            }
+                            1 // Evaluate one for AES on.
+                        } else {
+                            0 // Evaluate zero for AES off.
+                        })?;
 
-                Ok(())
-            }).unwrap()?;
+                    // Sync word.
+                    self.queue_modify(
+                        register::SyncConfig,
+                        register::mask::SyncConfig_SyncOn,
+                        if let Some((s_len, word)) = grant.sync_word {
+                            self.queue_modify(
+                                register::SyncConfig,
+                                register::mask::SyncConfig_SyncSize,
+                                s_len)?;
+                            for offset in 0..s_len {
+                                self.queue_write(
+                                    register::SyncValue1 + offset,
+                                    ((word >> (8 * offset)) & 0xFF) as u8)?;
+                            }
 
-            // Upon completing the register updates, we need to write to the FIFO.
-            self.fifo_write_pending.set(true);
+                            1 // Evaluate one for sync on.
+                        } else {
+                            0 // Evaluate zero for sync off.
+                        })?;
 
-            self.configured_for.set(pid);
+                    Ok(())
+                }).unwrap()?;
+
+                // Upon completing the register updates, we need to write to the FIFO.
+                self.fifo_write_pending.set(true);
+
+                self.configured_for.set(pid);
+            }
+
+            // Go to transmit mode.
+            self.queue_mode_change(Mode::Transmit)?;
+
+            self.start_queue()
         }
-
-        // Go to transmit mode.
-        self.queue_mode_change(Mode::Transmit)?;
-
-        self.start_queue()
     }
 
     /// Clear the configured_for value if it matches the given PID.
@@ -652,6 +675,17 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> SyscallDriver for R
             // Driver check.
             0 => (CommandReturn::success(), false),
 
+            // Send the current buffer as a packet.
+            10 => {
+                match self.transmit(pid) {
+                    Ok(_) => (CommandReturn::success(), false),
+                    Err(radio_err) => match radio_err {
+                        RadioError::Busy => (CommandReturn::failure(ErrorCode::BUSY), false),
+                        _ => (CommandReturn::failure(ErrorCode::FAIL), false),
+                    }
+                }
+            },
+
             // Set synchronization word length.
             // If R2 is ZERO, disables the sync word.
             40 => {
@@ -733,8 +767,8 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> SyscallDriver for R
                     if addr == 256 {
                         d.address = None;
                         (CommandReturn::success(), true)
-                    } else if 0 <= addr && addr <= 255 {
-                        if 0 <= baddr && baddr <= 255 {
+                    } else if addr <= 255 {
+                        if baddr <= 255 {
                             d.address = Some((addr as u8, Some(baddr as u8)));
                             (CommandReturn::success(), true)
                         } else if baddr == 256 {
