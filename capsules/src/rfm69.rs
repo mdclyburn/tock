@@ -668,14 +668,16 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> spi::SpiMasterClien
 
 impl<A: 'static + time::Frequency, B: 'static + time::Ticks> SyscallDriver for RFM69<A, B> {
     fn command(&self, command_no: usize, r2: usize, r3: usize, pid: ProcessId) -> CommandReturn {
+        // kernel::debug!("command_no: {:#2X}, r2 = {:#2X}, r3 = {:#2X}", command_no, r2, r3);
+
         // `config_change` gets set to true when a configuration change happens and
         // configuration may need to be updated on the radio.
-        let (result, config_change): (CommandReturn, bool) = match command_no {
+        let (result, config_change): (CommandReturn, bool) = match (command_no, r2, r3) {
             // Driver check.
-            0 => (CommandReturn::success(), false),
+            (0, _, _) => (CommandReturn::success(), false),
 
             // Send the current buffer as a packet.
-            10 => {
+            (10, _, _) => {
                 match self.transmit(pid) {
                     Ok(_) => (CommandReturn::success(), false),
                     Err(radio_err) => match radio_err {
@@ -687,8 +689,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> SyscallDriver for R
 
             // Set synchronization word length.
             // If R2 is ZERO, disables the sync word.
-            40 => {
-                let (sync_length, _) = (r2, r3);
+            (40, sync_length, _) => {
                 if sync_length > 8 {
                     (CommandReturn::failure(ErrorCode::INVAL), false)
                 } else {
@@ -708,8 +709,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> SyscallDriver for R
 
             // Set synchronization word.
             // If both parameters are ZERO, disables the sync word.
-            41 => {
-                let (sync_msb, sync_lsb) = (r2, r3);
+            (41, sync_msb, sync_lsb) => {
                 let new_sync_word: u64 = ((sync_msb as u64) << 32) | sync_lsb as u64;
 
                 if self.status.get() != Status::Idle {
@@ -733,8 +733,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> SyscallDriver for R
             },
 
             // Set the packet format.
-            45 => {
-                let (sel, packet_len) = (r2, r3);
+            (45, sel, packet_len) => {
                 self.grants.enter(pid, |d, _ko_d| {
                     match (sel, packet_len) {
                         // Fixed length.
@@ -759,9 +758,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> SyscallDriver for R
             // Set node address, broadcast address.
             // r2 = node address; set to 256 to disable filtering.
             // r3 = broadcast address; set to 256 to disable broadcast filtering.
-            50 => {
-                let (addr, baddr) = (r2, r3);
-
+            (50, addr, baddr) => {
                 self.grants.enter(pid, |d, _ko_d| {
                     if addr == 256 {
                         d.address = None;
@@ -785,8 +782,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> SyscallDriver for R
             // Set encryption key.
             // r2 = byte index (0 to 15).
             // r3 = value
-            60 => {
-                let (idx, val) = (r2, r3);
+            (60, idx, val) => {
                 if idx >= 16 || val > 255 {
                     (CommandReturn::failure(ErrorCode::INVAL), false)
                 } else {
@@ -798,7 +794,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> SyscallDriver for R
             },
 
             // Clear and disable the encryption key.
-            61 => {
+            (61, _, _) => {
                 self.grants.enter(pid, |d, _ko_d| {
                     d.enc_key = None;
                     (CommandReturn::success(), true)
