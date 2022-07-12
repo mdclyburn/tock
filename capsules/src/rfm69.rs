@@ -35,6 +35,8 @@ type Result<T> = core::result::Result<T, RadioError>;
 enum RadioError {
     Busy,
     Inconsistent,
+    NoReadBuffer,
+    NoWriteBuffer,
     Process(kernel::process::Error),
     System(ErrorCode),
     QueueFull,
@@ -151,7 +153,7 @@ enum Operation {
     /// Writing a value to a register, (address, value).
     Write(u8, u8),
     /// Checking that a read value matches expected value, (expected value).
-    Confirm(u8),
+    Confirm(u8, u8),
     /// Updating a value in a register, (address, mask, shifted value).
     Modify(u8, u8, u8),
 }
@@ -164,7 +166,7 @@ enum Status {
     /// In the middle of a read/write/modify operation.
     Transaction(Operation),
     /// Radio is transmitting a packet.
-    Transmit,
+    Transmitting,
 }
 
 #[derive(Clone, Copy)]
@@ -287,7 +289,10 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         self.busy_wait(5);
 
         self.spi.set_client(self);
+        self.interrupt_pin.make_input();
+        self.interrupt_pin.set_floating_state(gpio::FloatingState::PullNone);
         self.interrupt_pin.set_client(self);
+        self.interrupt_pin.enable_interrupts(gpio::InterruptEdge::RisingEdge);
 
         // Start setting the recommended settings.
         self.pending[0].set(Some(Operation::Write(register::LNA, 0x88)));
@@ -310,8 +315,8 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
     }
 
     fn read(&self, address: u8) -> Result<()> {
-        let (rbuf, wbuf) = (self.buffers.0.take().ok_or(RadioError::Busy)?,
-                            self.buffers.1.take().ok_or(RadioError::Busy)?);
+        let (rbuf, wbuf) = (self.buffers.0.take().ok_or(RadioError::NoReadBuffer)?,
+                            self.buffers.1.take().ok_or(RadioError::NoWriteBuffer)?);
         rbuf[0] = 0xEE; rbuf[1] = 0xEE;
         wbuf[0] = 0b0111_1111 & address;
 
@@ -325,11 +330,12 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
     }
 
     fn write(&self, address: u8, val: u8) -> Result<()> {
-        let (rbuf, wbuf) = (self.buffers.0.take().ok_or(RadioError::Busy)?,
-                            self.buffers.1.take().ok_or(RadioError::Busy)?);
+        let (rbuf, wbuf) = (self.buffers.0.take().ok_or(RadioError::NoReadBuffer)?,
+                            self.buffers.1.take().ok_or(RadioError::NoWriteBuffer)?);
         *wbuf.get_mut(0).unwrap() = 0b1000_0000 | address;
         *wbuf.get_mut(1).unwrap() = val;
 
+        // kernel::debug!("WRITE {:#04X}, @{:#04X}", val, address);
         self.status.set(Status::Transaction(Operation::Write(address, val)));
         if let Err((error, buf_a, buf_b)) = self.spi.read_write_bytes(wbuf, Some(rbuf), 2) {
             self.status.set(Status::Idle);
@@ -346,7 +352,8 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
     /// Change only the bits in the mask.
     /// `val` will be shifted up to proper offset in the mask.
     fn modify(&self, address: u8, mask: u8, val: u8) -> Result<()> {
-        if self.status.get() != Status::Idle {
+        let status = self.status.get();
+        if status != Status::Idle {
             Err(RadioError::Busy)
         } else {
             assert!(mask != 0);
@@ -477,15 +484,12 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                     Ok(())
                 }).unwrap()?;
 
-                // Upon completing the register updates, we need to write to the FIFO.
-                self.fifo_write_pending.set(true);
-
                 self.configured_for.set(pid);
             }
 
-            // Go to transmit mode.
+            // Upon completing the register updates, we need to write to the FIFO afterwards.
+            self.fifo_write_pending.set(true);
             self.queue_mode_change(Mode::Transmit)?;
-
             self.start_queue()
         }
     }
@@ -525,16 +529,22 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                             || { kernel::debug!("Last command was not in queue."); },
                             |entry| { entry.set(None); });
 
-                    self.status.set(Status::Transaction(Operation::Confirm(val)));
+                    self.status.set(Status::Transaction(Operation::Confirm(addr, val)));
                     self.read(addr)
                 },
 
                 // Completed reading a register to confirm a value.
                 // Compare the value to make sure it matches up.
-                Operation::Confirm(written) => {
+                Operation::Confirm(addr, written) => {
                     self.status.set(Status::Idle);
                     let actual = self.buffers.0.map(|buf| *buf.get(1).unwrap()).unwrap();
-                    if written == actual {
+                    // kernel::debug!("actual: {:#04X}", actual);
+
+                    // Do not try to confirm the OpMode register.
+                    // This register updates itself once the radio goes into the specified mode.
+                    // This means that a back-to-back write-read may show an inconsistent result.
+                    // That is not an error.
+                    if written == actual || addr == register::OpMode {
                         // Now the driver will:
                         // a) possibly pull a pending write off the queue,
                         // b) check if it can stay in an idle state,
@@ -568,7 +578,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                                         } else {
                                             let wbuf = self.buffers.1.take().unwrap();
                                             wbuf[0] = 0b1000_0000; // Write to FIFO address.
-                                            ro_buffer.copy_to_slice(&mut wbuf[1..ro_buffer.len()]);
+                                            ro_buffer.copy_to_slice(&mut wbuf[1..1+ro_buffer.len()]);
                                             self.buffers.1.put(Some(wbuf));
                                             Ok(ro_buffer.len())
                                         }
@@ -579,17 +589,20 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                             // doubly-nested by results.
                             match grant_result {
                                 Ok(len_result) => {
+                                    let data_len = len_result?;
                                     // Write the data into the FIFO.
                                     // If either of the buffers are missing, there is a bug because
                                     // we were just handling the write buffer, and this function gets
                                     // called by the read_write_done function, which puts buffers back.
-                                    let wbuf = self.buffers.1.take().unwrap();
+                                    let (rbuf, wbuf) = (self.buffers.0.take().unwrap(),
+                                                        self.buffers.1.take().unwrap());
                                     // And this one... produces some complex error management issues
                                     // should we handle a failure here. Likely do a callback to the
                                     // app to notify it that the transmission failed.
-                                    self.status.set(Status::Transmit);
+                                    kernel::debug!("Writing {} bytes of FIFO data.", data_len);
+                                    self.status.set(Status::Transmitting);
                                     // +1 for the address of the FIFO before FIFO contents.
-                                    self.spi.read_write_bytes(wbuf, None, 1+len_result?).unwrap();
+                                    self.spi.read_write_bytes(wbuf, Some(rbuf), 1+data_len).unwrap();
                                 },
 
                                 Err(err) => match err {
@@ -605,6 +618,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                                         | kernel::process::Error::InactiveApp => {
                                             // Do not rely on the earlier set.
                                             self.status.set(Status::Idle);
+                                            self.fifo_write_pending.set(false);
                                             kernel::debug!("RFM69: grant action failed: {:?}", err);
                                         }
                                 }
@@ -629,13 +643,12 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                 }
             }
 
-            // Completed a transmission we previously triggered.
-            // Put the radio back to a low-power state.
-            Status::Transmit => {
+            // Waiting for a transmission to complete.
+            Status::Transmitting => {
                 self.status.set(Status::Idle);
-                self.queue_mode_change(Mode::Sleep)?;
+                self.queue_mode_change(Mode::Transmit)?;
                 self.start_queue()
-            }
+            },
 
             // Driver was not doing a recognized SPI operation yet received an interrupt.
             // This is a logic bug for the driver.
@@ -660,7 +673,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> spi::SpiMasterClien
         } else {
             // Perform the next step of the operation.
             if let Err(e) = self.process_callback() {
-                kernel::debug!("Radio callback processing failed: {:?}", e);
+                kernel::debug!("Radio callback processing failed: {:?}, (currently {:?})", e, self.status.get());
             }
         }
     }
@@ -822,16 +835,12 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> gpio::Client for RF
         // Reason depends on the radio's operating mode,
         // which corresponds to the state of the driver.
         match self.status.get() {
-            // Radio/driver is not doing anything, nor were we expecting an interrupt.
-            Status::Idle => {  },
-
-            // Driver in the middle of reading/writing registers.
-            // This is also an unexpected state to be in and receive an interrupt.
-            Status::Transaction(_op) => {  },
-
             // Radio is in transmit mode.
             // The interrupt means we have completed transmitting a packet.
-            Status::Transmit => unimplemented!(),
+            Status::Transmitting => unimplemented!(),
+
+            // Not supposed to be answering an interrupt.
+            _ => panic!(),
         }
     }
 }
