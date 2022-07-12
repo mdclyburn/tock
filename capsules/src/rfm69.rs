@@ -290,7 +290,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
 
         self.spi.set_client(self);
         self.interrupt_pin.make_input();
-        self.interrupt_pin.set_floating_state(gpio::FloatingState::PullNone);
+        self.interrupt_pin.set_floating_state(gpio::FloatingState::PullDown);
         self.interrupt_pin.set_client(self);
         self.interrupt_pin.enable_interrupts(gpio::InterruptEdge::RisingEdge);
 
