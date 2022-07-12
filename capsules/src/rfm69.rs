@@ -404,15 +404,14 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         // Status is set to Idle.
         let is_idle = self.status.get() == Status::Idle;
         // No pending FIFO operation.
-        let no_pending_fifo_operation = !self.fifo_write_pending.get();
+        let pending_fifo_operation = self.fifo_write_pending.get();
         // No pending register operations.
         let pending_queue_empty = self.pending.iter()
             .find(|slot| slot.get().is_some())
             .is_none();
 
-        is_idle
-            && no_pending_fifo_operation
-            && pending_queue_empty
+        // kernel::debug!("{} && {} && {}", is_idle, no_pending_fifo_operation, pending_queue_empty);
+        !is_idle || pending_fifo_operation || !pending_queue_empty
     }
 
     fn transmit(&self, pid: ProcessId) -> Result<()> {
