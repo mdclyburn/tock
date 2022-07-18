@@ -643,12 +643,10 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                 }
             }
 
-            // Waiting for a transmission to complete.
-            Status::Transmitting => {
-                self.status.set(Status::Idle);
-                self.queue_mode_change(Mode::Transmit)?;
-                self.start_queue()
-            },
+            // Completed moving to transmit mode.
+            // Do not do anything.
+            // The next step is handled by the GPIO interrupt from the radio.
+            Status::Transmitting => { Ok(()) },
 
             // Driver was not doing a recognized SPI operation yet received an interrupt.
             // This is a logic bug for the driver.
