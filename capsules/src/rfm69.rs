@@ -599,7 +599,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                                     // And this one... produces some complex error management issues
                                     // should we handle a failure here. Likely do a callback to the
                                     // app to notify it that the transmission failed.
-                                    kernel::debug!("Writing {} bytes of FIFO data.", data_len);
+                                    // kernel::debug!("Writing {} bytes of FIFO data.", data_len);
                                     self.status.set(Status::Transmitting);
                                     // +1 for the address of the FIFO before FIFO contents.
                                     self.spi.read_write_bytes(wbuf, Some(rbuf), 1+data_len).unwrap();
@@ -835,7 +835,12 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> gpio::Client for RF
         match self.status.get() {
             // Radio is in transmit mode.
             // The interrupt means we have completed transmitting a packet.
-            Status::Transmitting => unimplemented!(),
+            // Set the state back to Idle and return to sleep mode.
+            Status::Transmitting => {
+                self.status.set(Status::Idle);
+                self.queue_mode_change(Mode::Sleep).unwrap();
+                self.start_queue().unwrap();
+            },
 
             // Not supposed to be answering an interrupt.
             _ => panic!(),
