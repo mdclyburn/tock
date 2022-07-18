@@ -221,7 +221,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         interrupt_pin: &'static dyn InterruptPin,
         reset_pin: &'static dyn ResetPin,
         time_source: &'static dyn time::Counter<Frequency = A, Ticks = B>,
-        buffers: (&'static mut [u8; 2], &'static mut [u8; FIFO_LENGTH+1]),
+        buffers: (&'static mut [u8; FIFO_LENGTH+1], &'static mut [u8; FIFO_LENGTH+1]),
     ) -> RFM69<A, B>
 
     {
