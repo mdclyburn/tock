@@ -208,7 +208,7 @@ pub struct RFM69<A: 'static + time::Frequency, B: 'static + time::Ticks> {
     time_source: &'static dyn time::Counter<'static, Frequency = A, Ticks = B>,
     buffers: (TakeCell<'static, [u8]>, TakeCell<'static, [u8]>),
     status: Cell<Status>,
-    pending: [Cell<Option<Operation>>; 24],
+    pending: [Cell<Option<Operation>>; 64],
     fifo_write_pending: Cell<bool>,
     configured_for: OptionalCell<ProcessId>,
 }
@@ -246,30 +246,22 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
             buffers: (TakeCell::new(rbuf), TakeCell::new(wbuf)),
             status: Cell::new(Status::Idle),
             pending: [
-                Cell::new(None),
-                Cell::new(None),
-                Cell::new(None),
-                Cell::new(None),
-                Cell::new(None),
-                Cell::new(None),
-                Cell::new(None),
-                Cell::new(None),
-                Cell::new(None),
-                Cell::new(None),
-                Cell::new(None),
-                Cell::new(None),
-                Cell::new(None),
-                Cell::new(None),
-                Cell::new(None),
-                Cell::new(None),
-                Cell::new(None),
-                Cell::new(None),
-                Cell::new(None),
-                Cell::new(None),
-                Cell::new(None),
-                Cell::new(None),
-                Cell::new(None),
-                Cell::new(None),
+                Cell::new(None), Cell::new(None), Cell::new(None), Cell::new(None),
+                Cell::new(None), Cell::new(None), Cell::new(None), Cell::new(None),
+                Cell::new(None), Cell::new(None), Cell::new(None), Cell::new(None),
+                Cell::new(None), Cell::new(None), Cell::new(None), Cell::new(None),
+                Cell::new(None), Cell::new(None), Cell::new(None), Cell::new(None),
+                Cell::new(None), Cell::new(None), Cell::new(None), Cell::new(None),
+                Cell::new(None), Cell::new(None), Cell::new(None), Cell::new(None),
+                Cell::new(None), Cell::new(None), Cell::new(None), Cell::new(None),
+                Cell::new(None), Cell::new(None), Cell::new(None), Cell::new(None),
+                Cell::new(None), Cell::new(None), Cell::new(None), Cell::new(None),
+                Cell::new(None), Cell::new(None), Cell::new(None), Cell::new(None),
+                Cell::new(None), Cell::new(None), Cell::new(None), Cell::new(None),
+                Cell::new(None), Cell::new(None), Cell::new(None), Cell::new(None),
+                Cell::new(None), Cell::new(None), Cell::new(None), Cell::new(None),
+                Cell::new(None), Cell::new(None), Cell::new(None), Cell::new(None),
+                Cell::new(None), Cell::new(None), Cell::new(None), Cell::new(None),
             ],
             fifo_write_pending: Cell::new(false),
             configured_for: OptionalCell::<ProcessId>::empty(),
@@ -470,7 +462,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                                 register::SyncConfig,
                                 register::mask::SyncConfig_SyncSize,
                                 s_len)?;
-                            for offset in 0..s_len {
+                            for offset in 0..(s_len+1) {
                                 self.queue_write(
                                     register::SyncValue1 + offset,
                                     ((word >> (8 * offset)) & 0xFF) as u8)?;
@@ -701,7 +693,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> SyscallDriver for R
             // Set synchronization word length.
             // If R2 is ZERO, disables the sync word.
             (40, sync_length, _) => {
-                if sync_length > 8 {
+                if 0 == sync_length || sync_length > 7 {
                     (CommandReturn::failure(ErrorCode::INVAL), false)
                 } else {
                     self.grants.enter(pid, |data, _ko_data| {
@@ -710,7 +702,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> SyscallDriver for R
                             (CommandReturn::success(), true)
                         } else {
                             data.sync_word = Some(
-                                (sync_length as u8,
+                                ((sync_length - 1) as u8,
                                  data.sync_word.map(|(l, s)| s).unwrap_or(SYNC_WORD_DEFAULT)));
                             (CommandReturn::success(), true)
                         }
@@ -723,24 +715,20 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> SyscallDriver for R
             (41, sync_msb, sync_lsb) => {
                 let new_sync_word: u64 = ((sync_msb as u64) << 32) | sync_lsb as u64;
 
-                if self.status.get() != Status::Idle {
-                    (CommandReturn::failure(ErrorCode::BUSY), false)
-                } else {
-                    self.grants.enter(pid, |data, _ko_data| {
-                        if let Some((len, _old_word)) = data.sync_word {
-                            data.sync_word = Some((len, new_sync_word));
-                            if self.configured_for.map_or(false, |p| pid == *p) {
-                                self.configured_for.clear();
-                            }
-
-                            (CommandReturn::success(), true)
-                        } else {
-                            // The sync word was set to None.
-                            // The length needs to be set first.
-                            (CommandReturn::failure(ErrorCode::INVAL), false)
+                self.grants.enter(pid, |data, _ko_data| {
+                    if let Some((len, _old_word)) = data.sync_word {
+                        data.sync_word = Some((len, new_sync_word));
+                        if self.configured_for.map_or(false, |p| pid == *p) {
+                            self.configured_for.clear();
                         }
-                    }).unwrap_or((CommandReturn::failure(ErrorCode::FAIL), false))
-                }
+
+                        (CommandReturn::success(), true)
+                    } else {
+                        // The sync word was set to None.
+                        // The length needs to be set first.
+                        (CommandReturn::failure(ErrorCode::INVAL), false)
+                    }
+                }).unwrap_or((CommandReturn::failure(ErrorCode::FAIL), false))
             },
 
             // Set the packet format.
