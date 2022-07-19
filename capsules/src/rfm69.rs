@@ -113,7 +113,18 @@ enum PacketFormat {
     Variable,
 }
 
-const BUFFER_RW_ALLOW_NO_FIFO: usize = 0;
+/// Grant numbers.
+mod grant_nos {
+    /// FIFO data exchange buffer.
+    ///
+    /// Applications share this buffer with the driver to move data to and from the FIFO.
+    /// When transmitting data, the driver reads the packet from this buffer.
+    /// When receiving data, the driver writes the packet to this buffer.
+    pub const ALLOW_RW_FIFO_BUFFER: usize = 0;
+
+    /// Transmission completed upcall.
+    pub const SUBSCRIBE_TX_COMPLETE: usize = 0;
+}
 
 /// RFM69 per-app grant data.
 pub struct AppData {
@@ -169,7 +180,7 @@ enum Status {
     /// In the middle of a read/write/modify operation.
     Transaction(Operation),
     /// Radio is transmitting a packet.
-    Transmitting,
+    Transmitting(ProcessId),
     /// Dumping registers.
     Debug,
 }
@@ -568,7 +579,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                             let pid = self.configured_for.unwrap_or_panic();
                             let grant_result = self.grants.enter(pid, |_grant, ko_data| {
                                 // Copy data into the FIFO.
-                                ko_data.get_readwrite_processbuffer(BUFFER_RW_ALLOW_NO_FIFO)?
+                                ko_data.get_readwrite_processbuffer(grant_nos::ALLOW_RW_FIFO_BUFFER)?
                                     .enter(|ro_buffer| {
                                         if ro_buffer.len() > FIFO_LENGTH {
                                             Err(RadioError::System(ErrorCode::INVAL))
@@ -597,7 +608,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                                     // should we handle a failure here. Likely do a callback to the
                                     // app to notify it that the transmission failed.
                                     // kernel::debug!("Writing {} bytes of FIFO data.", data_len);
-                                    self.status.set(Status::Transmitting);
+                                    self.status.set(Status::Transmitting(pid));
                                     // +1 for the address of the FIFO before FIFO contents.
                                     self.spi.read_write_bytes(wbuf, Some(rbuf), 1+data_len).unwrap();
                                 },
@@ -643,7 +654,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
             // Completed moving to transmit mode.
             // Do not do anything.
             // The next step is handled by the GPIO interrupt from the radio.
-            Status::Transmitting => { Ok(()) },
+            Status::Transmitting(_pid) => { Ok(()) },
 
             // Completed reading a range of registers.
             Status::Debug => {
@@ -867,8 +878,12 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> gpio::Client for RF
             // Radio is in transmit mode.
             // The interrupt means we have completed transmitting a packet.
             // Set the state back to Idle and return to sleep mode.
-            Status::Transmitting => {
-                kernel::debug!("Sent packet.");
+            Status::Transmitting(pid) => {
+                // Let the application know the transmission completed.
+                self.grants.enter(pid, |_data, ko_data| {
+                    ko_data.schedule_upcall(grant_nos::SUBSCRIBE_TX_COMPLETE, (0, 0, 0))
+                }).unwrap().unwrap();
+
                 self.status.set(Status::Idle);
                 self.queue_mode_change(Mode::Sleep).unwrap();
                 self.start_queue().unwrap();
