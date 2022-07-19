@@ -124,6 +124,9 @@ pub struct AppData {
     /// Packet format used by the application.
     packet_format: PacketFormat,
     /// Synchronization word.
+    ///
+    /// First item is the sync word length in bytes minus one.
+    /// Second item is the sync word.
     sync_word: Option<(u8, u64)>,
     /// Node and broadcast address for filtering.
     address: Option<(u8, Option<u8>)>,
@@ -135,8 +138,8 @@ impl Default for AppData {
     fn default() -> AppData {
         AppData {
             awaiting_rx: false,
-            // Default to 4.8 kbps.
-            bit_rate: 0x1A0B,
+            // Default to 19.2 kbps.
+            bit_rate: 0x0683,
             packet_format: PacketFormat::Variable,
             sync_word: None,
             address: None,
@@ -294,7 +297,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         self.pending[2].set(Some(Operation::Write(register::AFCBW, 0x8B)));
         self.pending[3].set(Some(Operation::Write(register::RSSIThresh, 0xE4)));
         self.pending[4].set(Some(Operation::Write(register::TestDAGC, 0x30)));
-        self.pending[5].set(Some(Operation::Write(register::PreambleLSB, 0x40)));
+        self.pending[5].set(Some(Operation::Write(register::PreambleLSB, 0xB0)));
         // And put the radio into sleep mode.
         self.queue_mode_change(Mode::Sleep).unwrap();
         self.start_queue().unwrap();
