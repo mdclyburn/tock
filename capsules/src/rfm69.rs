@@ -761,6 +761,14 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> SyscallDriver for R
                 }).unwrap_or((CommandReturn::failure(ErrorCode::FAIL), false))
             },
 
+            // Set the bit rate.
+            (42, bit_rate, _) => {
+                self.grants.enter(pid, |data, _ko_data| {
+                    data.bit_rate = (bit_rate & 0xFFFF) as u16;
+                    (CommandReturn::success(), true)
+                }).unwrap_or((CommandReturn::failure(ErrorCode::FAIL), false))
+            }
+
             // Set the packet format.
             (45, sel, packet_len) => {
                 self.grants.enter(pid, |d, _ko_d| {
