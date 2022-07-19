@@ -119,7 +119,7 @@ const BUFFER_RW_ALLOW_NO_FIFO: usize = 0;
 pub struct AppData {
     /// Whether receive mode is active for the application.
     awaiting_rx: bool,
-    /// Bit rate setting (see datasheet for valid values).
+    /// Bit rate setting (see datasheet for bit rate calculation).
     bit_rate: u16,
     /// Packet format used by the application.
     packet_format: PacketFormat,
@@ -135,8 +135,8 @@ impl Default for AppData {
     fn default() -> AppData {
         AppData {
             awaiting_rx: false,
-            // Use 150 kbps.
-            bit_rate: 0x00D5,
+            // Default to 4.8 kbps.
+            bit_rate: 0x1A0B,
             packet_format: PacketFormat::Variable,
             sync_word: None,
             address: None,
@@ -167,6 +167,8 @@ enum Status {
     Transaction(Operation),
     /// Radio is transmitting a packet.
     Transmitting,
+    /// Dumping registers.
+    Debug,
 }
 
 #[derive(Clone, Copy)]
@@ -640,6 +642,20 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
             // The next step is handled by the GPIO interrupt from the radio.
             Status::Transmitting => { Ok(()) },
 
+            // Completed reading a range of registers.
+            Status::Debug => {
+                let start_addr = self.buffers.1.map(|buf| *buf.get(0).unwrap()).unwrap() as usize;
+                let rbuf = self.buffers.0.take().unwrap();
+                for i in 0usize..0x27 {
+                    kernel::debug!("{:#04X}: {:#04X} ({:#010b})", start_addr+i, rbuf[1+i], rbuf[1+i]);
+                }
+                self.buffers.0.put(Some(rbuf));
+
+                self.status.set(Status::Idle);
+
+                Ok(())
+            },
+
             // Driver was not doing a recognized SPI operation yet received an interrupt.
             // This is a logic bug for the driver.
             _ => panic!()
@@ -800,6 +816,30 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> SyscallDriver for R
                 }).unwrap_or((CommandReturn::failure(ErrorCode::FAIL), false))
             },
 
+            // Dump register values.
+            // r2 = Set to dump (1 or 2).
+            (400, sel, _) => {
+                if self.driver_busy() {
+                    (CommandReturn::failure(ErrorCode::BUSY), false)
+                } else {
+                    // We just checked whether the driver was busy.
+                    let (rbuf, wbuf) = (self.buffers.0.take().unwrap(),
+                                        self.buffers.1.take().unwrap());
+
+                    wbuf[0] = match sel {
+                        0 => 0x01,
+                        _ => 0x28,
+                    };
+                    for byte in rbuf.iter_mut() { *byte = 0xFE; }
+
+                    self.status.set(Status::Debug);
+                    self.spi.read_write_bytes(wbuf, Some(rbuf), 0x28)
+                        .unwrap(); // Debug, so I do not want to deal with this error.
+
+                    (CommandReturn::success(), false)
+                }
+            },
+
             _ => (CommandReturn::failure(ErrorCode::INVAL), false),
         };
 
@@ -825,6 +865,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> gpio::Client for RF
             // The interrupt means we have completed transmitting a packet.
             // Set the state back to Idle and return to sleep mode.
             Status::Transmitting => {
+                kernel::debug!("Sent packet.");
                 self.status.set(Status::Idle);
                 self.queue_mode_change(Mode::Sleep).unwrap();
                 self.start_queue().unwrap();
