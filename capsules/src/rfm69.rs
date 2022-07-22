@@ -183,12 +183,14 @@ const SYNC_WORD_DEFAULT: u64 = 0x01010101_01010101;
 /// State of the split-phase operation the driver is doing.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Operation {
-    /// Writing a value to a register, (address, value).
-    Write(u8, u8),
-    /// Checking that a read value matches expected value, (expected value).
-    Confirm(u8, u8),
-    /// Updating a value in a register, (address, mask, shifted value).
-    Modify(u8, u8, u8),
+    /// Writing a value to a register (address, value).
+    WriteRegister(u8, u8),
+    /// Updating a value in a register (address, mask, value, current value).
+    ModifyRegister(u8, u8, u8, Option<u8>),
+    /// Write the data from the application's buffer into the FIFO.
+    FIFOWrite,
+    /// Read the data from FIFO into the application's buffer.
+    FIFORead,
 }
 
 /// Overall status of the driver.
@@ -196,15 +198,12 @@ enum Operation {
 enum Status {
     /// Driver is not doing anything.
     Idle,
-    /// In the middle of a read/write/modify operation.
-    Transaction(Operation),
     /// Radio is transmitting a packet.
     Transmitting(ProcessId),
     /// Radio is listening for packets.
     Receiving,
-    /// Dumping registers.
-    Debug,
 }
+
 
 #[derive(Clone, Copy)]
 enum Mode {
@@ -326,15 +325,20 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         self.interrupt_pin.enable_interrupts(gpio::InterruptEdge::RisingEdge);
 
         // Start setting the recommended settings.
-        self.pending[0].set(Some(Operation::Write(register::LNA, 0x88)));
-        self.pending[1].set(Some(Operation::Write(register::RxBW, 0x55)));
-        self.pending[2].set(Some(Operation::Write(register::AFCBW, 0x8B)));
-        self.pending[3].set(Some(Operation::Write(register::RSSIThresh, 0xE4)));
-        self.pending[4].set(Some(Operation::Write(register::TestDAGC, 0x30)));
-        self.pending[5].set(Some(Operation::Write(register::PreambleLSB, 0xB0)));
+        let recommended_settings = [
+            (register::LNA, 0x88),
+            (register::RxBW, 0x55),
+            (register::AFCBW, 0x8B),
+            (register::RSSIThresh, 0xE4),
+            (register::TestDAGC, 0x30),
+            (register::PreambleLSB, 0xB0),
+        ];
+        for (addr, val) in recommended_settings {
+            self.queue_write(addr, val).unwrap();
+        }
         // And put the radio into sleep mode.
         self.queue_mode_change(Mode::Sleep).unwrap();
-        self.start_queue().unwrap();
+        self.execute_queue().unwrap();
     }
 
     fn busy_wait(&self, duration_ms: u32) {
@@ -366,48 +370,97 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         *wbuf.get_mut(0).unwrap() = 0b1000_0000 | address;
         *wbuf.get_mut(1).unwrap() = val;
 
-        // kernel::debug!("WRITE {:#04X}, @{:#04X}", val, address);
-        self.status.set(Status::Transaction(Operation::Write(address, val)));
         if let Err((error, buf_a, buf_b)) = self.spi.read_write_bytes(wbuf, Some(rbuf), 2) {
-            self.status.set(Status::Idle);
-            self.buffers.0.put(Some(buf_a));
-            self.buffers.1.put(buf_b);
-            Err(RadioError::System(error))
+            // Consider whatever operation is underway just failed.
+            unimplemented!()
         } else {
             Ok(())
         }
     }
 
-    /// Update bits in a register.
-    ///
-    /// Change only the bits in the mask.
-    /// `val` will be shifted up to proper offset in the mask.
-    fn modify(&self, address: u8, mask: u8, val: u8) -> Result<()> {
-        let status = self.status.get();
-        if status != Status::Idle {
-            Err(RadioError::Busy)
+    fn execute_queue(&self) -> Result<()> {
+        // Find the first non-None operation on the queue and execute it.
+        if let Some(o) = self.pending.iter().find(|op| op.get().is_some()) {
+            // Validated that this is a Some variant from the find() closure.
+            let operation = o.get().unwrap();
+            kernel::debug!("E: {:?}", operation);
+            match operation {
+                Operation::WriteRegister(addr, val) => self.write(addr, val),
+
+                Operation::ModifyRegister(addr, _mask, _val, None) => self.read(addr),
+
+                Operation::ModifyRegister(addr, mask, val, Some(current)) => {
+                    assert!(mask != 0);
+                    let mut s = 0;
+                    while (mask >> s) & 1 != 1 { s += 1; }
+                    self.write(addr, (current & (!mask)) | (val << s))
+                },
+
+                Operation::FIFOWrite => {
+                    let pid = self.configured_for.extract().unwrap();
+                    // Copy data from the application into the radio FIFO.
+                    let grant_result = self.grants.enter(pid, |_grant, ko_data| {
+                        ko_data.get_readwrite_processbuffer(grant_nos::ALLOW_RW_FIFO_BUFFER)?
+                            .enter(|ro_buffer| {
+                                if ro_buffer.len() > FIFO_LENGTH {
+                                    Err(RadioError::System(ErrorCode::INVAL))
+                                } else {
+                                    let wbuf = self.buffers.1.take().unwrap();
+                                    wbuf[0] = 0b1000_0000; // Write to FIFO address.
+                                    ro_buffer.copy_to_slice(&mut wbuf[1..1+ro_buffer.len()]);
+                                    self.buffers.1.put(Some(wbuf));
+                                    Ok(ro_buffer.len())
+                                }
+                            })
+                    }).unwrap();
+
+                    // The grant operations yield a result wrapping the message length
+                    // doubly-nested by results.
+                    match grant_result {
+                        Ok(len_result) => {
+                            let data_len = len_result?;
+                            // Write the data into the FIFO.
+                            // If either of the buffers are missing, there is a bug because
+                            // we were just handling the write buffer, and this function gets
+                            // called by the read_write_done function, which puts buffers back.
+                            let (rbuf, wbuf) = (self.buffers.0.take().unwrap(),
+                                                self.buffers.1.take().unwrap());
+                            // And this one... produces some complex error management issues
+                            // should we handle a failure here. Likely do a callback to the
+                            // app to notify it that the transmission failed.
+                            // kernel::debug!("Writing {} bytes of FIFO data.", data_len);
+                            self.status.set(Status::Transmitting(pid));
+                            // +1 for the address of the FIFO before FIFO contents.
+                            self.spi.read_write_bytes(wbuf, Some(rbuf), 1+data_len).unwrap();
+                        },
+
+                        Err(err) => match err {
+                            // If these errors are the cause, the driver stops the system here.
+                            kernel::process::Error::KernelError
+                                | kernel::process::Error::AlreadyInUse => panic!(),
+
+                            // All other errors should cancel the operation.
+                            // Leave the driver in the idle state.
+                            kernel::process::Error::AddressOutOfBounds
+                                | kernel::process::Error::OutOfMemory
+                                | kernel::process::Error::NoSuchApp
+                                | kernel::process::Error::InactiveApp => {
+                                    // Do not rely on the earlier set.
+                                    self.status.set(Status::Idle);
+                                    self.fifo_write_pending.set(false);
+                                    kernel::debug!("RFM69: grant action failed: {:?}", err);
+                                }
+                        }
+                    };
+
+                    Ok(())
+                }
+
+                _ => unimplemented!(),
+            }
         } else {
-            assert!(mask != 0);
-            let mut s = 0;
-            while (mask >> s) & 1 != 1 { s += 1; }
-
-            self.status.set(Status::Transaction(Operation::Modify(address, mask, val << s)));
-            self.read(address).or_else(|e| {
-                self.status.set(Status::Idle);
-                Err(e)
-            })
-        }
-    }
-
-    fn start_queue(&self) -> Result<()> {
-        // Get the first operation off of the queue and start the operations.
-        // This must exist, if not, there is a bug in the driver.
-        let operation = self.pending[0].get().unwrap();
-        match operation {
-            Operation::Write(addr, val) => self.write(addr, val),
-            Operation::Modify(addr, mask, val) => self.modify(addr, mask, val),
-            // Invalid operation queued up.
-            _ => panic!(),
+            // Nothing to do.
+            Ok(())
         }
     }
 
@@ -422,12 +475,14 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         Err(RadioError::QueueFull)
     }
 
+    #[inline]
     fn queue_write(&self, address: u8, val: u8) -> Result<()> {
-        self.queue(Operation::Write(address, val))
+        self.queue(Operation::WriteRegister(address, val))
     }
 
+    #[inline]
     fn queue_modify(&self, address: u8, mask: u8, val: u8) -> Result<()> {
-        self.queue(Operation::Modify(address, mask, val))
+        self.queue(Operation::ModifyRegister(address, mask, val, None))
     }
 
     #[inline]
@@ -439,17 +494,15 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
 
     #[inline]
     fn driver_busy(&self) -> bool {
-        // Status is set to Idle.
-        let is_idle = self.status.get() == Status::Idle;
-        // No pending FIFO operation.
-        let pending_fifo_operation = self.fifo_write_pending.get();
+        // Buffers are present.
+        let have_buffers = self.buffers.0.is_some() && self.buffers.1.is_some();
+
         // No pending register operations.
         let pending_queue_empty = self.pending.iter()
             .find(|slot| slot.get().is_some())
             .is_none();
 
-        // kernel::debug!("{} && {} && {}", is_idle, no_pending_fifo_operation, pending_queue_empty);
-        !is_idle || pending_fifo_operation || !pending_queue_empty
+        !have_buffers || !pending_queue_empty
     }
 
     /// Queue commands to configure the radio for an application.
@@ -526,16 +579,17 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
     fn transmit(&self, pid: ProcessId) -> Result<()> {
         self.queue_configuration(pid)?;
         // Upon completing the register updates, we need to write to the FIFO afterwards.
+        self.queue(Operation::FIFOWrite)?;
         self.fifo_write_pending.set(true);
         self.queue_mode_change(Mode::Transmit)?;
-        self.start_queue()
+        self.execute_queue()
     }
 
     fn receive(&self, pid: ProcessId) -> Result<()> {
         self.queue_configuration(pid)?;
         self.receive_for.set(pid);
         self.queue_mode_change(Mode::Receive)?;
-        self.start_queue()
+        self.execute_queue()
     }
 
     /// Clear the configured_for value if it matches the given PID.
@@ -548,153 +602,45 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
     }
 
     fn process_callback(&self) -> Result<()> {
-        use Status::*;
-        let current_status = self.status.get();
-        match current_status {
-            Transaction(operation) => match operation {
-                // Completed writing the requested register to a specific value.
-                // Read the value back to confirm that it is, in fact, correct.
-                Operation::Write(addr, val) => {
-                    // Remove the write from the pending queue.
-                    self.pending.iter()
-                        .find(|w| {
-                            if let Some(op) = w.get() {
-                                match op {
-                                    Operation::Write(op_addr, _val) => op_addr == addr,
-                                    Operation::Modify(op_addr, _mask, _val) => op_addr == addr,
-                                    // Should only see writes and modifies in the queue.
-                                    _ => panic!(),
-                                }
-                            } else {
-                                false
-                            }
-                        })
-                        .map_or_else(
-                            || { kernel::debug!("Last command was not in queue."); },
-                            |entry| { entry.set(None); });
+        let current_operation = self.pending.iter()
+            .find(|op| op.get().is_some())
+            .unwrap(); // There _must_ be an operation in the queue.
 
-                    self.status.set(Status::Transaction(Operation::Confirm(addr, val)));
-                    self.read(addr)
-                },
+        match current_operation.get().unwrap() {
+            // Completed writing the requested register to a specific value.
+            // The operation is complete, so remove it from the pending queue.
+            Operation::WriteRegister(_addr, _val) => {
+                current_operation.set(None);
+                Ok(())
+            },
 
-                // Completed reading a register to confirm a value.
-                // Compare the value to make sure it matches up.
-                Operation::Confirm(addr, written) => {
-                    self.status.set(Status::Idle);
-                    let actual = self.buffers.0.map(|buf| *buf.get(1).unwrap()).unwrap();
-                    // kernel::debug!("actual: {:#04X}", actual);
+            // Read phase of the modify operation.
+            // Completed reading the current register value.
+            // Update the Operation with a current value.
+            // The callback will continue execution of the queue.
+            Operation::ModifyRegister(addr, mask, val, None) => {
+                let current = self.buffers.0.map(|buf| buf[1]).unwrap();
+                current_operation.set(Some(Operation::ModifyRegister(addr, mask, val, Some(current))));
+                Ok(())
+            },
 
-                    // Do not try to confirm the OpMode register.
-                    // This register updates itself once the radio goes into the specified mode.
-                    // This means that a back-to-back write-read may show an inconsistent result.
-                    // That is not an error.
-                    if written == actual || addr == register::OpMode {
-                        // Now the driver will:
-                        // a) possibly pull a pending write off the queue,
-                        // b) check if it can stay in an idle state,
-                        //    - when the fifo_write_pending flag is set, we write to the FIFO,
-                        //    - when not set, the driver stays idle.
-                        let mut next = self.pending.iter()
-                            .filter(|w| w.get().is_some())
-                            .map(|w| w.get())
-                            .nth(0)
-                            .unwrap_or(None);
-                        if let Some(pending_write) = next {
-                            match pending_write {
-                                Operation::Write(addr, val) => self.write(addr, val),
-                                Operation::Modify(addr, mask, val) => self.modify(addr, mask, val),
-                                // A pending operation that is not write or modify made it into the queue.
-                                // This is a logic bug.
-                                // The driver should only place Write or Modify operations into the queue.
-                                _ => panic!(),
-                            }
-                        } else if self.fifo_write_pending.get() {
-                            self.fifo_write_pending.set(false);
-                            // If the fifo_write_pending flag is set, the driver must be configured for an
-                            // application set by the transmit() function.
-                            let pid = self.configured_for.unwrap_or_panic();
-                            let grant_result = self.grants.enter(pid, |_grant, ko_data| {
-                                // Copy data into the FIFO.
-                                ko_data.get_readwrite_processbuffer(grant_nos::ALLOW_RW_FIFO_BUFFER)?
-                                    .enter(|ro_buffer| {
-                                        if ro_buffer.len() > FIFO_LENGTH {
-                                            Err(RadioError::System(ErrorCode::INVAL))
-                                        } else {
-                                            let wbuf = self.buffers.1.take().unwrap();
-                                            wbuf[0] = 0b1000_0000; // Write to FIFO address.
-                                            ro_buffer.copy_to_slice(&mut wbuf[1..1+ro_buffer.len()]);
-                                            self.buffers.1.put(Some(wbuf));
-                                            Ok(ro_buffer.len())
-                                        }
-                                    })
-                            }).unwrap();
-
-                            // The grant operations yield a result wrapping the message length
-                            // doubly-nested by results.
-                            match grant_result {
-                                Ok(len_result) => {
-                                    let data_len = len_result?;
-                                    // Write the data into the FIFO.
-                                    // If either of the buffers are missing, there is a bug because
-                                    // we were just handling the write buffer, and this function gets
-                                    // called by the read_write_done function, which puts buffers back.
-                                    let (rbuf, wbuf) = (self.buffers.0.take().unwrap(),
-                                                        self.buffers.1.take().unwrap());
-                                    // And this one... produces some complex error management issues
-                                    // should we handle a failure here. Likely do a callback to the
-                                    // app to notify it that the transmission failed.
-                                    // kernel::debug!("Writing {} bytes of FIFO data.", data_len);
-                                    self.status.set(Status::Transmitting(pid));
-                                    // +1 for the address of the FIFO before FIFO contents.
-                                    self.spi.read_write_bytes(wbuf, Some(rbuf), 1+data_len).unwrap();
-                                },
-
-                                Err(err) => match err {
-                                    // If these errors are the cause, the driver stops the system here.
-                                    kernel::process::Error::KernelError
-                                        | kernel::process::Error::AlreadyInUse => panic!(),
-
-                                    // All other errors should cancel the operation.
-                                    // Leave the driver in the idle state.
-                                    kernel::process::Error::AddressOutOfBounds
-                                        | kernel::process::Error::OutOfMemory
-                                        | kernel::process::Error::NoSuchApp
-                                        | kernel::process::Error::InactiveApp => {
-                                            // Do not rely on the earlier set.
-                                            self.status.set(Status::Idle);
-                                            self.fifo_write_pending.set(false);
-                                            kernel::debug!("RFM69: grant action failed: {:?}", err);
-                                        }
-                                }
-                            };
-
-                            Ok(())
-                        } else {
-                            Ok(())
-                        }
-                    } else {
-                        kernel::debug!("Inconsistent values (exp. v. actual): {:#X} != {:#X}", written, actual);
-                        Err(RadioError::Inconsistent)
-                    }
-                },
-
-                // Completed reading the current register value.
-                // Update the register's current value and perform the write.
-                Operation::Modify(addr, mask, val) => {
-                    let current = self.buffers.0.map(|buf| *buf.get(1).unwrap()).unwrap();
-                    let new_val = (current & !mask) | val;
-                    self.write(addr, new_val)
-                }
+            // Completed modifying the requested register.
+            // The operation is complete, so remove it from the queue.
+            Operation::ModifyRegister(_addr, _mask, _val, Some(_cur)) => {
+                current_operation.set(None);
+                Ok(())
             }
 
-            // Completed moving to transmit mode.
-            // Do not do anything.
-            // The next step is handled by the GPIO interrupt from the radio.
-            Status::Transmitting(_pid) => { Ok(()) },
+            // FIFO write complete.
+            // The operation is complete, so remove it from the pending queue.
+            Operation::FIFOWrite => {
+                current_operation.set(None);
+                Ok(())
+            },
 
-            // Completed reading the FIFO.
-            // Place these bytes into the application's buffer and send the application an upcall.
-            Status::Receiving => {
+            // FIFO read complete.
+            // The buffer must be copied to the application the driver received for.
+            Operation::FIFORead => {
                 let rx_pid = self.receive_for.extract().unwrap();
                 let rbuf = self.buffers.0.take().unwrap();
                 let copy_result = self.grants.enter(rx_pid, |_data, ko_data| {
@@ -715,21 +661,21 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
 
                         Err(err) => {
                             match err {
-                                    // If these errors are the cause, the driver stops the system here.
-                                    kernel::process::Error::KernelError
-                                        | kernel::process::Error::AlreadyInUse => panic!(),
+                                // If these errors are the cause, the driver stops the system here.
+                                kernel::process::Error::KernelError
+                                    | kernel::process::Error::AlreadyInUse => panic!(),
 
-                                    // All other errors should cancel the operation.
-                                    // Leave the driver in the idle state.
-                                    kernel::process::Error::AddressOutOfBounds
-                                        | kernel::process::Error::OutOfMemory
-                                        | kernel::process::Error::NoSuchApp
-                                        | kernel::process::Error::InactiveApp => {
-                                            // Do not rely on the earlier set.
-                                            self.status.set(Status::Idle);
-                                            self.fifo_write_pending.set(false);
-                                            kernel::debug!("RFM69: grant action failed: {:?}", err);
-                                        }
+                                // All other errors should cancel the operation.
+                                // Leave the driver in the idle state.
+                                kernel::process::Error::AddressOutOfBounds
+                                    | kernel::process::Error::OutOfMemory
+                                    | kernel::process::Error::NoSuchApp
+                                    | kernel::process::Error::InactiveApp => {
+                                        // Do not rely on the earlier set.
+                                        self.status.set(Status::Idle);
+                                        self.fifo_write_pending.set(false);
+                                        kernel::debug!("RFM69: grant action failed: {:?}", err);
+                                    }
                             }
                         }
                     };
@@ -755,20 +701,6 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                 }
             },
 
-            // Completed reading a range of registers.
-            Status::Debug => {
-                let start_addr = self.buffers.1.map(|buf| *buf.get(0).unwrap()).unwrap() as usize;
-                let rbuf = self.buffers.0.take().unwrap();
-                for i in 0usize..0x27 {
-                    kernel::debug!("{:#04X}: {:#04X} ({:#010b})", start_addr+i, rbuf[1+i], rbuf[1+i]);
-                }
-                self.buffers.0.put(Some(rbuf));
-
-                self.status.set(Status::Idle);
-
-                Ok(())
-            },
-
             // Driver was not doing a recognized SPI operation yet received an interrupt.
             // This is a logic bug for the driver.
             _ => panic!()
@@ -790,8 +722,10 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> spi::SpiMasterClien
         if let Err(e) = status {
             kernel::debug!("SPI failed: {:?}", e);
         } else {
+            // Process the callback to finish the operation and start the next operation.
+            let res = self.process_callback().and(self.execute_queue());
             // Perform the next step of the operation.
-            if let Err(e) = self.process_callback() {
+            if let Err(e) = res {
                 kernel::debug!("Radio callback processing failed: {:?}, (currently {:?})", e, self.status.get());
             }
         }
@@ -952,30 +886,6 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> SyscallDriver for R
                 }
             }
 
-            // Dump register values.
-            // r2 = Set to dump (1 or 2).
-            (400, sel, _) => {
-                if self.driver_busy() {
-                    (CommandReturn::failure(ErrorCode::BUSY), false)
-                } else {
-                    // We just checked whether the driver was busy.
-                    let (rbuf, wbuf) = (self.buffers.0.take().unwrap(),
-                                        self.buffers.1.take().unwrap());
-
-                    wbuf[0] = match sel {
-                        0 => 0x01,
-                        _ => 0x28,
-                    };
-                    for byte in rbuf.iter_mut() { *byte = 0xFE; }
-
-                    self.status.set(Status::Debug);
-                    self.spi.read_write_bytes(wbuf, Some(rbuf), 0x28)
-                        .unwrap(); // Debug, so I do not want to deal with this error.
-
-                    (CommandReturn::success(), false)
-                }
-            },
-
             _ => (CommandReturn::failure(ErrorCode::INVAL), false),
         };
 
@@ -1013,7 +923,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> gpio::Client for RF
                     self.receive(rx_pid);
                 } else {
                     self.queue_mode_change(Mode::Sleep).unwrap();
-                    self.start_queue().unwrap();
+                    self.execute_queue().unwrap();
                 }
             },
 
