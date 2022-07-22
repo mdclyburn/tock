@@ -31,18 +31,7 @@ use kernel::utilities::cells::{OptionalCell, TakeCell};
 
 pub const DRIVER_NUM: usize = crate::driver::NUM::Ism as usize;
 
-type Result<T> = core::result::Result<T, RadioError>;
-
-#[derive(Debug)]
-enum RadioError {
-    Busy,
-    Inconsistent,
-    NoReadBuffer,
-    NoWriteBuffer,
-    Process(kernel::process::Error),
-    System(ErrorCode),
-    QueueFull,
-}
+type Result<T> = core::result::Result<T, ErrorCode>;
 
 /// Register addresses.
 #[allow(non_upper_case_globals, unused)]
@@ -105,6 +94,15 @@ mod register {
         pub const SyncConfig_SyncSize: u8 = 0b00111000;
     }
 }
+
+const RECOMMENDED_REGISTER_VALS: [(u8, u8); 6] = [
+    (register::LNA, 0x88),
+    (register::RxBW, 0x55),
+    (register::AFCBW, 0x8B),
+    (register::RSSIThresh, 0xE4),
+    (register::TestDAGC, 0x30),
+    (register::PreambleLSB, 0xB0),
+];
 
 /// Packet format, either fixed- or variable-length.
 #[derive(Clone, Copy)]
@@ -305,20 +303,12 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         self.interrupt_pin.set_client(self);
         self.interrupt_pin.enable_interrupts(gpio::InterruptEdge::RisingEdge);
 
-        // Start setting the recommended settings.
-        let recommended_settings = [
-            (register::LNA, 0x88),
-            (register::RxBW, 0x55),
-            (register::AFCBW, 0x8B),
-            (register::RSSIThresh, 0xE4),
-            (register::TestDAGC, 0x30),
-            (register::PreambleLSB, 0xB0),
-        ];
-        for (addr, val) in recommended_settings {
-            self.queue_write(addr, val).unwrap();
+        // Set the recommended settings.
+        for (addr, val) in RECOMMENDED_REGISTER_VALS {
+            self.queue_write(addr, val);
         }
         // And put the radio into sleep mode.
-        self.queue_mode_change(Mode::Sleep).unwrap();
+        self.queue_mode_change(Mode::Sleep);
         self.execute_queue().unwrap();
     }
 
@@ -331,31 +321,37 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
     }
 
     fn read(&self, address: u8) -> Result<()> {
-        let (rbuf, wbuf) = (self.buffers.0.take().ok_or(RadioError::NoReadBuffer)?,
-                            self.buffers.1.take().ok_or(RadioError::NoWriteBuffer)?);
-        rbuf[0] = 0xEE; rbuf[1] = 0xEE;
+        let (rbuf, wbuf) = (self.buffers.0.take().unwrap(),
+                            self.buffers.1.take().unwrap());
         wbuf[0] = 0b0111_1111 & address;
 
-        if let Err((error, buf_a, buf_b)) = self.spi.read_write_bytes(wbuf, Some(rbuf), 2) {
-            self.buffers.0.put(Some(buf_a));
-            self.buffers.1.put(buf_b);
-            Err(RadioError::System(error))
-        } else {
-            Ok(())
+        match self.spi.read_write_bytes(wbuf, Some(rbuf), 2) {
+            Ok(()) => Ok(()),
+            Err((err, wbuf, opt_rbuf)) => {
+                // Put the buffers back.
+                self.buffers.0.put(opt_rbuf);
+                self.buffers.1.put(Some(wbuf));
+                Err(err)
+            },
         }
     }
 
     fn write(&self, address: u8, val: u8) -> Result<()> {
-        let (rbuf, wbuf) = (self.buffers.0.take().ok_or(RadioError::NoReadBuffer)?,
-                            self.buffers.1.take().ok_or(RadioError::NoWriteBuffer)?);
+        // If either of these buffers are missing, there is a logic bug.
+        // The caller should know that both buffers are in place before calling.
+        let (rbuf, wbuf) = (self.buffers.0.take().unwrap(),
+                            self.buffers.1.take().unwrap());
         *wbuf.get_mut(0).unwrap() = 0b1000_0000 | address;
         *wbuf.get_mut(1).unwrap() = val;
 
-        if let Err((error, buf_a, buf_b)) = self.spi.read_write_bytes(wbuf, Some(rbuf), 2) {
-            // Consider whatever operation is underway just failed.
-            unimplemented!()
-        } else {
-            Ok(())
+        match self.spi.read_write_bytes(wbuf, Some(rbuf), 2) {
+            Ok(()) => Ok(()),
+            Err((err, wbuf, opt_rbuf)) => {
+                // Put the buffers back.
+                self.buffers.0.put(opt_rbuf);
+                self.buffers.1.put(Some(wbuf));
+                Err(err)
+            },
         }
     }
 
@@ -381,15 +377,15 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                     // Copy data from the application into the radio FIFO.
                     let grant_result = self.grants.enter(pid, |_grant, ko_data| {
                         ko_data.get_readwrite_processbuffer(grant_nos::ALLOW_RW_FIFO_BUFFER)?
-                            .enter(|ro_buffer| {
-                                if ro_buffer.len() > FIFO_LENGTH {
-                                    Err(RadioError::System(ErrorCode::INVAL))
+                            .enter(|ro_slice| {
+                                if ro_slice.len() > FIFO_LENGTH {
+                                    Err(ErrorCode::INVAL)
                                 } else {
                                     let wbuf = self.buffers.1.take().unwrap();
                                     wbuf[0] = 0b1000_0000; // Write to FIFO address.
-                                    ro_buffer.copy_to_slice(&mut wbuf[1..1+ro_buffer.len()]);
+                                    ro_slice.copy_to_slice(&mut wbuf[1..1+ro_slice.len()]);
                                     self.buffers.1.put(Some(wbuf));
-                                    Ok(ro_buffer.len())
+                                    Ok(ro_slice.len())
                                 }
                             })
                     }).unwrap();
@@ -444,114 +440,114 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         }
     }
 
-    fn queue(&self, operation: Operation) -> Result<()> {
+    fn queue(&self, operation: Operation) {
         for i in 0..self.pending.len() {
             if self.pending[i].get().is_none() {
                 self.pending[i].set(Some(operation));
-                return Ok(());
             }
         }
 
-        Err(RadioError::QueueFull)
+        // If execution reaches here, the queue is full.
+        // The driver has a bug and/or is trying to load too many operations before executing.
+        // Increase the size of the `pending` array.
+        panic!()
     }
 
     #[inline]
-    fn queue_write(&self, address: u8, val: u8) -> Result<()> {
+    fn queue_write(&self, address: u8, val: u8) {
         self.queue(Operation::WriteRegister(address, val))
     }
 
     #[inline]
-    fn queue_modify(&self, address: u8, mask: u8, val: u8) -> Result<()> {
+    fn queue_modify(&self, address: u8, mask: u8, val: u8) {
         self.queue(Operation::ModifyRegister(address, mask, val, None))
     }
 
     #[inline]
-    fn queue_mode_change(&self, mode: Mode) -> Result<()> {
-        self.queue_modify(register::OpMode, register::mask::OpMode_Mode, u8::from(mode))?;
-
-        Ok(())
+    fn queue_mode_change(&self, mode: Mode) {
+        self.queue_modify(register::OpMode, register::mask::OpMode_Mode, u8::from(mode));
     }
 
-    #[inline]
-    fn driver_busy(&self) -> bool {
-        // Buffers are present.
-        let have_buffers = self.buffers.0.is_some() && self.buffers.1.is_some();
-
-        // No pending register operations.
-        let pending_queue_empty = self.pending.iter()
-            .find(|slot| slot.get().is_some())
-            .is_none();
-
-        !have_buffers || !pending_queue_empty
+    /// Inspect `error` and perform necessary driver recovery.
+    ///
+    /// When an operation involving grants fail, it can be for a few different reasons.
+    /// Most often, there will need to be some cleanup within the driver, e.g.,
+    /// when an application faults but the radio is still performing work on its behalf.
+    fn recover_state(&self, pid: ProcessId, error: kernel::process::Error) -> Result<()> {
+        unimplemented!()
     }
 
     /// Queue commands to configure the radio for an application.
     fn queue_configuration(&self, pid: ProcessId) -> Result<()> {
-        // Make sure the driver is not busy doing anything else at the moment.
-        if self.driver_busy() {
-            Err(RadioError::Busy)
-        } else {
-            // Check the current configuration.
-            // Apply the application's configuration if the app has updated its configuration
-            // or a different app has used the radio since.
-            if Some(pid) != self.configured_for.extract() {
-                // Update configuration.
-                self.grants.enter(pid, |grant, _ko_data| {
-                    // Bit rate.
-                    self.queue_write(register::BitrateMSB, (grant.bit_rate >> 8) as u8)?;
-                    self.queue_write(register::BitrateLSB, (grant.bit_rate & 0xFF) as u8)?;
+        // Check the current configuration.
+        // Apply the application's configuration if the app has updated its configuration
+        // or a different app has used the radio since.
+        if Some(pid) != self.configured_for.extract() {
+            // Update configuration.
+            let grant_result = self.grants.enter::<_, core::result::Result<(), ErrorCode>>(pid, |grant, _ko_data| {
+                // Bit rate.
+                self.queue_write(register::BitrateMSB, (grant.bit_rate >> 8) as u8);
+                self.queue_write(register::BitrateLSB, (grant.bit_rate & 0xFF) as u8);
 
-                    // Packet format.
-                    self.queue_modify(
-                        register::PacketConfig1,
-                        register::mask::PacketConfig1_PacketFormat,
-                        // Also update the payload length value if fixed-length.
-                        if let PacketFormat::Fixed(p_len) = grant.packet_format {
-                            self.queue_write(register::PayloadLength, p_len)?;
-                            0 // Evaluate zero for fixed-length in PacketFormat.
-                        } else {
-                            1 // Evaluate one for variable-length in PacketFormat.
-                        })?;
+                // Packet format.
+                self.queue_modify(
+                    register::PacketConfig1,
+                    register::mask::PacketConfig1_PacketFormat,
+                    // Also update the payload length value if fixed-length.
+                    if let PacketFormat::Fixed(p_len) = grant.packet_format {
+                        self.queue_write(register::PayloadLength, p_len);
+                        0 // Evaluate zero for fixed-length in PacketFormat.
+                    } else {
+                        1 // Evaluate one for variable-length in PacketFormat.
+                    });
 
-                    // AES encryption.
-                    self.queue_modify(
-                        register::PacketConfig2,
-                        register::mask::PacketConfig2_AESOn,
-                        if let Some(ref enc_key) = grant.enc_key {
-                            for (byte, offset) in enc_key.iter().copied().zip(0..) {
-                                self.queue_write(register::AESKey1 + offset, byte)?;
-                            }
-                            1 // Evaluate one for AES on.
-                        } else {
-                            0 // Evaluate zero for AES off.
-                        })?;
+                // AES encryption.
+                self.queue_modify(
+                    register::PacketConfig2,
+                    register::mask::PacketConfig2_AESOn,
+                    if let Some(ref enc_key) = grant.enc_key {
+                        for (byte, offset) in enc_key.iter().copied().zip(0..) {
+                            self.queue_write(register::AESKey1 + offset, byte);
+                        }
+                        1 // Evaluate one for AES on.
+                    } else {
+                        0 // Evaluate zero for AES off.
+                    });
 
-                    // Sync word.
-                    self.queue_modify(
-                        register::SyncConfig,
-                        register::mask::SyncConfig_SyncOn,
-                        if let Some((s_len, word)) = grant.sync_word {
-                            self.queue_modify(
-                                register::SyncConfig,
-                                register::mask::SyncConfig_SyncSize,
-                                s_len)?;
-                            for offset in 0..(s_len+1) {
-                                self.queue_write(
-                                    register::SyncValue1 + offset,
-                                    ((word >> (8 * offset)) & 0xFF) as u8)?;
-                            }
+                // Sync word.
+                self.queue_modify(
+                    register::SyncConfig,
+                    register::mask::SyncConfig_SyncOn,
+                    if let Some((s_len, word)) = grant.sync_word {
+                        self.queue_modify(
+                            register::SyncConfig,
+                            register::mask::SyncConfig_SyncSize,
+                            s_len);
+                        for offset in 0..(s_len+1) {
+                            self.queue_write(
+                                register::SyncValue1 + offset,
+                                ((word >> (8 * offset)) & 0xFF) as u8);
+                        }
 
-                            1 // Evaluate one for sync on.
-                        } else {
-                            0 // Evaluate zero for sync off.
-                        })?;
+                        1 // Evaluate one for sync on.
+                    } else {
+                        0 // Evaluate zero for sync off.
+                    });
 
-                    Ok(())
-                }).unwrap()?;
+                Ok(())
+            });
 
+            if let Err(e) = grant_result {
+                // Errors on entering the grant.
+                // Need to perform cleanup depending on what is wrong.
+                // `recover_state` will hand back the proper return value.
+                self.recover_state(pid, e)
+            } else {
                 self.configured_for.set(pid);
+                Ok(())
             }
-
+        } else {
+            // Driver is already configured for the application.
             Ok(())
         }
     }
@@ -560,16 +556,16 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         self.status.set(Status::Transmitting);
         self.queue_configuration(pid)?;
         // Upon completing the register updates, we need to write to the FIFO afterwards.
-        self.queue(Operation::FIFOWrite)?;
+        self.queue(Operation::FIFOWrite);
         self.fifo_write_pending.set(true);
-        self.queue_mode_change(Mode::Transmit)?;
+        self.queue_mode_change(Mode::Transmit);
         self.execute_queue()
     }
 
     fn receive(&self, pid: ProcessId) -> Result<()> {
         self.queue_configuration(pid)?;
         self.receive_for.set(pid);
-        self.queue_mode_change(Mode::Receive)?;
+        self.queue_mode_change(Mode::Receive);
         self.execute_queue()
     }
 
@@ -674,7 +670,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
 
                         _ => {
                             kernel::debug!("Failed to copy received packet: {:?}", err);
-                            Err(RadioError::System(ErrorCode::FAIL))
+                            Err(ErrorCode::FAIL)
                         },
                     }
                 } else {
@@ -749,7 +745,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> SyscallDriver for R
                         } else {
                             data.sync_word = Some(
                                 ((sync_length - 1) as u8,
-                                 data.sync_word.map(|(l, s)| s).unwrap_or(SYNC_WORD_DEFAULT)));
+                                 data.sync_word.map(|(_l, s)| s).unwrap_or(SYNC_WORD_DEFAULT)));
                             (CommandReturn::success(), true)
                         }
                     }).unwrap_or((CommandReturn::failure(ErrorCode::FAIL), false))
@@ -909,9 +905,9 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> gpio::Client for RF
                 // If the radio was previously listening for another application,
                 // then go back into receive mode, otherwise, the radio should sleep.
                 if let Some(rx_pid) = self.receive_for.extract() {
-                    self.receive(rx_pid);
+                    self.receive(rx_pid).unwrap();
                 } else {
-                    self.queue_mode_change(Mode::Sleep).unwrap();
+                    self.queue_mode_change(Mode::Sleep);
                     self.execute_queue().unwrap();
                 }
             },
