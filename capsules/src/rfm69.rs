@@ -104,6 +104,22 @@ mod register {
     }
 }
 
+/// Evaluate to the SPI command that reads the given register.
+macro_rules! read_register {
+    ($address:expr) => {{
+        let address = ($address);
+        0b0111_1111 & address
+    }}
+}
+
+/// Evaluate to the SPI command that writes the given register.
+macro_rules! write_register {
+    ($address:expr) => {{
+        let address = ($address);
+        0b1000_0000 | address
+    }}
+}
+
 /// Packet format, either fixed- or variable-length.
 #[derive(Clone, Copy)]
 enum PacketFormat {
@@ -178,6 +194,8 @@ enum Status {
     Transaction(Operation),
     /// Radio is transmitting a packet.
     Transmitting(ProcessId),
+    /// Radio is listening for packets.
+    Receiving,
     /// Dumping registers.
     Debug,
 }
@@ -920,13 +938,29 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> gpio::Client for RF
                 }).unwrap().unwrap();
 
                 self.status.set(Status::Idle);
-                // If the radio was previosly listening for another application,'
+                // If the radio was previously listening for another application,
                 // then go back into receive mode, otherwise, the radio should sleep.
                 if let Some(rx_pid) = self.receive_for.extract() {
                     self.receive(rx_pid);
                 } else {
                     self.queue_mode_change(Mode::Sleep).unwrap();
                     self.start_queue().unwrap();
+                }
+            },
+
+            // Radio is in receive mode.
+            // The interrupt means the radio has received a packet.
+            // Start an SPI transaction to read the FIFO.
+            Status::Receiving => {
+                // If either of these buffers are missing, there is a bug in the logic.
+                let (rbuf, wbuf) = (self.buffers.0.take().unwrap(),
+                                    self.buffers.1.take().unwrap());
+                wbuf[0] = read_register!(register::FIFO);
+
+                if let Err((err, wbuf, rbuf)) = self.spi.read_write_bytes(wbuf, Some(rbuf), wbuf.len()) {
+                    self.buffers.0.put(Some(wbuf));
+                    self.buffers.1.put(rbuf);
+                    kernel::debug!("Receiving packet failed: {:?}.", err);
                 }
             },
 
