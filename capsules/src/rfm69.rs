@@ -191,7 +191,6 @@ enum Status {
 #[derive(Clone, Copy)]
 enum Mode {
     Sleep,
-    Standby,
     Transmit,
     Receive,
 }
@@ -201,7 +200,6 @@ impl From<Mode> for u8 {
         use Mode::*;
         match mode {
             Sleep => 0,
-            Standby => 1,
             Transmit => 3,
             Receive => 4,
         }
@@ -366,7 +364,6 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         if let Some(o) = self.pending.iter().find(|op| op.get().is_some()) {
             // Validated that this is a Some variant from the find() closure.
             let operation = o.get().unwrap();
-            kernel::debug!("E: {:?}", operation);
             match operation {
                 Operation::WriteRegister(addr, val) => self.write(addr, val),
 
