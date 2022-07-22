@@ -26,7 +26,6 @@ use kernel::processbuffer::{
 use kernel::syscall::{
     CommandReturn,
     SyscallDriver,
-    SyscallReturn,
 };
 use kernel::utilities::cells::{OptionalCell, TakeCell};
 
@@ -107,22 +106,6 @@ mod register {
     }
 }
 
-/// Evaluate to the SPI command that reads the given register.
-macro_rules! read_register {
-    ($address:expr) => {{
-        let address = ($address);
-        0b0111_1111 & address
-    }}
-}
-
-/// Evaluate to the SPI command that writes the given register.
-macro_rules! write_register {
-    ($address:expr) => {{
-        let address = ($address);
-        0b1000_0000 | address
-    }}
-}
-
 /// Packet format, either fixed- or variable-length.
 #[derive(Clone, Copy)]
 enum PacketFormat {
@@ -193,13 +176,13 @@ enum Operation {
     FIFORead,
 }
 
-/// Overall status of the driver.
+/// Operating status of the radio.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Status {
     /// Driver is not doing anything.
     Idle,
     /// Radio is transmitting a packet.
-    Transmitting(ProcessId),
+    Transmitting,
     /// Radio is listening for packets.
     Receiving,
 }
@@ -429,7 +412,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                             // should we handle a failure here. Likely do a callback to the
                             // app to notify it that the transmission failed.
                             // kernel::debug!("Writing {} bytes of FIFO data.", data_len);
-                            self.status.set(Status::Transmitting(pid));
+                            self.status.set(Status::Transmitting);
                             // +1 for the address of the FIFO before FIFO contents.
                             self.spi.read_write_bytes(wbuf, Some(rbuf), 1+data_len).unwrap();
                         },
@@ -577,6 +560,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
     }
 
     fn transmit(&self, pid: ProcessId) -> Result<()> {
+        self.status.set(Status::Transmitting);
         self.queue_configuration(pid)?;
         // Upon completing the register updates, we need to write to the FIFO afterwards.
         self.queue(Operation::FIFOWrite)?;
@@ -700,10 +684,6 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                     Ok(())
                 }
             },
-
-            // Driver was not doing a recognized SPI operation yet received an interrupt.
-            // This is a logic bug for the driver.
-            _ => panic!()
         }
     }
 }
@@ -744,11 +724,17 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> SyscallDriver for R
 
             // Send the current buffer as a packet.
             (10, _, _) => {
-                match self.transmit(pid) {
-                    Ok(_) => (CommandReturn::success(), false),
-                    Err(radio_err) => match radio_err {
-                        RadioError::Busy => (CommandReturn::failure(ErrorCode::BUSY), false),
-                        _ => (CommandReturn::failure(ErrorCode::FAIL), false),
+                // The radio is only available for transmission if either
+                // the radio is idle or if it is only receiving on behalf
+                // of an application (may be the same application).
+                let status = self.status.get();
+                let available = status == Status::Idle || status == Status::Receiving;
+                if !available {
+                    (CommandReturn::failure(ErrorCode::BUSY), false)
+                } else {
+                    match self.transmit(pid) {
+                        Ok(_) => (CommandReturn::success(), false),
+                        Err(_e) => (CommandReturn::failure(ErrorCode::FAIL), false),
                     }
                 }
             },
@@ -907,10 +893,16 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> gpio::Client for RF
         // Reason depends on the radio's operating mode,
         // which corresponds to the state of the driver.
         match self.status.get() {
+            // Radio was supposedly idle and it issued an interrupt on DIO0.
+            // This means that the radio was _actually_ in either receive or transmit mode.
+            // This is a logic bug.
+            Status::Idle => panic!(),
+
             // Radio is in transmit mode.
             // The interrupt means we have completed transmitting a packet.
             // Set the state back to Idle and return to sleep mode.
-            Status::Transmitting(pid) => {
+            Status::Transmitting => {
+                let pid = self.configured_for.extract().unwrap();
                 // Let the application know the transmission completed.
                 self.grants.enter(pid, |_data, ko_data| {
                     ko_data.schedule_upcall(grant_nos::SUBSCRIBE_TX_COMPLETE, (0, 0, 0))
@@ -934,7 +926,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> gpio::Client for RF
                 // If either of these buffers are missing, there is a bug in the logic.
                 let (rbuf, wbuf) = (self.buffers.0.take().unwrap(),
                                     self.buffers.1.take().unwrap());
-                wbuf[0] = read_register!(register::FIFO);
+                wbuf[0] = 0b0111_1111 & register::FIFO;
 
                 if let Err((err, wbuf, rbuf)) = self.spi.read_write_bytes(wbuf, Some(rbuf), wbuf.len()) {
                     self.buffers.0.put(Some(wbuf));
@@ -942,9 +934,6 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> gpio::Client for RF
                     kernel::debug!("Receiving packet failed: {:?}.", err);
                 }
             },
-
-            // Not supposed to be answering an interrupt.
-            _ => panic!(),
         }
     }
 }
