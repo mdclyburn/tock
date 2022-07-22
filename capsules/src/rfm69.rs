@@ -128,8 +128,6 @@ mod grant_nos {
 
 /// RFM69 per-app grant data.
 pub struct AppData {
-    /// Whether receive mode is active for the application.
-    awaiting_rx: bool,
     /// Bit rate setting (see datasheet for bit rate calculation).
     bit_rate: u16,
     /// Packet format used by the application.
@@ -148,7 +146,6 @@ pub struct AppData {
 impl Default for AppData {
     fn default() -> AppData {
         AppData {
-            awaiting_rx: false,
             // Default to 19.2 kbps.
             bit_rate: 0x0683,
             packet_format: PacketFormat::Variable,
@@ -227,6 +224,7 @@ pub struct RFM69<A: 'static + time::Frequency, B: 'static + time::Ticks> {
     pending: [Cell<Option<Operation>>; 64],
     fifo_write_pending: Cell<bool>,
     configured_for: OptionalCell<ProcessId>,
+    receive_for: OptionalCell<ProcessId>,
 }
 
 impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
@@ -281,6 +279,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
             ],
             fifo_write_pending: Cell::new(false),
             configured_for: OptionalCell::<ProcessId>::empty(),
+            receive_for: OptionalCell::<ProcessId>::empty(),
         }
     }
 
@@ -429,7 +428,8 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         !is_idle || pending_fifo_operation || !pending_queue_empty
     }
 
-    fn transmit(&self, pid: ProcessId) -> Result<()> {
+    /// Queue commands to configure the radio for an application.
+    fn queue_configuration(&self, pid: ProcessId) -> Result<()> {
         // Make sure the driver is not busy doing anything else at the moment.
         if self.driver_busy() {
             Err(RadioError::Busy)
@@ -495,11 +495,23 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                 self.configured_for.set(pid);
             }
 
-            // Upon completing the register updates, we need to write to the FIFO afterwards.
-            self.fifo_write_pending.set(true);
-            self.queue_mode_change(Mode::Transmit)?;
-            self.start_queue()
+            Ok(())
         }
+    }
+
+    fn transmit(&self, pid: ProcessId) -> Result<()> {
+        self.queue_configuration(pid)?;
+        // Upon completing the register updates, we need to write to the FIFO afterwards.
+        self.fifo_write_pending.set(true);
+        self.queue_mode_change(Mode::Transmit)?;
+        self.start_queue()
+    }
+
+    fn receive(&self, pid: ProcessId) -> Result<()> {
+        self.queue_configuration(pid)?;
+        self.receive_for.set(pid);
+        self.queue_mode_change(Mode::Receive)?;
+        self.start_queue()
     }
 
     /// Clear the configured_for value if it matches the given PID.
@@ -838,6 +850,21 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> SyscallDriver for R
                 }).unwrap_or((CommandReturn::failure(ErrorCode::FAIL), false))
             },
 
+            // Receive packets on behalf of the application.
+            (100, _, _) => {
+                if let Some(current_rx_pid) = self.receive_for.extract() {
+                    if current_rx_pid == pid {
+                        // The radio is already receiving packets for the application.
+                        (CommandReturn::failure(ErrorCode::ALREADY), false)
+                    } else {
+                        // The radio is busy receiving packets for another application.
+                        (CommandReturn::failure(ErrorCode::BUSY), false)
+                    }
+                } else {
+                    (CommandReturn::failure(ErrorCode::NOSUPPORT), false)
+                }
+            }
+
             // Dump register values.
             // r2 = Set to dump (1 or 2).
             (400, sel, _) => {
@@ -893,8 +920,14 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> gpio::Client for RF
                 }).unwrap().unwrap();
 
                 self.status.set(Status::Idle);
-                self.queue_mode_change(Mode::Sleep).unwrap();
-                self.start_queue().unwrap();
+                // If the radio was previosly listening for another application,'
+                // then go back into receive mode, otherwise, the radio should sleep.
+                if let Some(rx_pid) = self.receive_for.extract() {
+                    self.receive(rx_pid);
+                } else {
+                    self.queue_mode_change(Mode::Sleep).unwrap();
+                    self.start_queue().unwrap();
+                }
             },
 
             // Not supposed to be answering an interrupt.
