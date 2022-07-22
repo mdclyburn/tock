@@ -19,7 +19,10 @@ use kernel::hil::spi;
 use kernel::hil::spi::SpiMasterDevice;
 use kernel::hil::time;
 use kernel::hil::time::ConvertTicks as _;
-use kernel::processbuffer::ReadableProcessBuffer as _;
+use kernel::processbuffer::{
+    ReadableProcessBuffer as _,
+    WriteableProcessBuffer as _,
+};
 use kernel::syscall::{
     CommandReturn,
     SyscallDriver,
@@ -140,6 +143,9 @@ mod grant_nos {
 
     /// Transmission completed upcall.
     pub const SUBSCRIBE_TX_COMPLETE: usize = 0;
+
+    //// Reception completed upcall.
+    pub const SUBSCRIBE_RX_COMPLETE: usize = 1;
 }
 
 /// RFM69 per-app grant data.
@@ -685,6 +691,69 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
             // Do not do anything.
             // The next step is handled by the GPIO interrupt from the radio.
             Status::Transmitting(_pid) => { Ok(()) },
+
+            // Completed reading the FIFO.
+            // Place these bytes into the application's buffer and send the application an upcall.
+            Status::Receiving => {
+                let rx_pid = self.receive_for.extract().unwrap();
+                let rbuf = self.buffers.0.take().unwrap();
+                let copy_result = self.grants.enter(rx_pid, |_data, ko_data| {
+                    match ko_data.get_readwrite_processbuffer(grant_nos::ALLOW_RW_FIFO_BUFFER) {
+                        Ok(ko_buffer) => {
+                            // Copy up to either the shared buffer's length or the FIFO size,
+                            // whichever buffer is the smaller of the two.
+                            let copy_len = core::cmp::min(ko_buffer.len(), FIFO_LENGTH);
+                            ko_buffer.mut_enter(|rw_slice| {
+                                // Skip the first byte of the read buffer, that is a
+                                // useless byte "received" simultaneous to the read command.
+                                (rw_slice[..copy_len]).copy_from_slice(&rbuf[1..(1+copy_len)]);
+                            }).unwrap(); // Is it possible for the application to die between entering the grant and here?
+
+                            // Schedule an upcall with the application.
+                            ko_data.schedule_upcall(grant_nos::SUBSCRIBE_RX_COMPLETE, (copy_len, 0, 0)).unwrap();
+                        },
+
+                        Err(err) => {
+                            match err {
+                                    // If these errors are the cause, the driver stops the system here.
+                                    kernel::process::Error::KernelError
+                                        | kernel::process::Error::AlreadyInUse => panic!(),
+
+                                    // All other errors should cancel the operation.
+                                    // Leave the driver in the idle state.
+                                    kernel::process::Error::AddressOutOfBounds
+                                        | kernel::process::Error::OutOfMemory
+                                        | kernel::process::Error::NoSuchApp
+                                        | kernel::process::Error::InactiveApp => {
+                                            // Do not rely on the earlier set.
+                                            self.status.set(Status::Idle);
+                                            self.fifo_write_pending.set(false);
+                                            kernel::debug!("RFM69: grant action failed: {:?}", err);
+                                        }
+                            }
+                        }
+                    };
+                });
+                self.buffers.0.put(Some(rbuf));
+
+                if let Err(err) = copy_result {
+                    match err {
+                        kernel::process::Error::NoSuchApp => {
+                            // This is fine, the application died in the meantime.
+                            // Put the driver back into the idle state.
+                            self.status.set(Status::Idle);
+                            Ok(())
+                        },
+
+                        _ => {
+                            kernel::debug!("Failed to copy received packet: {:?}", err);
+                            Err(RadioError::System(ErrorCode::FAIL))
+                        },
+                    }
+                } else {
+                    Ok(())
+                }
+            },
 
             // Completed reading a range of registers.
             Status::Debug => {
