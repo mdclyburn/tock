@@ -430,7 +430,34 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                     };
 
                     Ok(())
-                }
+                },
+
+                Operation::FIFORead => {
+                    if let Some(rx_pid) = self.receive_for.extract() {
+                        let (rbuf, wbuf) = (self.buffers.0.take().unwrap(),
+                                            self.buffers.1.take().unwrap());
+                        wbuf[0] = 0b0111_1111 & register::FIFO;
+                        let read_len: u8 = self.grants.enter(rx_pid, |data, _ko_data| {
+                            match data.packet_format {
+                                PacketFormat::Fixed(len) => len,
+                                PacketFormat::Variable => FIFO_LENGTH as u8,
+                            }
+                        }).unwrap();
+
+                        self.spi.read_write_bytes(wbuf, Some(rbuf), read_len as usize)
+                            .map_err(|(err, wbuf, rbuf)| {
+                                self.buffers.0.put(Some(wbuf));
+                                self.buffers.1.put(rbuf);
+                                err
+                            })
+                    } else {
+                        // There was no PID contained in `receive_for`.
+                        // The radio received the packet after the application cancelled reception
+                        // but before we finished getting the radio to sleep.
+                        // We end up effectively dropping the packet.
+                        Ok(())
+                    }
+                },
 
                 _ => unimplemented!(),
             }
@@ -567,6 +594,12 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         self.queue_configuration(pid)?;
         self.receive_for.set(pid);
         self.queue_mode_change(Mode::Receive);
+        self.execute_queue()
+    }
+
+    fn cancel_receive(&self) -> Result<()> {
+        self.receive_for.clear();
+        self.queue_mode_change(Mode::Sleep);
         self.execute_queue()
     }
 
@@ -732,6 +765,56 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> SyscallDriver for R
                     }
                 }
             },
+
+            // Start receiving packets for an application.
+            (20, _, _) => {
+                // The radio is only available for reception if it is not already
+                // receiving for another application.
+                if let Some(_rx_pid) = self.receive_for.extract() {
+                    (CommandReturn::failure(ErrorCode::BUSY), false)
+                } else {
+                    // The driver can handle reception for the application,
+                    // but it may not be able to configure it for the application immediately.
+                    match self.status.get() {
+                        // Can perform the full configuration now.
+                        Status::Idle => self.receive(pid)
+                            .map(|_| (CommandReturn::success(), false))
+                            .unwrap(),
+
+                        // Cannot change the configuration while actively transmitting
+                        // with one set of settings. Set the `receive_for` variable and the
+                        // radio will change to the receiving application's configuration
+                        // after the transmission is complete.
+                        //
+                        // Note: further optimization possible if application transmitting
+                        // is the one asking for a receive.
+                        Status::Transmitting => {
+                            self.receive_for.set(pid);
+                            (CommandReturn::success(), false)
+                        },
+
+                        // No other cases _should_ be possible.
+                        // self.receive_for == None -> self.status != Status::Receiving
+                        _ => panic!()
+                    }
+                }
+            },
+
+            // Stop receiving packets for an application.
+            (21, _, _) => {
+                if let Some(rx_pid) = self.receive_for.extract() {
+                    if rx_pid == pid {
+                        self.cancel_receive().map(|_| (CommandReturn::success(), false))
+                            .unwrap()
+                    } else {
+                        // Driver was not receiving for the requesting application.
+                        (CommandReturn::failure(ErrorCode::ALREADY), false)
+                    }
+                } else {
+                    // Driver was not receiving at all.
+                    (CommandReturn::failure(ErrorCode::ALREADY), false)
+                }
+            }
 
             // Set synchronization word length.
             // If R2 is ZERO, disables the sync word.
@@ -917,17 +1000,9 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> gpio::Client for RF
             // The interrupt means the radio has received a packet.
             // Start an SPI transaction to read the FIFO.
             Status::Receiving => {
-                // If either of these buffers are missing, there is a bug in the logic.
-                let (rbuf, wbuf) = (self.buffers.0.take().unwrap(),
-                                    self.buffers.1.take().unwrap());
-                wbuf[0] = 0b0111_1111 & register::FIFO;
-
-                if let Err((err, wbuf, rbuf)) = self.spi.read_write_bytes(wbuf, Some(rbuf), wbuf.len()) {
-                    self.buffers.0.put(Some(wbuf));
-                    self.buffers.1.put(rbuf);
-                    kernel::debug!("Receiving packet failed: {:?}.", err);
-                }
+                self.queue(Operation::FIFORead);
+                self.execute_queue().unwrap();
             },
-        }
+        };
     }
 }
