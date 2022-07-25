@@ -216,7 +216,7 @@ const FIFO_LENGTH: usize = 66;
 
 /// RFM69 ISM radio driver.
 pub struct RFM69<A: 'static + time::Frequency, B: 'static + time::Ticks> {
-    grants: Grant<AppData, UpcallCount<1>, AllowRoCount<0>, AllowRwCount<1>>,
+    grants: Grant<AppData, UpcallCount<2>, AllowRoCount<0>, AllowRwCount<1>>,
     spi: &'static dyn SpiMasterDevice,
     interrupt_pin: &'static dyn InterruptPin,
     reset_pin: &'static dyn ResetPin,
