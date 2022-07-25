@@ -444,6 +444,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         for i in 0..self.pending.len() {
             if self.pending[i].get().is_none() {
                 self.pending[i].set(Some(operation));
+                return;
             }
         }
 
