@@ -232,7 +232,7 @@ pub struct RFM69<A: 'static + time::Frequency, B: 'static + time::Ticks> {
 impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
     /// Create a new instance of the driver.
     pub fn new(
-        grants: Grant<AppData, UpcallCount<1>, AllowRoCount<0>, AllowRwCount<1>>,
+        grants: Grant<AppData, UpcallCount<2>, AllowRoCount<0>, AllowRwCount<1>>,
         spi: &'static dyn SpiMasterDevice,
         interrupt_pin: &'static dyn InterruptPin,
         reset_pin: &'static dyn ResetPin,
@@ -458,8 +458,6 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                         Ok(())
                     }
                 },
-
-                _ => unimplemented!(),
             }
         } else {
             // Nothing to do.
@@ -591,6 +589,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
     }
 
     fn receive(&self, pid: ProcessId) -> Result<()> {
+        self.status.set(Status::Receiving);
         self.queue_configuration(pid)?;
         self.receive_for.set(pid);
         self.queue_mode_change(Mode::Receive);
@@ -617,13 +616,13 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
             .find(|op| op.get().is_some())
             .unwrap(); // There _must_ be an operation in the queue.
 
-        match current_operation.get().unwrap() {
+        // Perform the work necessary to resolve the reason for the callback.
+        // Make all branches possibly return a subsequent operation that should
+        // run if the operation must occur over more than one callback.
+        let update_operation = match current_operation.get().unwrap() {
             // Completed writing the requested register to a specific value.
             // The operation is complete, so remove it from the pending queue.
-            Operation::WriteRegister(_addr, _val) => {
-                current_operation.set(None);
-                Ok(())
-            },
+            Operation::WriteRegister(_addr, _val) => Ok(None),
 
             // Read phase of the modify operation.
             // Completed reading the current register value.
@@ -631,23 +630,18 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
             // The callback will continue execution of the queue.
             Operation::ModifyRegister(addr, mask, val, None) => {
                 let current = self.buffers.0.map(|buf| buf[1]).unwrap();
-                current_operation.set(Some(Operation::ModifyRegister(addr, mask, val, Some(current))));
-                Ok(())
+                // Now actually perform the modification.
+                // We get to the second phase by supplying the current value to match the alternate branch.
+                Ok(Some(Operation::ModifyRegister(addr, mask, val, Some(current))))
             },
 
             // Completed modifying the requested register.
             // The operation is complete, so remove it from the queue.
-            Operation::ModifyRegister(_addr, _mask, _val, Some(_cur)) => {
-                current_operation.set(None);
-                Ok(())
-            }
+            Operation::ModifyRegister(_addr, _mask, _val, Some(_cur)) => Ok(None),
 
             // FIFO write complete.
             // The operation is complete, so remove it from the pending queue.
-            Operation::FIFOWrite => {
-                current_operation.set(None);
-                Ok(())
-            },
+            Operation::FIFOWrite => Ok(None),
 
             // FIFO read complete.
             // The buffer must be copied to the application the driver received for.
@@ -699,7 +693,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                             // This is fine, the application died in the meantime.
                             // Put the driver back into the idle state.
                             self.status.set(Status::Idle);
-                            Ok(())
+                            Ok(None)
                         },
 
                         _ => {
@@ -708,10 +702,15 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                         },
                     }
                 } else {
-                    Ok(())
+                    Ok(None)
                 }
             },
-        }
+        }?;
+
+        // Update to next operation.
+        current_operation.set(update_operation);
+
+        Ok(())
     }
 }
 
