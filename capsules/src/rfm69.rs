@@ -44,8 +44,8 @@ mod register {
     pub const LNA: u8                 = 0x18;
     pub const RxBW: u8                = 0x19;
     pub const AFCBW: u8               = 0x1A;
-    pub const DIOMapping0: u8         = 0x25;
-    pub const DIOMapping1: u8         = 0x26;
+    pub const DIOMapping1: u8         = 0x25;
+    pub const DIOMapping2: u8         = 0x26;
     pub const IRQFlags1: u8           = 0x27;
     pub const RSSIThresh: u8          = 0x29;
     pub const IRQFlags2: u8           = 0x28;
@@ -71,12 +71,12 @@ mod register {
         pub const PALevel_OutputPower: u8 = 0b00011111;
 
         // See table 21 and table 22.
-        pub const DIOMapping0_DIO0: u8 = 0b11000000;
-        pub const DIOMapping0_DIO1: u8 = 0b00110000;
-        pub const DIOMapping0_DIO2: u8 = 0b00001100;
-        pub const DIOMapping0_DIO3: u8 = 0b00000011;
-        pub const DIOMapping1_DIO4: u8 = 0b11000000;
-        pub const DIOMapping1_DIO5: u8 = 0b00110000;
+        pub const DIOMapping1_DIO0: u8 = 0b11000000;
+        pub const DIOMapping1_DIO1: u8 = 0b00110000;
+        pub const DIOMapping1_DIO2: u8 = 0b00001100;
+        pub const DIOMapping1_DIO3: u8 = 0b00000011;
+        pub const DIOMapping2_DIO4: u8 = 0b11000000;
+        pub const DIOMapping2_DIO5: u8 = 0b00110000;
 
         pub const IRQFlags1_ModeReady: u8 = 0b10000000;
         pub const IRQFlags1_RXReady: u8 = 0b01000000;
@@ -92,6 +92,15 @@ mod register {
 
         pub const SyncConfig_SyncOn: u8 = 0b10000000;
         pub const SyncConfig_SyncSize: u8 = 0b00111000;
+    }
+
+    /// Defined register values, right-aligned.
+    pub mod values {
+        pub const DIOMapping1_DIO0_RX_CRCOK: u8              = 0b00;
+        pub const DIOMapping1_DIO0_RX_PayloadReady: u8       = 0b01;
+
+        pub const DIOMapping1_DIO0_TX_PacketSent: u8         = 0b00;
+        pub const DIOMapping1_DIO0_TX_TXReady: u8            = 0b01;
     }
 }
 
