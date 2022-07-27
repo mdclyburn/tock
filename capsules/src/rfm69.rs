@@ -181,6 +181,8 @@ enum Operation {
     FIFOWrite,
     /// Read the data from FIFO into the application's buffer.
     FIFORead,
+    /// Wait for the current mode to be ready.
+    BlockUntilModeReady
 }
 
 /// Operating status of the radio.
@@ -310,7 +312,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         self.interrupt_pin.make_input();
         self.interrupt_pin.set_floating_state(gpio::FloatingState::PullDown);
         self.interrupt_pin.set_client(self);
-        self.interrupt_pin.enable_interrupts(gpio::InterruptEdge::RisingEdge);
+        self.enable_interrupts();
 
         // Set the recommended settings.
         for (addr, val) in RECOMMENDED_REGISTER_VALS {
@@ -319,6 +321,16 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         // And put the radio into sleep mode.
         self.queue_mode_change(Mode::Sleep);
         self.execute_queue().unwrap();
+    }
+
+    #[inline]
+    fn enable_interrupts(&self) {
+        self.interrupt_pin.enable_interrupts(gpio::InterruptEdge::RisingEdge);
+    }
+
+    #[inline]
+    fn disable_interrupts(&self) {
+        self.interrupt_pin.disable_interrupts();
     }
 
     fn busy_wait(&self, duration_ms: u32) {
@@ -467,6 +479,17 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                         Ok(())
                     }
                 },
+
+                // This operation handles a couple of edge cases.
+                // The transition from one mode to another is not instantaneous.
+                // So, there is some time in between setting the operating mode register
+                // and the radio actually entering that mode and being ready in it.
+                // This means that it is possible to receive an interrupt and interpret it incorrectly
+                // because the driver does not track the _actual_ state of the radio,
+                // just the mode that it is supposed to be in.
+                //
+                // To avoid hitting these edge cases, we repeatedly read IRQFlags1 until the ModeReady bit is set.
+                Operation::BlockUntilModeReady => self.read(register::IRQFlags1),
             }
         } else {
             // Nothing to do.
@@ -498,9 +521,9 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         self.queue(Operation::ModifyRegister(address, mask, val, None))
     }
 
-    #[inline]
     fn queue_mode_change(&self, mode: Mode) {
         self.queue_modify(register::OpMode, register::mask::OpMode_Mode, u8::from(mode));
+        self.queue(Operation::BlockUntilModeReady);
     }
 
     /// Inspect `error` and perform necessary driver recovery.
@@ -588,6 +611,9 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
     }
 
     fn transmit(&self, pid: ProcessId) -> Result<()> {
+        // Disable interrupts to avoid receiving interrupt for the prior mode,
+        // which we no longer care about since we change modes here.
+        self.disable_interrupts();
         self.status.set(Status::Transmitting);
         self.queue_configuration(pid)?;
         // Upon completing the register updates, we need to write to the FIFO afterwards.
@@ -598,6 +624,9 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
     }
 
     fn receive(&self, pid: ProcessId) -> Result<()> {
+        // Disable interrupts to avoid receiving interrupt for the prior mode,
+        // which we no longer care about since we change modes here.
+        self.disable_interrupts();
         self.status.set(Status::Receiving);
         self.queue_configuration(pid)?;
         self.receive_for.set(pid);
@@ -606,6 +635,9 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
     }
 
     fn cancel_receive(&self) -> Result<()> {
+        // Disable interrupts to avoid receiving interrupt for the prior mode,
+        // which we no longer care about since we change modes here.
+        self.disable_interrupts();
         self.receive_for.clear();
         self.queue_mode_change(Mode::Sleep);
         self.execute_queue()
@@ -714,6 +746,19 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
                     Ok(None)
                 }
             },
+
+            // Completed a read of IRQFlags1.
+            // We can only stop doing this once the ModeReady bit is set.
+            // Once it is set, re-enable interrupts to avoid the in-between modes edge cases.
+            Operation::BlockUntilModeReady => {
+                let irq_flags_1 = self.buffers.0.map(|b| b[1]).unwrap();
+                if irq_flags_1 & register::mask::IRQFlags1_ModeReady != 0 {
+                    self.enable_interrupts();
+                    Ok(None)
+                } else {
+                    Ok(Some(Operation::BlockUntilModeReady))
+                }
+            }
         }?;
 
         // Update to next operation.
@@ -971,10 +1016,10 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> SyscallDriver for R
 }
 
 impl<A: 'static + time::Frequency, B: 'static + time::Ticks> gpio::Client for RFM69<A, B> {
+    /// Interrupt for GPIO pin fired.
+    ///
+    /// The reason for the interrupt varies, depending on the radio's operating mode.
     fn fired(&self) {
-        // Interrupt for GPIO pin fired.
-        // Reason depends on the radio's operating mode,
-        // which corresponds to the state of the driver.
         match self.status.get() {
             // Radio was supposedly idle and it issued an interrupt on DIO0.
             // This means that the radio was _actually_ in either receive or transmit mode.
