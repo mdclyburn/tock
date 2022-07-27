@@ -591,9 +591,9 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
         self.status.set(Status::Transmitting);
         self.queue_configuration(pid)?;
         // Upon completing the register updates, we need to write to the FIFO afterwards.
+        self.queue_mode_change(Mode::Transmit);
         self.queue(Operation::FIFOWrite);
         self.fifo_write_pending.set(true);
-        self.queue_mode_change(Mode::Transmit);
         self.execute_queue()
     }
 
@@ -749,8 +749,6 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> spi::SpiMasterClien
 
 impl<A: 'static + time::Frequency, B: 'static + time::Ticks> SyscallDriver for RFM69<A, B> {
     fn command(&self, command_no: usize, r2: usize, r3: usize, pid: ProcessId) -> CommandReturn {
-        // kernel::debug!("command_no: {:#2X}, r2 = {:#2X}, r3 = {:#2X}", command_no, r2, r3);
-
         // `config_change` gets set to true when a configuration change happens and
         // configuration may need to be updated on the radio.
         let (result, config_change): (CommandReturn, bool) = match (command_no, r2, r3) {
