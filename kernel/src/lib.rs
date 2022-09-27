@@ -99,6 +99,7 @@ pub mod component;
 pub mod debug;
 pub mod deferred_call;
 pub mod dynamic_deferred_call;
+pub mod energy;
 pub mod errorcode;
 pub mod grant;
 pub mod hil;
