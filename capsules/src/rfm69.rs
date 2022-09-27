@@ -531,7 +531,7 @@ impl<A: 'static + time::Frequency, B: 'static + time::Ticks> RFM69<A, B> {
     /// When an operation involving grants fail, it can be for a few different reasons.
     /// Most often, there will need to be some cleanup within the driver, e.g.,
     /// when an application faults but the radio is still performing work on its behalf.
-    fn recover_state(&self, pid: ProcessId, error: kernel::process::Error) -> Result<()> {
+    fn recover_state(&self, _pid: ProcessId, _error: kernel::process::Error) -> Result<()> {
         unimplemented!()
     }
 
