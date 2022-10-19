@@ -131,16 +131,35 @@ pub enum Channel {
     Channel4 = 0b00100,
 }
 
-#[derive(Copy, Clone, PartialEq)]
-enum ADCStatus {
-    Idle,
-    OneSample,
+#[derive(Clone, Copy, PartialEq)]
+enum SamplingType {
+    Single,
+    Periodic,
+}
+
+#[derive(Clone, Copy)]
+struct ChannelInfo {
+    sampling_type: SamplingType,
+    frequency: u32,
+    frac_pace: (u32, u32),
+}
+
+impl ChannelInfo {
+    fn new(sampling_type: SamplingType,
+           frequency: u32,
+           fracd: u32,
+    ) -> ChannelInfo {
+        ChannelInfo {
+            sampling_type,
+            frequency,
+            frac_pace: (0, fracd),
+        }
+    }
 }
 
 pub struct Adc {
     registers: StaticRef<AdcRegisters>,
-    status: Cell<ADCStatus>,
-    channel: Cell<Channel>,
+    channel_info: [OptionalCell<ChannelInfo>; 5],
     client: OptionalCell<&'static dyn hil::adc::Client>,
 }
 
@@ -148,8 +167,13 @@ impl Adc {
     pub const fn new() -> Self {
         Self {
             registers: ADC_BASE,
-            status: Cell::new(ADCStatus::Idle),
-            channel: Cell::new(Channel::Channel0),
+            channel_info: [
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+            ],
             client: OptionalCell::empty(),
         }
     }
@@ -164,6 +188,8 @@ impl Adc {
     }
 
     fn enable_interrupt(&self) {
+        self.registers.fcs.modify(FCS::EN::SET);
+        self.registers.fcs.modify(FCS::THRESH.val(1));
         self.registers.inte.modify(INTE::FIFO::SET);
     }
 
@@ -177,13 +203,111 @@ impl Adc {
 
     pub fn handle_interrupt(&self) {
         if self.registers.cs.is_set(CS::READY) {
-            if self.status.get() == ADCStatus::OneSample {
-                self.status.set(ADCStatus::Idle);
-            }
-            self.client.map(|client| {
-                self.disable_interrupt();
-                client.sample_ready(self.registers.fifo.read(FIFO::VAL) as u16)
+            // Find out which channel the sample is for, then check its fractional pacing.
+            // If it overflows, we report the sample, otherwise, we drop it.
+            let channel_no = self.registers.cs.read(CS::AINSEL);
+            self.channel_info[channel_no as usize].map(|channel| {
+                // Add to the fractional pacing if this is not the fastest channel.
+                // This is only extra work for the fastest channel, if so.
+                // The denominator is taken from the fastest sampling channel.
+                if channel.frequency != channel.frac_pace.1 {
+                    channel.frac_pace = (channel.frac_pace.0 + channel.frequency,
+                                         channel.frac_pace.1);
+                    if channel.frac_pace.0 >= channel.frac_pace.1 {
+                        channel.frac_pace = (channel.frac_pace.0 - channel.frac_pace.1,
+                                             channel.frac_pace.1);
+                        self.client.map(|c| c.sample_ready(self.registers.fifo.read(FIFO::VAL) as u16));
+                    }
+                } else {
+                    // The fastest channel matches the sampling frequency.
+                    self.client.map(|c| c.sample_ready(self.registers.fifo.read(FIFO::VAL) as u16));
+                }
             });
+
+            // No more sampling for this channel if it is a single sample.
+            let new_channel_mask = self.registers.cs.read(CS::RROBIN) ^ (1 << channel_no);
+            self.registers.cs.modify(CS::RROBIN.val(new_channel_mask));
+            self.channel_info[channel_no as usize].clear();
+        }
+    }
+
+    fn max_requested_frequency(&self) -> u32 {
+        self.channel_info.iter()
+            .filter(|ci| ci.is_some())
+            .map(|ci| ci.map(|c| c.frequency).unwrap())
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn configure_sampling(&self,
+                          channel: &Channel,
+                          frequency: u32,
+                          sampling_type: SamplingType
+    ) -> Result<(), ErrorCode> {
+        let channel_no = *channel as usize;
+        // Cannot sample on the requested channel if it is already sampling.
+        if !self.channel_info[channel_no].is_some() {
+            Err(ErrorCode::BUSY)
+        } else if frequency == 0 { // Reject 0 sampling frequency.
+            Err(ErrorCode::INVAL)
+        } else {
+            // Cease all sampling.
+            self.registers.cs.modify(CS::START_MANY::CLEAR);
+
+            let max_frequency = self.max_requested_frequency();
+            // Check if there is a new max sampling frequency.
+            // If so, we must reconfigure all other channels and reset fractional pacing.
+            let (max_frequency, reconfigure) = if frequency > max_frequency {
+                (frequency, true)
+            } else {
+                (max_frequency, false)
+            };
+
+            // Set up the new sampling channel information.
+            self.channel_info[channel_no].set(
+                ChannelInfo::new(sampling_type, frequency, max_frequency));
+
+            // Reconfigure the rest of the channels, if necessary.
+            if reconfigure {
+                let iter = self.channel_info.iter().zip(0..);
+                for (ch, i) in iter {
+                    if i == channel_no {
+                        continue;
+                    } else {
+                        let _ = ch.map(|c| {
+                            c.frac_pace = (0, max_frequency)
+                        });
+                    }
+                }
+            }
+
+            // Set up the new sampling.
+            // Only periodic sampling affects the sampling frequency.
+            // Single samples do not count because they are so ephemeral.
+            let active_periodic_channel_count = self.channel_info.iter()
+                .filter(|ci| ci.is_some())
+                .map(|ci| ci.map(|c| if c.sampling_type == SamplingType::Periodic { 1 } else { 0 }).unwrap())
+                .fold(0, |cur, i| cur + i);
+            let clock_frequency = 125_000_000;
+            let agg_frequency = max_frequency * active_periodic_channel_count as u32;
+            let cycles_per_sample = clock_frequency / agg_frequency;
+            let cycles_per_sample = if cycles_per_sample < 95 { 95 } else { cycles_per_sample };
+            let cycles_per_sample = if cycles_per_sample > u16::MAX as u32 { u16::MAX as u32 } else { cycles_per_sample };
+
+            // Enable the specified channels.
+            let enabled_mask: u32 = self.channel_info.iter()
+                .enumerate()
+                .filter(|(_i, ci)| ci.is_some())
+                .map(|(i, _ci)| i)
+                .fold(0, |cur, i| cur | (1 << i));
+            self.registers.cs.modify(CS::RROBIN.val(enabled_mask));
+            // Set the first channel to sample to be the one we newly configured.
+            self.registers.cs.modify(CS::AINSEL.val(channel_no as u32));
+
+            self.enable_interrupt();
+            self.registers.cs.modify(CS::START_MANY::SET);
+
+            Ok(())
         }
     }
 }
@@ -192,34 +316,27 @@ impl hil::adc::Adc for Adc {
     type Channel = Channel;
 
     fn sample(&self, channel: &Self::Channel) -> Result<(), ErrorCode> {
-        if self.status.get() == ADCStatus::Idle {
-            if *channel as u32 == 4 {
-                self.enable_temperature();
-            }
-            self.status.set(ADCStatus::OneSample);
-            self.channel.set(*channel);
-            self.registers.cs.modify(CS::AINSEL.val(*channel as u32));
-            self.registers
-                .fcs
-                .modify(FCS::THRESH.val(1 as u32) + FCS::EN::SET);
-            self.enable_interrupt();
-            self.registers.cs.modify(CS::START_ONCE::SET);
-            Ok(())
-        } else {
-            Err(ErrorCode::BUSY)
-        }
+        self.configure_sampling(channel, self.max_requested_frequency(), SamplingType::Single)
     }
 
     fn sample_continuous(
         &self,
-        _channel: &Self::Channel,
-        _frequency: u32,
+        channel: &Self::Channel,
+        frequency: u32,
     ) -> Result<(), ErrorCode> {
-        Err(ErrorCode::NOSUPPORT)
+        self.configure_sampling(channel, frequency, SamplingType::Periodic)
     }
 
     fn stop_sampling(&self) -> Result<(), ErrorCode> {
-        Err(ErrorCode::NOSUPPORT)
+        self.registers.cs.modify(CS::START_MANY::CLEAR);
+        self.registers.cs.modify(CS::START_ONCE::CLEAR);
+
+        // TODO: add support for cancelling for a single channel through the stack.
+        for ch in self.channel_info.iter() {
+            ch.clear();
+        }
+
+        Ok(())
     }
 
     fn get_resolution_bits(&self) -> usize {
