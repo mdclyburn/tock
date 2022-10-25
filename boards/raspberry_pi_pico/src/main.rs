@@ -439,6 +439,8 @@ pub unsafe fn main() {
             adc_channels,
             board_kernel.create_grant(capsules::channeled_adc::DRIVER_NUM,
                                       &memory_allocation_capability)));
+    use kernel::hil::adc::Adc as _;
+    peripherals.adc.set_client(adc);
 
     // PROCESS CONSOLE
     let process_console =
@@ -460,7 +462,6 @@ pub unsafe fn main() {
         led,
         console,
         adc,
-
         scheduler,
         systick: cortexm0p::systick::SysTick::new_with_calibration(125_000_000),
     };

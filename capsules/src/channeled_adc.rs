@@ -1,6 +1,7 @@
 /*! ADC allowing separate access to channels.
  */
 
+use kernel;
 use kernel::grant::Grant;
 use kernel::hil;
 use kernel::process::ProcessId;
@@ -53,6 +54,7 @@ impl<A: 'static + hil::adc::Adc> SyscallDriver for ChanneledADC<A> {
                r2: usize,
                r3: usize,
                pid: ProcessId) -> CommandReturn {
+        kernel::debug!("adc-cn: ({}, {}, {})", command_no, r2, r3);
         match command_no {
             // Capsule exists.
             // Return the no. of channels available.
@@ -141,6 +143,11 @@ impl<A: 'static + hil::adc::Adc> hil::adc::Client for ChanneledADC<A> {
 
             // Free the channel if it is for a single sample.
             cs.continuous == false
-        });
+        }).expect("channel should have state, but does not");
+
+        // Free up the channel for use by other applications if necessary.
+        if free_channel {
+            self.channel_states[channel_no as usize].clear();
+        }
     }
 }

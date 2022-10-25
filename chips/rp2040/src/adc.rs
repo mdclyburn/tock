@@ -1,3 +1,4 @@
+use kernel;
 use kernel::hil;
 use kernel::utilities::registers::interfaces::{ReadWriteable, Readable};
 use kernel::utilities::registers::{register_bitfields, register_structs, ReadWrite};
@@ -130,7 +131,7 @@ pub enum Channel {
     Channel4 = 0b00100,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum SamplingType {
     Single,
     Periodic,
@@ -201,10 +202,13 @@ impl Adc {
     }
 
     pub fn handle_interrupt(&self) {
+        kernel::debug!("adc-bh: interrupt from ADC");
+        self.disable_interrupt();
         if self.registers.cs.is_set(CS::READY) {
             // Find out which channel the sample is for, then check its fractional pacing.
             // If it overflows, we report the sample, otherwise, we drop it.
             let channel_no = self.registers.cs.read(CS::AINSEL);
+            // kernel::debug!("adc-bh: it is for channel no. {}", channel_no);
             self.channel_info[channel_no as usize].map(|channel| {
                 // Add to the fractional pacing if this is not the fastest channel.
                 // This is only extra work for the fastest channel, if so.
@@ -251,10 +255,11 @@ impl Adc {
                           sampling_type: SamplingType
     ) -> Result<(), ErrorCode> {
         let channel_no = *channel as usize;
+        kernel::debug!("adc-bh: ({}, {}, {:?})", channel_no, frequency, sampling_type);
         // Cannot sample on the requested channel if it is already sampling.
-        if !self.channel_info[channel_no].is_some() {
+        if self.channel_info[channel_no].is_some() {
             Err(ErrorCode::BUSY)
-        } else if frequency == 0 { // Reject 0 sampling frequency.
+        } else if sampling_type == SamplingType::Periodic && frequency == 0 { // Reject 0 sampling frequency.
             Err(ErrorCode::INVAL)
         } else {
             // Cease all sampling.
@@ -263,11 +268,13 @@ impl Adc {
             let max_frequency = self.max_requested_frequency();
             // Check if there is a new max sampling frequency.
             // If so, we must reconfigure all other channels and reset fractional pacing.
-            let (max_frequency, reconfigure) = if frequency > max_frequency {
+            // We only need to reconfigure if it is a periodic sampling request.
+            let (max_frequency, reconfigure) = if sampling_type != SamplingType::Single && frequency > max_frequency {
                 (frequency, true)
             } else {
                 (max_frequency, false)
             };
+            kernel::debug!("current max freq.: {}, need reconfigure: {}", max_frequency, reconfigure);
 
             // Set up the new sampling channel information.
             self.channel_info[channel_no].set(
@@ -295,10 +302,15 @@ impl Adc {
                 .map(|ci| ci.map(|c| if c.sampling_type == SamplingType::Periodic { 1 } else { 0 }).unwrap())
                 .fold(0, |cur, i| cur + i);
             let clock_frequency = 125_000_000;
-            let agg_frequency = max_frequency * active_periodic_channel_count as u32;
+            let agg_frequency = core::cmp::max(max_frequency * active_periodic_channel_count as u32, 1);
+            kernel::debug!("agg. freq.: {}", agg_frequency);
             let cycles_per_sample = clock_frequency / agg_frequency;
             let cycles_per_sample = if cycles_per_sample < 95 { 95 } else { cycles_per_sample };
             let cycles_per_sample = if cycles_per_sample > u16::MAX as u32 { u16::MAX as u32 } else { cycles_per_sample };
+            kernel::debug!("cycles per sample: {}", cycles_per_sample);
+            self.registers.div.modify(DIV::INT.val(cycles_per_sample));
+            self.registers.fcs.modify(FCS::THRESH.val(1)
+                                      + FCS::EN::SET);
 
             // Enable the specified channels.
             let enabled_mask: u32 = self.channel_info.iter()
@@ -306,6 +318,7 @@ impl Adc {
                 .filter(|(_i, ci)| ci.is_some())
                 .map(|(i, _ci)| i)
                 .fold(0, |cur, i| cur | (1 << i));
+            kernel::debug!("enabled channels: {:08b}", enabled_mask);
             self.registers.cs.modify(CS::RROBIN.val(enabled_mask));
             // Set the first channel to sample to be the one we newly configured.
             self.registers.cs.modify(CS::AINSEL.val(channel_no as u32));
