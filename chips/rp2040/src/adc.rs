@@ -1,4 +1,3 @@
-use core::cell::Cell;
 use kernel::hil;
 use kernel::utilities::registers::interfaces::{ReadWriteable, Readable};
 use kernel::utilities::registers::{register_bitfields, register_structs, ReadWrite};
@@ -216,11 +215,11 @@ impl Adc {
                     if channel.frac_pace.0 >= channel.frac_pace.1 {
                         channel.frac_pace = (channel.frac_pace.0 - channel.frac_pace.1,
                                              channel.frac_pace.1);
-                        self.client.map(|c| c.sample_ready(self.registers.fifo.read(FIFO::VAL) as u16));
+                        self.client.map(|c| c.sample_ready(self.sample_with_channel_no(channel_no as u16)));
                     }
                 } else {
                     // The fastest channel matches the sampling frequency.
-                    self.client.map(|c| c.sample_ready(self.registers.fifo.read(FIFO::VAL) as u16));
+                    self.client.map(|c| c.sample_ready(self.sample_with_channel_no(channel_no as u16)));
                 }
             });
 
@@ -229,6 +228,13 @@ impl Adc {
             self.registers.cs.modify(CS::RROBIN.val(new_channel_mask));
             self.channel_info[channel_no as usize].clear();
         }
+    }
+
+    /// Read a new sample and stuff the channel no. in the top four bits to avoid changing the trait interface.
+    fn sample_with_channel_no(&self, channel_no: u16) -> u16 {
+        let sample = self.registers.fifo.read(FIFO::VAL) as u16;
+        ((channel_no as u16) << 12)
+            | (sample & 0b0000_1111_1111_1111)
     }
 
     fn max_requested_frequency(&self) -> u32 {
