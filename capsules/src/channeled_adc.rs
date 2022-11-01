@@ -140,9 +140,9 @@ impl<A: 'static + hil::adc::Adc> hil::adc::Client for ChanneledADC<A> {
                     let sampling_type_indicator = if cs.continuous { 1 } else { 0 };
                     let upcall_args = (sampling_type_indicator, channel_no as usize, sample as usize);
                     // kernel::debug!("scheduling: ({}, {}, {})",
-                                   sampling_type_indicator,
-                                   channel_no,
-                                   sample);
+                    //                sampling_type_indicator,
+                    //                channel_no,
+                    //                sample);
                     upcall_table.schedule_upcall(0, upcall_args)
                 })
                 .expect("could not enter ADC grant")
