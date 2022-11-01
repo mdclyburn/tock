@@ -2,7 +2,10 @@ use kernel;
 use kernel::hil;
 use kernel::utilities::registers::interfaces::{ReadWriteable, Readable};
 use kernel::utilities::registers::{register_bitfields, register_structs, ReadWrite};
-use kernel::utilities::{cells::OptionalCell, StaticRef};
+use kernel::utilities::{
+    cells::{MapCell, OptionalCell},
+    StaticRef
+};
 use kernel::ErrorCode;
 
 register_structs! {
@@ -141,25 +144,27 @@ enum SamplingType {
 struct ChannelInfo {
     sampling_type: SamplingType,
     frequency: u32,
-    frac_pace: (u32, u32),
+    fracn: u32,
+    fracd: u32,
 }
 
 impl ChannelInfo {
-    fn new(sampling_type: SamplingType,
-           frequency: u32,
-           fracd: u32,
+    fn setup(sampling_type: SamplingType,
+             frequency: u32,
+             fracd: u32,
     ) -> ChannelInfo {
         ChannelInfo {
             sampling_type,
             frequency,
-            frac_pace: (0, fracd),
+            fracn: 0,
+            fracd,
         }
     }
 }
 
 pub struct Adc {
     registers: StaticRef<AdcRegisters>,
-    channel_info: [OptionalCell<ChannelInfo>; 5],
+    channel_info: [MapCell<ChannelInfo>; 5],
     client: OptionalCell<&'static dyn hil::adc::Client>,
 }
 
@@ -168,11 +173,11 @@ impl Adc {
         Self {
             registers: ADC_BASE,
             channel_info: [
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
+                MapCell::empty(),
+                MapCell::empty(),
+                MapCell::empty(),
+                MapCell::empty(),
+                MapCell::empty(),
             ],
             client: OptionalCell::empty(),
         }
@@ -203,45 +208,43 @@ impl Adc {
 
     pub fn handle_interrupt(&self) {
         // kernel::debug!("adc-bh: interrupt from ADC");
-        // self.disable_interrupt();
-        if self.registers.cs.is_set(CS::READY) {
-            // Find out which channel the sample is for, then check its fractional pacing.
-            // If it overflows, we report the sample, otherwise, we drop it.
-            let channel_no = self.registers.cs.read(CS::AINSEL);
-            // kernel::debug!("adc-bh: it is for channel no. {}", channel_no);
-            // Make sure we are still actually sampling for the channel.
-            if self.channel_info[channel_no as usize].is_some() {
-                let stop_sampling = self.channel_info[channel_no as usize].map(|channel| {
-                    // Add to the fractional pacing if this is not the fastest channel.
-                    // This is only extra work for the fastest channel, if so.
-                    // The denominator is taken from the fastest sampling channel.
-                    if channel.frequency != channel.frac_pace.1 {
-                        channel.frac_pace = (channel.frac_pace.0 + channel.frequency,
-                                             channel.frac_pace.1);
-                        if channel.frac_pace.0 >= channel.frac_pace.1 {
-                            channel.frac_pace = (channel.frac_pace.0 - channel.frac_pace.1,
-                                                 channel.frac_pace.1);
-                            self.client.map(|c| c.sample_ready(self.sample_with_channel_no(channel_no as u16)));
-                        }
-                    } else {
-                        // The fastest channel matches the sampling frequency.
-                        self.client.map(|c| c.sample_ready(self.sample_with_channel_no(channel_no as u16)));
-                    }
+        // Find out which channel the sample is for, then check its fractional pacing.
+        // If it overflows, we report the sample, otherwise, we drop it.
+        let channel_no = self.registers.cs.read(CS::AINSEL);
+        // kernel::debug!("adc-bh: it is for channel no. {}", channel_no);
+        // Make sure we are still actually sampling for the channel.
+        let channel_info = &self.channel_info[channel_no as usize];
+        if channel_info.is_some() {
+            let stop_sampling = channel_info.map(|channel| {
+                // Add to the fractional pacing.
+                // If this is a single sample, or if we reach the denominator, we report the sample upwards.
+                channel.fracn = channel.fracn + 1;
+                // kernel::debug!("curr: {} / {}", channel.fracn, channel.fracd);
+                let report_sample =
+                    channel.fracn == channel.fracd
+                    || channel.sampling_type == SamplingType::Single;
+                if report_sample {
+                    channel.fracn = 0;
+                    self.client.map(|c| c.sample_ready(self.sample_with_channel_no(channel_no as u16)));
+                } else {
+                    self.discard_sample();
+                }
 
-                    channel.sampling_type == SamplingType::Single
-                }).unwrap();
+                channel.sampling_type == SamplingType::Single
+            }).unwrap();
 
-                // No more sampling for this channel if it is a single sample.
-                if stop_sampling {
-                    let new_channel_mask = self.registers.cs.read(CS::RROBIN) ^ (1 << channel_no);
-                    self.registers.cs.modify(CS::RROBIN.val(new_channel_mask));
-                    self.channel_info[channel_no as usize].clear();
-                    // Stop the ADC if there are not active channels.
-                    if new_channel_mask == 0 {
-                        self.registers.cs.modify(CS::START_MANY::CLEAR);
-                    }
+            // No more sampling for this channel if it is a single sample.
+            if stop_sampling {
+                let new_channel_mask = self.registers.cs.read(CS::RROBIN) ^ (1 << channel_no);
+                self.registers.cs.modify(CS::RROBIN.val(new_channel_mask));
+                let _disabled_channel = channel_info.take();
+                // Stop the ADC if there are not active channels.
+                if new_channel_mask == 0 {
+                    self.registers.cs.modify(CS::START_MANY::CLEAR);
                 }
             }
+        } else {
+            panic!("sample ready for unconfigured channel {}", channel_no);
         }
     }
 
@@ -250,6 +253,13 @@ impl Adc {
         let sample = self.registers.fifo.read(FIFO::VAL) as u16;
         ((channel_no as u16) << 12)
             | (sample & 0b0000_1111_1111_1111)
+    }
+
+    /// Discard the top sample in the FIFO.
+    #[inline(always)]
+    #[allow(unused_variables)]
+    fn discard_sample(&self) {
+        let unwanted_sample = self.registers.fifo.read(FIFO::VAL) as u16;
     }
 
     fn max_requested_frequency(&self) -> u32 {
@@ -288,22 +298,8 @@ impl Adc {
             kernel::debug!("current max freq.: {}, need reconfigure: {}", max_frequency, reconfigure);
 
             // Set up the new sampling channel information.
-            self.channel_info[channel_no].set(
-                ChannelInfo::new(sampling_type, frequency, max_frequency));
-
-            // Reconfigure the rest of the channels, if necessary.
-            if reconfigure {
-                let iter = self.channel_info.iter().zip(0..);
-                for (ch, i) in iter {
-                    if i == channel_no {
-                        continue;
-                    } else {
-                        let _ = ch.map(|c| {
-                            c.frac_pace = (0, max_frequency)
-                        });
-                    }
-                }
-            }
+            self.channel_info[channel_no].replace(
+                ChannelInfo::setup(sampling_type, frequency, max_frequency));
 
             // Set up the new sampling.
             // Only periodic sampling affects the sampling frequency.
@@ -322,6 +318,21 @@ impl Adc {
             self.registers.div.modify(DIV::INT.val(cycles_per_sample));
             self.registers.fcs.modify(FCS::THRESH.val(1)
                                       + FCS::EN::SET);
+
+            // Reconfigure the rest of the channels.
+            let samples_per_sec = clock_frequency / cycles_per_sample
+                / active_periodic_channel_count;
+            kernel::debug!("samples per sec.: {}", samples_per_sec);
+            if reconfigure {
+                let iter = self.channel_info.iter().zip(0..);
+                for (ch, i) in iter {
+                    let _ = ch.map(|c| {
+                        c.fracn = 0;
+                        c.fracd = core::cmp::max(samples_per_sec / c.frequency, 1);
+                        kernel::debug!("channel no. {} frac. den.: {}", i, c.fracd);
+                    });
+                }
+            }
 
             // Enable the specified channels.
             let enabled_mask: u32 = self.channel_info.iter()
@@ -363,7 +374,7 @@ impl hil::adc::Adc for Adc {
 
         // TODO: add support for cancelling for a single channel through the stack.
         for ch in self.channel_info.iter() {
-            ch.clear();
+            let _disabled_channel = ch.take();
         }
 
         Ok(())
