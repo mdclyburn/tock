@@ -202,35 +202,46 @@ impl Adc {
     }
 
     pub fn handle_interrupt(&self) {
-        kernel::debug!("adc-bh: interrupt from ADC");
-        self.disable_interrupt();
+        // kernel::debug!("adc-bh: interrupt from ADC");
+        // self.disable_interrupt();
         if self.registers.cs.is_set(CS::READY) {
             // Find out which channel the sample is for, then check its fractional pacing.
             // If it overflows, we report the sample, otherwise, we drop it.
             let channel_no = self.registers.cs.read(CS::AINSEL);
             // kernel::debug!("adc-bh: it is for channel no. {}", channel_no);
-            self.channel_info[channel_no as usize].map(|channel| {
-                // Add to the fractional pacing if this is not the fastest channel.
-                // This is only extra work for the fastest channel, if so.
-                // The denominator is taken from the fastest sampling channel.
-                if channel.frequency != channel.frac_pace.1 {
-                    channel.frac_pace = (channel.frac_pace.0 + channel.frequency,
-                                         channel.frac_pace.1);
-                    if channel.frac_pace.0 >= channel.frac_pace.1 {
-                        channel.frac_pace = (channel.frac_pace.0 - channel.frac_pace.1,
+            // Make sure we are still actually sampling for the channel.
+            if self.channel_info[channel_no as usize].is_some() {
+                let stop_sampling = self.channel_info[channel_no as usize].map(|channel| {
+                    // Add to the fractional pacing if this is not the fastest channel.
+                    // This is only extra work for the fastest channel, if so.
+                    // The denominator is taken from the fastest sampling channel.
+                    if channel.frequency != channel.frac_pace.1 {
+                        channel.frac_pace = (channel.frac_pace.0 + channel.frequency,
                                              channel.frac_pace.1);
+                        if channel.frac_pace.0 >= channel.frac_pace.1 {
+                            channel.frac_pace = (channel.frac_pace.0 - channel.frac_pace.1,
+                                                 channel.frac_pace.1);
+                            self.client.map(|c| c.sample_ready(self.sample_with_channel_no(channel_no as u16)));
+                        }
+                    } else {
+                        // The fastest channel matches the sampling frequency.
                         self.client.map(|c| c.sample_ready(self.sample_with_channel_no(channel_no as u16)));
                     }
-                } else {
-                    // The fastest channel matches the sampling frequency.
-                    self.client.map(|c| c.sample_ready(self.sample_with_channel_no(channel_no as u16)));
-                }
-            });
 
-            // No more sampling for this channel if it is a single sample.
-            let new_channel_mask = self.registers.cs.read(CS::RROBIN) ^ (1 << channel_no);
-            self.registers.cs.modify(CS::RROBIN.val(new_channel_mask));
-            self.channel_info[channel_no as usize].clear();
+                    channel.sampling_type == SamplingType::Single
+                }).unwrap();
+
+                // No more sampling for this channel if it is a single sample.
+                if stop_sampling {
+                    let new_channel_mask = self.registers.cs.read(CS::RROBIN) ^ (1 << channel_no);
+                    self.registers.cs.modify(CS::RROBIN.val(new_channel_mask));
+                    self.channel_info[channel_no as usize].clear();
+                    // Stop the ADC if there are not active channels.
+                    if new_channel_mask == 0 {
+                        self.registers.cs.modify(CS::START_MANY::CLEAR);
+                    }
+                }
+            }
         }
     }
 

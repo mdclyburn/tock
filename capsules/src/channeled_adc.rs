@@ -125,6 +125,7 @@ impl<A: 'static + hil::adc::Adc> SyscallDriver for ChanneledADC<A> {
 
 impl<A: 'static + hil::adc::Adc> hil::adc::Client for ChanneledADC<A> {
     fn sample_ready(&self, sample_data: u16) {
+        // kernel::debug!("adc-cn: got sample ready");
         // We expect that the underlying ADC hardware will not use more than 12 bits.
         // The bottom half of the ADC driver will stuff the top four bits with the channel no.
         // If that means sacrificing resolution, that is okay.
@@ -132,10 +133,16 @@ impl<A: 'static + hil::adc::Adc> hil::adc::Client for ChanneledADC<A> {
         let sample = sample_data & 0b0000_1111_1111_1111;
         let free_channel = self.channel_states[channel_no as usize].map(|cs| {
             // Schedule the upcall.
+            // kernel::debug!("adc-cn: scheduling upcall for channel {}", channel_no);
             let result = self.grant_data.enter(
                 cs.client_pid,
                 |_data, upcall_table| {
-                    let upcall_args = (0usize, channel_no as usize, sample as usize);
+                    let sampling_type_indicator = if cs.continuous { 1 } else { 0 };
+                    let upcall_args = (sampling_type_indicator, channel_no as usize, sample as usize);
+                    // kernel::debug!("scheduling: ({}, {}, {})",
+                                   sampling_type_indicator,
+                                   channel_no,
+                                   sample);
                     upcall_table.schedule_upcall(0, upcall_args)
                 })
                 .expect("could not enter ADC grant")
