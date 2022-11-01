@@ -244,7 +244,8 @@ impl Adc {
                 }
             }
         } else {
-            panic!("sample ready for unconfigured channel {}", channel_no);
+            kernel::debug!("sample ready for unconfigured channel {}", channel_no);
+            self.discard_sample();
         }
     }
 

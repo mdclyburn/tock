@@ -133,7 +133,7 @@ impl<A: 'static + hil::adc::Adc> hil::adc::Client for ChanneledADC<A> {
         let sample = sample_data & 0b0000_1111_1111_1111;
         let free_channel = self.channel_states[channel_no as usize].map(|cs| {
             // Schedule the upcall.
-            kernel::debug!("adc-cn: scheduling upcall for channel {}", channel_no);
+            // kernel::debug!("adc-cn: scheduling upcall for channel {}", channel_no);
             let result = self.grant_data.enter(
                 cs.client_pid,
                 |_data, upcall_table| {
