@@ -1,5 +1,6 @@
 //! Interfaces for implementing boards in Tock.
 
+use crate::energy::DriverEnergyAccounting;
 use crate::errorcode;
 use crate::process;
 use crate::scheduler::Scheduler;
@@ -61,6 +62,9 @@ pub trait KernelResources<C: Chip> {
     /// Returns a reference to the implementation of the WatchDog on this
     /// platform.
     fn watchdog(&self) -> &Self::WatchDog;
+
+    /// Return the driver energy account.
+    fn energy_accounting(&self) -> Option<&'static dyn DriverEnergyAccounting> { None }
 }
 
 /// Configure the system call dispatch mapping.

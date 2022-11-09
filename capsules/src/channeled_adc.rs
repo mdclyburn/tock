@@ -54,7 +54,7 @@ impl<A: 'static + hil::adc::Adc> SyscallDriver for ChanneledADC<A> {
                r2: usize,
                r3: usize,
                pid: ProcessId) -> CommandReturn {
-        kernel::debug!("adc-cn: ({}, {}, {})", command_no, r2, r3);
+        // kernel::debug!("adc-cn: ({}, {}, {})", command_no, r2, r3);
         match command_no {
             // Capsule exists.
             // Return the no. of channels available.
@@ -134,7 +134,7 @@ impl<A: 'static + hil::adc::Adc> hil::adc::Client for ChanneledADC<A> {
         let free_channel = self.channel_states[channel_no as usize].map(|cs| {
             // Schedule the upcall.
             // kernel::debug!("adc-cn: scheduling upcall for channel {}", channel_no);
-            let result = self.grant_data.enter(
+            self.grant_data.enter(
                 cs.client_pid,
                 |_data, upcall_table| {
                     let sampling_type_indicator = if cs.continuous { 1 } else { 0 };

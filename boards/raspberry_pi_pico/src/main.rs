@@ -39,6 +39,8 @@ mod io;
 
 mod flash_bootloader;
 
+mod energy;
+
 /// Allocate memory for the stack
 #[no_mangle]
 #[link_section = ".stack_buffer"]
@@ -75,6 +77,7 @@ pub struct RaspberryPiPico {
     // adc: &'static capsules::adc::AdcVirtualized<'static>,
     adc: &'static capsules::channeled_adc::ChanneledADC<Adc>,
     // temperature: &'static capsules::temperature::TemperatureSensor<'static>,
+    eacc: &'static energy::SimultaneousAccounting,
 
     scheduler: &'static RoundRobinSched<'static>,
     systick: cortexm0p::systick::SysTick,
@@ -123,6 +126,10 @@ impl KernelResources<Rp2040<'static, Rp2040DefaultPeripherals<'static>>> for Ras
     }
     fn watchdog(&self) -> &Self::WatchDog {
         &()
+    }
+
+    fn energy_accounting(&self) -> Option<&'static dyn kernel::energy::DriverEnergyAccounting> {
+        Some(self.eacc)
     }
 }
 
@@ -395,7 +402,7 @@ pub unsafe fn main() {
     //         adc_mux
     //     ));
 
-    let grant_cap = create_capability!(capabilities::MemoryAllocationCapability);
+    // let grant_cap = create_capability!(capabilities::MemoryAllocationCapability);
     // let grant_temperature =
     //     board_kernel.create_grant(capsules::temperature::DRIVER_NUM, &grant_cap);
 
@@ -442,6 +449,9 @@ pub unsafe fn main() {
     use kernel::hil::adc::Adc as _;
     peripherals.adc.set_client(adc);
 
+    let eacc = static_init!(energy::SimultaneousAccounting,
+                            energy::SimultaneousAccounting::new());
+
     // PROCESS CONSOLE
     let process_console =
         components::process_console::ProcessConsoleComponent::new(board_kernel, uart_mux)
@@ -462,6 +472,7 @@ pub unsafe fn main() {
         led,
         console,
         adc,
+        eacc,
         scheduler,
         systick: cortexm0p::systick::SysTick::new_with_calibration(125_000_000),
     };

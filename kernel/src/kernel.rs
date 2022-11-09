@@ -999,6 +999,11 @@ impl Kernel {
                 arg0,
                 arg1,
             } => {
+                // Hook for energy accounting.
+                if let Some(eacc) = resources.energy_accounting() {
+                    eacc.update(driver_number, subdriver_number, arg0, arg1);
+                }
+
                 let cres = resources
                     .syscall_driver_lookup()
                     .with_driver(driver_number, |driver| match driver {

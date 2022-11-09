@@ -366,6 +366,7 @@ impl hil::adc::Adc for Adc {
     }
 
     fn stop_sampling(&self) -> Result<(), ErrorCode> {
+        self.disable_interrupt();
         self.registers.cs.modify(CS::START_MANY::CLEAR);
         self.registers.cs.modify(CS::START_ONCE::CLEAR);
 
