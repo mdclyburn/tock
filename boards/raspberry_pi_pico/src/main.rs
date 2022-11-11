@@ -64,6 +64,9 @@ static mut PROCESSES: [Option<&'static dyn kernel::process::Process>; NUM_PROCS]
 
 static mut CHIP: Option<&'static Rp2040<Rp2040DefaultPeripherals>> = None;
 
+type RPFrequency = <RPTimer<'static> as kernel::hil::time::Time>::Frequency;
+type RPTicks = <RPTimer<'static> as kernel::hil::time::Time>::Ticks;
+
 /// Supported drivers by the platform
 pub struct RaspberryPiPico {
     ipc: kernel::ipc::IPC<NUM_PROCS, NUM_UPCALLS_IPC>,
@@ -77,7 +80,7 @@ pub struct RaspberryPiPico {
     // adc: &'static capsules::adc::AdcVirtualized<'static>,
     adc: &'static capsules::channeled_adc::ChanneledADC<Adc>,
     // temperature: &'static capsules::temperature::TemperatureSensor<'static>,
-    eacc: &'static energy::SimultaneousAccounting,
+    eacc: &'static energy::SimultaneousAccounting<RPFrequency, RPTicks>,
 
     scheduler: &'static RoundRobinSched<'static>,
     systick: cortexm0p::systick::SysTick,
@@ -449,8 +452,8 @@ pub unsafe fn main() {
     use kernel::hil::adc::Adc as _;
     peripherals.adc.set_client(adc);
 
-    let eacc = static_init!(energy::SimultaneousAccounting,
-                            energy::SimultaneousAccounting::new());
+    let eacc = static_init!(energy::SimultaneousAccounting<RPFrequency, RPTicks>,
+                            energy::SimultaneousAccounting::new(&peripherals.timer));
 
     // PROCESS CONSOLE
     let process_console =
