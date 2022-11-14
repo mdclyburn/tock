@@ -1,8 +1,16 @@
 /*! Energy accounting.
  */
 
+use crate::syscall::{
+    Syscall,
+    SyscallReturn
+};
+
 /// Track energy usage by driver calls.
 pub trait DriverEnergyAccounting {
     /// Perform accounting updates based on the provided syscall information.
-    fn update(&self, driver_no: usize, command_no: usize, arg0: usize, arg1: usize);
+    fn on_command(&self, invocation: &Syscall, outcome: &SyscallReturn);
+
+    /// Perform accounting updates based on an upcall.
+    fn on_upcall(&self);
 }

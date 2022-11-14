@@ -12,6 +12,7 @@ use crate::capabilities;
 use crate::config;
 use crate::debug;
 use crate::dynamic_deferred_call::DynamicDeferredCall;
+use crate::energy;
 use crate::errorcode::ErrorCode;
 use crate::grant::Grant;
 use crate::ipc;
@@ -999,11 +1000,6 @@ impl Kernel {
                 arg0,
                 arg1,
             } => {
-                // Hook for energy accounting.
-                if let Some(eacc) = resources.energy_accounting() {
-                    eacc.update(driver_number, subdriver_number, arg0, arg1);
-                }
-
                 let cres = resources
                     .syscall_driver_lookup()
                     .with_driver(driver_number, |driver| match driver {
@@ -1024,6 +1020,12 @@ impl Kernel {
                         res,
                     );
                 }
+
+                // Hook for energy accounting.
+                if let Some(eacc) = resources.energy_accounting() {
+                    eacc.on_command(&syscall, &res);
+                }
+
                 process.set_syscall_return_value(res);
             }
             Syscall::ReadWriteAllow {

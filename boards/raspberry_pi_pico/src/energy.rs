@@ -6,6 +6,10 @@ use core::cell::Cell;
 use kernel::energy::DriverEnergyAccounting;
 use kernel::hil::time;
 use kernel::hil::time::ConvertTicks as _;
+use kernel::syscall::{
+    Syscall,
+    SyscallReturn,
+};
 
 use capsules;
 
@@ -30,43 +34,56 @@ impl<A: 'static + time::Frequency,
             adc_state: Cell::new(0b0000_0000),
         }
     }
+
+    fn update_accounting(&self) {
+        let t_call = self.time_source.ticks_to_us(self.time_source.now());
+
+        // Update accounted usage for the time since the previous update call.
+        let d_prev_call = t_call - self.last_update_us.get();
+        // TODO: update accounting state here.
+
+        self.last_update_us.set(t_call);
+    }
 }
 
 impl<A: 'static + time::Frequency,
      B: 'static + time::Ticks>
     DriverEnergyAccounting for SimultaneousAccounting<A, B> {
-        fn update(&self, driver_no: usize, command_no: usize, arg0: usize, arg1: usize) {
-            let t_call = self.time_source.ticks_to_us(self.time_source.now());
+        fn on_command(&self, invocation: &Syscall, outcome: &SyscallReturn) {
+            self.update_accounting();
 
-            // Update accounted usage for the time since the previous update call.
-            let d_prev_call = t_call - self.last_update_us.get();
-            // TODO: update data here.
-            self.last_update_us.set(t_call);
+            // Apply the state change signalled by the syscall.
+            match invocation {
+                Syscall::Command {
+                    driver_number: driver_no,
+                    subdriver_number: command_no,
+                    arg0,
+                    arg1
+                } => {
+                    kernel::debug!("accounting: ({}, {}, {}, {})",
+                                   driver_no, command_no, arg0, arg1);
 
-        match driver_no {
-            capsules::channeled_adc::DRIVER_NUM => {
-                kernel::debug!("accounting: ({}, {}, {}, {})",
-                               driver_no,
-                               command_no,
-                               arg0,
-                               arg1);
+                    match *driver_no {
+                        capsules::channeled_adc::DRIVER_NUM => {
+                            match command_no {
+                                // Driver check, we do not care about this one.
+                                0 => {  },
 
-                // Get current active usages.
+                                // Single ADC sample.
+                                1 => {  }
 
-                match command_no {
-                    // Driver check, we do not care about this one.
-                    0 => {  },
+                                _ => unimplemented!("unhandled command no. {} for ADC", command_no),
+                            }
+                        },
 
-                    // Single ADC sample.
-                    1 => {
-
+                        _ => {  } // Ignore all other drivers.
                     }
+                },
 
-                    _ => unimplemented!("unhandled command no. {} for ADC", command_no),
-                }
-            },
-
-            _ => {  } // Ignore all other calls.
+                // Ignore all other syscalls.
+                _ => {  }
+            }
         }
-    }
+
+        fn on_upcall(&self) {  }
 }
