@@ -241,7 +241,9 @@ impl Adc {
                 }
             }
         } else {
-            kernel::debug!("sample ready for unconfigured channel {}", channel_no);
+            // A sample became ready for a channel we do not currently care for.
+            // This can happen if we were too slow in coming around to stopping the ADC.
+            // kernel::debug!("sample ready for unconfigured channel {}", channel_no);
             self.discard_sample();
         }
     }

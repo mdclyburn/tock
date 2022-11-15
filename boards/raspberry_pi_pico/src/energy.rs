@@ -21,6 +21,7 @@ use capsules;
 #[derive(Copy, Clone, Debug, PartialEq)]
 enum Usage {
     Inactive,
+    Pending(usize),
     OneShot(usize),
     Long(usize),
 }
@@ -47,6 +48,12 @@ impl<A: 'static + time::Frequency,
         }
     }
 
+    /// Updated accounted energy total.
+    ///
+    /// Go through all active usages and count their usage toward the accounted total.
+    /// Usages in the pending state do not count toward this total.
+    /// Once they move to the [`Usage::OneShot`] state, this function will count the usage
+    /// and move the usage to the [`Usage::Inactive`] state.
     fn update_accounting(&self) {
         let t_call = self.time_source.ticks_to_us(self.time_source.now());
 
@@ -74,6 +81,14 @@ impl<A: 'static + time::Frequency,
                 } => {
                     match *driver_no {
                         capsules::channeled_adc::DRIVER_NUM => {
+                            /* The upcall was for an ADC sample.
+
+                            For one-shot samples, mark it complete such that the next time we update,
+                            we will consider this energy used and add it to the accumulated total.
+                            This will be safe to push off because if an application wants to use the channel,
+                            we will do the update before marking the channel as in-use.
+
+                            */
                             kernel::debug!("adc call: ({}, {}, {}, {})",
                                            driver_no, command_no, arg0, arg1);
                             match command_no {
@@ -85,7 +100,7 @@ impl<A: 'static + time::Frequency,
                                 // It will become inactive once the upcall carrying the sample arrives.
                                 1 => {
                                     let channel_no = arg0;
-                                    self.adc_state.map(|s| { s[*channel_no] = Usage::OneShot(1) });
+                                    self.adc_state.map(|s| { s[*channel_no] = Usage::Pending(1) });
                                 },
 
                                 2 => {
@@ -110,11 +125,30 @@ impl<A: 'static + time::Frequency,
             // Update accounting up to this point.
             self.update_accounting();
 
+            // Update state.
             match call.source {
                 FunctionCallSource::Driver(upcall_info) => {
                     match upcall_info.driver_num {
                         capsules::channeled_adc::DRIVER_NUM => {
-                            kernel::debug!("adc upcall: {}", upcall_info.subscribe_num);
+                            // We take a peek into the arguments since the driver uses the same callback.
+                            let (sampling_type_no, channel_no) = (
+                                call.argument0,
+                                call.argument1);
+                            kernel::debug!("adc upcall: {} ({}, {}, {}, {})",
+                                           upcall_info.subscribe_num,
+                                           call.argument0,
+                                           call.argument1,
+                                           call.argument2,
+                                           call.argument3);
+
+                            // Mark the channel as one-shot if this was a pending usage.
+                            // The next update will count it toward the total and mark the channel as inactive.
+                            self.adc_state.map(|s| {
+                                let channel_usage = &mut s[channel_no];
+                                if let Usage::Pending(usage) = channel_usage {
+                                    *channel_usage = Usage::OneShot(*usage);
+                                }
+                            });
                         },
 
                         // Ignore all other drivers making upcalls.
