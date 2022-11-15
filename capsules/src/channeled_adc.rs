@@ -19,6 +19,7 @@ struct ChannelState {
     client_pid: ProcessId,
 }
 
+/// An ADC driver that allows multiple processes to access individual channels.
 pub struct ChanneledADC<A: 'static + hil::adc::Adc> {
     adc: &'static A,
     grant_data: Grant<(), 1>,

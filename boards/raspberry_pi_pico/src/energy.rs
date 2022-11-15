@@ -14,8 +14,16 @@ use kernel::syscall::{
     Syscall,
     SyscallReturn,
 };
+use kernel::utilities::cells::MapCell;
 
 use capsules;
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+enum Usage {
+    Inactive,
+    OneShot(usize),
+    Long(usize),
+}
 
 pub struct SimultaneousAccounting<A: 'static + time::Frequency,
                                   B: 'static + time::Ticks>
@@ -23,7 +31,7 @@ pub struct SimultaneousAccounting<A: 'static + time::Frequency,
     time_source: &'static dyn time::Time<Frequency = A, Ticks = B>,
     accounted_energy: Cell<usize>,
     last_update_us: Cell<u32>,
-    adc_state: Cell<u8>,
+    adc_state: MapCell<[Usage; 5]>,
 }
 
 impl<A: 'static + time::Frequency,
@@ -35,7 +43,7 @@ impl<A: 'static + time::Frequency,
             time_source,
             accounted_energy: Cell::new(0),
             last_update_us: Cell::new(0),
-            adc_state: Cell::new(0b0000_0000),
+            adc_state: MapCell::new([Usage::Inactive; 5]),
         }
     }
 
@@ -72,13 +80,17 @@ impl<A: 'static + time::Frequency,
                                 // Driver check, we do not care about this one.
                                 0 => {  },
 
-                                // Single ADC sample, continuous sampling request.
+                                // Single ADC sample.
                                 // The specified channel becomes active.
                                 // It will become inactive once the upcall carrying the sample arrives.
-                                1 | 2 => {
+                                1 => {
                                     let channel_no = arg0;
-                                    let new_state = self.adc_state.get() | (1 << channel_no);
-                                    self.adc_state.set(new_state);
+                                    self.adc_state.map(|s| { s[*channel_no] = Usage::OneShot(1) });
+                                },
+
+                                2 => {
+                                    let channel_no = arg0;
+                                    self.adc_state.map(|s| { s[*channel_no] = Usage::Long(20) });
                                 },
 
                                 _ => unimplemented!("unhandled command no. {} for ADC", command_no),
