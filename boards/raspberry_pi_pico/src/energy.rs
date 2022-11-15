@@ -60,17 +60,22 @@ impl<A: 'static + time::Frequency,
                     arg0,
                     arg1
                 } => {
-                    kernel::debug!("accounting: ({}, {}, {}, {})",
-                                   driver_no, command_no, arg0, arg1);
-
                     match *driver_no {
                         capsules::channeled_adc::DRIVER_NUM => {
+                            kernel::debug!("adc: ({}, {}, {}, {})",
+                                           driver_no, command_no, arg0, arg1);
                             match command_no {
                                 // Driver check, we do not care about this one.
                                 0 => {  },
 
-                                // Single ADC sample.
-                                1 => {  }
+                                // Single ADC sample, continuous sampling request.
+                                // The specified channel becomes active.
+                                // It will become inactive once the upcall carrying the sample arrives.
+                                1 | 2 => {
+                                    let channel_no = arg0;
+                                    let new_state = self.adc_state.get() | (1 << channel_no);
+                                    self.adc_state.set(new_state);
+                                },
 
                                 _ => unimplemented!("unhandled command no. {} for ADC", command_no),
                             }

@@ -30,7 +30,10 @@ use crate::syscall::{ContextSwitchReason, SyscallReturn};
 use crate::syscall::{Syscall, YieldCall};
 use crate::syscall_driver::CommandReturn;
 use crate::upcall::{Upcall, UpcallId};
-use crate::utilities::cells::NumericCellExt;
+use crate::utilities::cells::{
+    OptionalCell,
+    NumericCellExt,
+};
 
 /// Threshold in microseconds to consider a process's timeslice to be exhausted.
 /// That is, Tock will skip re-scheduling a process if its remaining timeslice
@@ -60,6 +63,9 @@ pub struct Kernel {
     /// created and the data structures for grants have already been
     /// established.
     grants_finalized: Cell<bool>,
+
+    /// Energy accounting.
+    energy_accounting: OptionalCell<&'static dyn energy::DriverEnergyAccounting>,
 }
 
 /// Enum used to inform scheduler why a process stopped executing (aka why
@@ -95,7 +101,12 @@ impl Kernel {
             process_identifier_max: Cell::new(0),
             grant_counter: Cell::new(0),
             grants_finalized: Cell::new(false),
+            energy_accounting: OptionalCell::empty(),
         }
+    }
+
+    pub fn energy_accounting_service(&self) -> Option<&'static dyn energy::DriverEnergyAccounting> {
+        self.energy_accounting.extract()
     }
 
     /// Something was scheduled for a process, so there is more work to do.
@@ -474,6 +485,8 @@ impl Kernel {
         capability: &dyn capabilities::MainLoopCapability,
     ) -> ! {
         resources.watchdog().setup();
+        self.energy_accounting.insert(resources.energy_accounting());
+
         loop {
             self.kernel_loop_operation(resources, chip, ipc, false, capability);
         }
@@ -1022,7 +1035,7 @@ impl Kernel {
                 }
 
                 // Hook for energy accounting.
-                if let Some(eacc) = resources.energy_accounting() {
+                if let Some(eacc) = self.energy_accounting.extract() {
                     eacc.on_command(&syscall, &res);
                 }
 
