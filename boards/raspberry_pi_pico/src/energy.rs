@@ -6,6 +6,10 @@ use core::cell::Cell;
 use kernel::energy::DriverEnergyAccounting;
 use kernel::hil::time;
 use kernel::hil::time::ConvertTicks as _;
+use kernel::process::{
+    FunctionCall,
+    FunctionCallSource,
+};
 use kernel::syscall::{
     Syscall,
     SyscallReturn,
@@ -62,7 +66,7 @@ impl<A: 'static + time::Frequency,
                 } => {
                     match *driver_no {
                         capsules::channeled_adc::DRIVER_NUM => {
-                            kernel::debug!("adc: ({}, {}, {}, {})",
+                            kernel::debug!("adc call: ({}, {}, {}, {})",
                                            driver_no, command_no, arg0, arg1);
                             match command_no {
                                 // Driver check, we do not care about this one.
@@ -90,5 +94,24 @@ impl<A: 'static + time::Frequency,
             }
         }
 
-        fn on_upcall(&self) {  }
+        fn on_upcall(&self, call: &FunctionCall) {
+            // Update accounting up to this point.
+            self.update_accounting();
+
+            match call.source {
+                FunctionCallSource::Driver(upcall_info) => {
+                    match upcall_info.driver_num {
+                        capsules::channeled_adc::DRIVER_NUM => {
+                            kernel::debug!("adc upcall: {}", upcall_info.subscribe_num);
+                        },
+
+                        // Ignore all other drivers making upcalls.
+                        _ => {  }
+                    }
+                },
+
+                // Ignore other sources not related to drivers.
+                _ => {  }
+            }
+        }
 }

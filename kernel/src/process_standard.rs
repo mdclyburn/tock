@@ -223,7 +223,9 @@ impl<C: Chip> Process for ProcessStandard<'_, C> {
 
         // Energy accounting hook.
         if let Some(eacc) = self.kernel.energy_accounting_service() {
-            eacc.on_upcall();
+            if let Task::FunctionCall(ref fc) = task {
+                eacc.on_upcall(fc);
+            }
         }
 
         let ret = self.tasks.map_or(Err(ErrorCode::FAIL), |tasks| {

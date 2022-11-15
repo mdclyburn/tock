@@ -1,6 +1,7 @@
 /*! Energy accounting.
  */
 
+use crate::process::FunctionCall;
 use crate::syscall::{
     Syscall,
     SyscallReturn
@@ -12,5 +13,5 @@ pub trait DriverEnergyAccounting {
     fn on_command(&self, invocation: &Syscall, outcome: &SyscallReturn);
 
     /// Perform accounting updates based on an upcall.
-    fn on_upcall(&self);
+    fn on_upcall(&self, call: &FunctionCall);
 }
