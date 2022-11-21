@@ -285,62 +285,17 @@ impl Adc {
             // Cease all sampling.
             self.registers.cs.modify(CS::START_MANY::CLEAR);
 
-            let max_frequency = self.max_requested_frequency();
-            // Check if there is a new max sampling frequency.
-            // If so, we must reconfigure all other channels and reset fractional pacing.
-            // We only need to reconfigure if it is a periodic sampling request.
-            let (max_frequency, reconfigure) = if sampling_type != SamplingType::Single && frequency > max_frequency {
-                (frequency, true)
-            } else {
-                (max_frequency, false)
-            };
-
             // Set up the new sampling channel information.
+            // The max_frequency does not matter here because we will just overwrite it in a bit.
             self.channel_info[channel_no].replace(
-                ChannelInfo::setup(sampling_type, frequency, max_frequency));
+                ChannelInfo::setup(sampling_type, frequency, 1));
 
-            // Set up the new sampling.
-            // Only periodic sampling affects the sampling frequency.
+            // We must reconfigure all other channels and reset fractional pacing.
+            // We only need to reconfigure if it is a periodic sampling request.
             // Single samples do not count because they are so ephemeral.
-            if reconfigure {
-                let active_periodic_channel_count = self.channel_info.iter()
-                    .filter(|ci| ci.is_some())
-                    .map(|ci| ci.map(|c| if c.sampling_type == SamplingType::Periodic { 1 } else { 0 }).unwrap())
-                    .fold(0, |cur, i| cur + i);
-                let clock_frequency = 125_000_000;
-                let agg_frequency = core::cmp::max(max_frequency * active_periodic_channel_count as u32, 1);
-                kernel::debug!("Serving active channels requires sampling at {} hz.", agg_frequency);
-                let cycles_per_sample = clock_frequency / agg_frequency;
-                let cycles_per_sample = if cycles_per_sample < 95 { 95 } else { cycles_per_sample };
-                let cycles_per_sample = if cycles_per_sample > u16::MAX as u32 { u16::MAX as u32 } else { cycles_per_sample };
-                kernel::debug!("Required cycles per sample: {} cy.", cycles_per_sample);
-                self.registers.div.modify(DIV::INT.val(cycles_per_sample));
-                self.registers.fcs.modify(FCS::THRESH.val(1)
-                                          + FCS::EN::SET);
+            let reconfigure = sampling_type != SamplingType::Single;
 
-                // Reconfigure the rest of the channels.
-                let samples_per_sec = clock_frequency / cycles_per_sample
-                    / active_periodic_channel_count;
-                kernel::debug!("Per-channel approx. rate: {} S/s.", samples_per_sec);
-                if reconfigure {
-                    let iter = self.channel_info.iter().zip(0..);
-                    for (ch, i) in iter {
-                        let _ = ch.map(|c| {
-                            c.fracn = 0;
-                            c.fracd = core::cmp::max(samples_per_sec / c.frequency, 1);
-                            kernel::debug!(" - chan. no. {} will take 1 out of every {} smps.", i, c.fracd);
-                        });
-                    }
-                }
-            }
-
-            // Enable the specified channels.
-            let enabled_mask: u32 = self.channel_info.iter()
-                .enumerate()
-                .filter(|(_i, ci)| ci.is_some())
-                .map(|(i, _ci)| i)
-                .fold(0, |cur, i| cur | (1 << i));
-            self.registers.cs.modify(CS::RROBIN.val(enabled_mask));
+            self.reconfigure();
             // Set the first channel to sample to be the one we newly configured.
             self.registers.cs.modify(CS::AINSEL.val(channel_no as u32));
 
@@ -350,13 +305,58 @@ impl Adc {
             Ok(())
         }
     }
+
+    fn reconfigure(&self) {
+        // Get how many channels are active for periodic sampling.
+        let max_frequency = self.max_requested_frequency();
+        let active_periodic_channel_count = self.channel_info.iter()
+            .filter(|ci| ci.is_some())
+            .map(|ci| ci.map(|c| if c.sampling_type == SamplingType::Periodic { 1 } else { 0 }).unwrap())
+            .fold(0, |cur, i| cur + i);
+        let clock_frequency = 125_000_000;
+        // Aggregate sampling frequency will be a factor of the fastest sampling channel.
+        // Other channels will use this rate to pick up samples during their sampling turn.
+        let agg_frequency = core::cmp::max(max_frequency * active_periodic_channel_count as u32, 1);
+        kernel::debug!("Serving active channels requires sampling at {} hz.", agg_frequency);
+        let cycles_per_sample = clock_frequency / agg_frequency;
+        let cycles_per_sample = if cycles_per_sample < 95 { 95 } else { cycles_per_sample };
+        let cycles_per_sample = if cycles_per_sample > u16::MAX as u32 { u16::MAX as u32 } else { cycles_per_sample };
+        kernel::debug!("Required cycles per sample: {} cy.", cycles_per_sample);
+        self.registers.div.modify(DIV::INT.val(cycles_per_sample));
+        self.registers.fcs.modify(FCS::THRESH.val(1)
+                                  + FCS::EN::SET);
+
+        // Reconfigure the the channel states.
+        let active_channel_count = self.channel_info.iter()
+            .filter(|ci| ci.is_some())
+            .count();
+        let samples_per_sec = clock_frequency / cycles_per_sample
+            / active_channel_count as u32;
+        kernel::debug!("Per-channel approx. rate: {} S/s.", samples_per_sec);
+        let iter = self.channel_info.iter().zip(0..);
+        for (ch, i) in iter {
+            let _ = ch.map(|c| {
+                c.fracn = 0;
+                c.fracd = core::cmp::max(samples_per_sec / c.frequency, 1);
+                kernel::debug!(" - chan. no. {} will take 1 out of every {} smps.", i, c.fracd);
+            });
+        }
+
+        // Enable the specified channels.
+        let enabled_mask: u32 = self.channel_info.iter()
+            .enumerate()
+            .filter(|(_i, ci)| ci.is_some())
+            .map(|(i, _ci)| i)
+            .fold(0, |cur, i| cur | (1 << i));
+        self.registers.cs.modify(CS::RROBIN.val(enabled_mask));
+    }
 }
 
 impl hil::adc::Adc for Adc {
     type Channel = Channel;
 
     fn sample(&self, channel: &Self::Channel) -> Result<(), ErrorCode> {
-        self.configure_sampling(channel, self.max_requested_frequency(), SamplingType::Single)
+        self.configure_sampling(channel, 1, SamplingType::Single)
     }
 
     fn sample_continuous(
@@ -375,6 +375,26 @@ impl hil::adc::Adc for Adc {
         // TODO: add support for cancelling for a single channel through the stack.
         for ch in self.channel_info.iter() {
             let _disabled_channel = ch.take();
+        }
+
+        Ok(())
+    }
+
+    fn stop_sampling_channel(&self, channel_no: usize) -> Result<(), ErrorCode> {
+        self.disable_interrupt();
+        self.registers.cs.modify(CS::START_MANY::CLEAR);
+        self.registers.cs.modify(CS::START_ONCE::CLEAR);
+
+        let _disabled_ch = self.channel_info[channel_no].take();
+
+        // Look for other active channels.
+        // If there is one, reconfigure sampling and continue ADC operation.
+        for ch in self.channel_info.iter() {
+            if ch.is_some() {
+                self.reconfigure();
+                self.enable_interrupt();
+                self.registers.cs.modify(CS::START_MANY::SET);
+            }
         }
 
         Ok(())

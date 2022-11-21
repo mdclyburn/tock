@@ -101,7 +101,7 @@ impl<A: 'static + hil::adc::Adc> SyscallDriver for ChanneledADC<A> {
                         Err(e) => CommandReturn::failure(e),
                     }
                 }
-            }
+            },
 
             // Get resolution bits.
             101 => {
@@ -113,6 +113,38 @@ impl<A: 'static + hil::adc::Adc> SyscallDriver for ChanneledADC<A> {
                 self.adc.get_voltage_reference_mv()
                     .map(|mv| CommandReturn::success_u32(mv as u32))
                     .unwrap_or(CommandReturn::failure(ErrorCode::NOSUPPORT))
+            },
+
+            // Non-standard command no.
+            // Stop sampling on a channel.
+            500 => {
+                let (channel_no, _r3) = (r2, r3);
+
+                if channel_no > self.channel_states.len() {
+                    CommandReturn::failure(ErrorCode::INVAL)
+                } else {
+                    let opt_owner_pid: Option<ProcessId> = self.channel_states[channel_no]
+                        .map(|s| s.client_pid);
+
+                    // Check that the request came from the current owner,
+                    // if the channel is currently in use.
+                    if let Some(owner_pid) = opt_owner_pid {
+                        if pid == owner_pid {
+                            // Perform the cancellation.
+                            self.channel_states[channel_no].clear();
+                            match self.adc.stop_sampling_channel(channel_no) {
+                                Ok(()) => CommandReturn::success(),
+                                Err(e) => CommandReturn::failure(e),
+                            }
+                        } else {
+                            // Return the usual error, no difference from other error cases
+                            // to prevent possibility of side-channels.
+                            CommandReturn::failure(ErrorCode::INVAL)
+                        }
+                    } else {
+                        CommandReturn::failure(ErrorCode::INVAL)
+                    }
+                }
             },
 
             _ => CommandReturn::failure(ErrorCode::INVAL),

@@ -27,6 +27,11 @@ pub trait Adc {
     /// further callbacks will occur.
     fn stop_sampling(&self) -> Result<(), ErrorCode>;
 
+    /// Stop sampling on a specific channel.
+    fn stop_sampling_channel(&self, channel_no: usize) -> Result<(), ErrorCode> {
+        Err(ErrorCode::NOSUPPORT)
+    }
+
     /// Function to ask the ADC how many bits of resolution are in the samples
     /// it is returning.
     fn get_resolution_bits(&self) -> usize;
