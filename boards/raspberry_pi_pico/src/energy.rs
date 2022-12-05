@@ -206,4 +206,8 @@ impl<A: 'static + time::Frequency,
             self.update_accounting();
         }
     }
+
+    fn total_accounted(&self) -> u64 {
+        self.accounted_energy.get()
+    }
 }

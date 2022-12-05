@@ -14,4 +14,7 @@ pub trait DriverEnergyAccounting {
 
     /// Perform accounting updates based on an upcall.
     fn on_upcall(&self, call: &FunctionCall);
+
+    /// Returns the accounted total.
+    fn total_accounted(&self) -> u64;
 }
