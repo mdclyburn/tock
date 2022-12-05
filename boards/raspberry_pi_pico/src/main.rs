@@ -81,6 +81,7 @@ pub struct RaspberryPiPico {
     adc: &'static capsules::channeled_adc::ChanneledADC<Adc>,
     // temperature: &'static capsules::temperature::TemperatureSensor<'static>,
     eacc: &'static energy::SimultaneousAccounting<RPFrequency, RPTicks>,
+    eacc_info: &'static capsules::energy::AccountingData,
 
     scheduler: &'static RoundRobinSched<'static>,
     systick: cortexm0p::systick::SysTick,
@@ -98,6 +99,7 @@ impl SyscallDriverLookup for RaspberryPiPico {
             capsules::led::DRIVER_NUM => f(Some(self.led)),
             kernel::ipc::DRIVER_NUM => f(Some(&self.ipc)),
             capsules::adc::DRIVER_NUM => f(Some(self.adc)),
+            capsules::energy::DRIVER_NUM => f(Some(self.eacc_info)),
             // capsules::temperature::DRIVER_NUM => f(Some(self.temperature)),
             _ => f(None),
         }
@@ -455,6 +457,9 @@ pub unsafe fn main() {
     let eacc = static_init!(energy::SimultaneousAccounting<RPFrequency, RPTicks>,
                             energy::SimultaneousAccounting::new(&peripherals.timer));
 
+    let eacc_info = static_init!(capsules::energy::AccountingData,
+                                 capsules::energy::AccountingData::new(eacc));
+
     // PROCESS CONSOLE
     let process_console =
         components::process_console::ProcessConsoleComponent::new(board_kernel, uart_mux)
@@ -476,6 +481,7 @@ pub unsafe fn main() {
         console,
         adc,
         eacc,
+        eacc_info,
         scheduler,
         systick: cortexm0p::systick::SysTick::new_with_calibration(125_000_000),
     };
