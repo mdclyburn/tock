@@ -103,7 +103,6 @@ impl<A: 'static + time::Frequency,
         }).unwrap();
 
         self.accounted_energy.set(self.accounted_energy.get() + acc as u64);
-        kernel::debug!("accounted: {}", self.accounted_energy.get());
         self.last_update_us.set(t_call_us);
     }
 }
@@ -150,6 +149,20 @@ impl<A: 'static + time::Frequency,
                                 self.adc_state.map(|s| { s[*channel_no] = Usage::Long(14) });
                             },
 
+                            // Stopping sampling on a channel.
+                            // The specified channel becomes inactive.
+                            // This is just a change in the state of the ADC peripheral.
+                            // Note: this had better be a long-running sampling operation.
+                            500 => {
+                                let channel_no = arg0;
+                                let current_state = self.adc_state.map(|s| s[*channel_no] )
+                                    .unwrap(); // ADC state should never be empty.
+                                match current_state {
+                                    Usage::Long(_rate) => self.adc_state.map(|s| { s[*channel_no] = Usage::Inactive }),
+                                    _ => panic!("cancelling short sampling operation unsupported"),
+                                };
+                            },
+
                             _ => unimplemented!("unhandled command no. {} for ADC", command_no),
                         }
                     },
@@ -169,15 +182,15 @@ impl<A: 'static + time::Frequency,
                 match upcall_info.driver_num {
                     capsules::channeled_adc::DRIVER_NUM => {
                         // We take a peek into the arguments since the driver uses the same callback.
-                        let (sampling_type_no, channel_no) = (
+                        let (_sampling_type_no, channel_no) = (
                             call.argument0,
                             call.argument1);
-                        kernel::debug!("adc upcall: {} ({}, {}, {}, {})",
-                                       upcall_info.subscribe_num,
-                                       call.argument0,
-                                       call.argument1,
-                                       call.argument2,
-                                       call.argument3);
+                        // kernel::debug!("adc upcall: {} ({}, {}, {}, {})",
+                        //                upcall_info.subscribe_num,
+                        //                call.argument0,
+                        //                call.argument1,
+                        //                call.argument2,
+                        //                call.argument3);
 
                         // Mark the channel as one-shot if this was a pending usage.
                         // The next update will count it toward the total and mark the channel as inactive.
