@@ -130,8 +130,8 @@ impl<A: 'static + time::Frequency,
                         we will do the update before marking the channel as in-use.
 
                          */
-                        kernel::debug!("adc call: ({}, {}, {}, {})",
-                                       driver_no, command_no, arg0, arg1);
+                        // kernel::debug!("adc call: ({}, {}, {}, {})",
+                        //                driver_no, command_no, arg0, arg1);
                         match command_no {
                             // Driver check, we do not care about this one.
                             0 => {  },
