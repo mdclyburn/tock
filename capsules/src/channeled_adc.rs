@@ -167,7 +167,9 @@ impl<A: 'static + hil::adc::Adc> hil::adc::Client for ChanneledADC<A> {
         let free_channel = self.channel_states[channel_no as usize].map(|cs| {
             // Schedule the upcall.
             // kernel::debug!("adc-cn: scheduling upcall for channel {}", channel_no);
-            self.grant_data.enter(
+            // The scheduling could fail if the sampling is too quick and there are too many samples queued up.
+            // We just silently drop excess sample results.
+            let _upcall_schedule_result = self.grant_data.enter(
                 cs.client_pid,
                 |_data, upcall_table| {
                     let sampling_type_indicator = if cs.continuous { 1 } else { 0 };
@@ -178,8 +180,7 @@ impl<A: 'static + hil::adc::Adc> hil::adc::Client for ChanneledADC<A> {
                     //                sample);
                     upcall_table.schedule_upcall(0, upcall_args)
                 })
-                .expect("could not enter ADC grant")
-                .expect("could not schedule upcall");
+                .expect("could not enter ADC grant");
 
             // Free the channel if it is for a single sample.
             cs.continuous == false
