@@ -317,11 +317,11 @@ impl Adc {
         // Aggregate sampling frequency will be a factor of the fastest sampling channel.
         // Other channels will use this rate to pick up samples during their sampling turn.
         let agg_frequency = core::cmp::max(max_frequency * active_periodic_channel_count as u32, 1);
-        kernel::debug!("Serving active channels requires sampling at {} hz.", agg_frequency);
+        // kernel::debug!("Serving active channels requires sampling at {} hz.", agg_frequency);
         let cycles_per_sample = clock_frequency / agg_frequency;
         let cycles_per_sample = if cycles_per_sample < 95 { 95 } else { cycles_per_sample };
         let cycles_per_sample = if cycles_per_sample > u16::MAX as u32 { u16::MAX as u32 } else { cycles_per_sample };
-        kernel::debug!("Required cycles per sample: {} cy.", cycles_per_sample);
+        // kernel::debug!("Required cycles per sample: {} cy.", cycles_per_sample);
         self.registers.div.modify(DIV::INT.val(cycles_per_sample));
         self.registers.fcs.modify(FCS::THRESH.val(1)
                                   + FCS::EN::SET);
@@ -332,13 +332,13 @@ impl Adc {
             .count();
         let samples_per_sec = clock_frequency / cycles_per_sample
             / active_channel_count as u32;
-        kernel::debug!("Per-channel approx. rate: {} S/s.", samples_per_sec);
+        // kernel::debug!("Per-channel approx. rate: {} S/s.", samples_per_sec);
         let iter = self.channel_info.iter().zip(0..);
         for (ch, i) in iter {
             let _ = ch.map(|c| {
                 c.fracn = 0;
                 c.fracd = core::cmp::max(samples_per_sec / c.frequency, 1);
-                kernel::debug!(" - chan. no. {} will take 1 out of every {} smps.", i, c.fracd);
+                // kernel::debug!(" - chan. no. {} will take 1 out of every {} smps.", i, c.fracd);
             });
         }
 
