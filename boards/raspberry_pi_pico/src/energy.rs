@@ -158,8 +158,26 @@ impl<A: 'static + time::Frequency,
                                 let current_state = self.adc_state.map(|s| s[*channel_no] )
                                     .unwrap(); // ADC state should never be empty.
                                 match current_state {
-                                    Usage::Long(_rate) => self.adc_state.map(|s| { s[*channel_no] = Usage::Inactive }),
-                                    _ => panic!("cancelling short sampling operation unsupported"),
+                                    // The channel was inactive, yet we got a cancellation request for some reason.
+                                    // This is not a problem here, so do not fault the system.
+                                    // However, there is no action to take.
+                                    Usage::Inactive => {  },
+
+                                    // We do not support accounting cancellation of one-shot sampling operations.
+                                    // The usage for it will be accounted on completion of the operation, still.
+                                    // So, this is not part of evaluation.
+                                    Usage::OneShot(_usage) => panic!("cancelling short sampling operation unsupported"),
+
+                                    // Stopping a long-running sampling operation.
+                                    // We should perform accounting up to this point and then mark this channel as inactive.
+                                    Usage::Long(_rate) => {
+                                        self.update_accounting();
+                                        self.adc_state.map(|s| { s[*channel_no] = Usage::Inactive });
+                                    },
+
+                                    // Usage is in a pending state, yet a cancellation request came through.
+                                    // The channel is not active for us anyway, so ignore it.
+                                    Usage::Pending(_usage) => {  },
                                 };
                             },
 
