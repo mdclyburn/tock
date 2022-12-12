@@ -33,7 +33,7 @@ as indicated by the underlying hardware and resulting upcall.
 Operations that consume an amount of energy correlated with the length of time of their usage use the Long variant.
 This variant is set on the component with the success of the syscall that activates them.
 
-The numerical values in the active enum variants are energy values measured in microjoules and microjoules per millisecond.
+The numerical values in the active enum variants are energy values measured in microjoules and microjoules per millisecond times 10.
  */
 #[derive(Copy, Clone, Debug, PartialEq)]
 enum Usage {
@@ -43,6 +43,8 @@ enum Usage {
     Long(usize),
 }
 
+const ADC_CHANNELS: usize = 5;
+
 pub struct SimultaneousAccounting<A: 'static + time::Frequency,
                                   B: 'static + time::Ticks>
 {
@@ -50,7 +52,7 @@ pub struct SimultaneousAccounting<A: 'static + time::Frequency,
     /// Total energy accounted in microjoules.
     accounted_energy: Cell<u64>,
     last_update_us: Cell<usize>, // WARNING: this will overflow in a reasonable amount of time.
-    adc_state: MapCell<[Usage; 5]>,
+    adc_state: MapCell<[Usage; ADC_CHANNELS]>,
 }
 
 impl<A: 'static + time::Frequency,
@@ -62,7 +64,7 @@ impl<A: 'static + time::Frequency,
             time_source,
             accounted_energy: Cell::new(0),
             last_update_us: Cell::new(0),
-            adc_state: MapCell::new([Usage::Inactive; 5]),
+            adc_state: MapCell::new([Usage::Inactive; ADC_CHANNELS]),
         }
     }
 
@@ -78,28 +80,72 @@ impl<A: 'static + time::Frequency,
         // Update accounted usage for the time since the previous update call.
         let d_prev_call_us: usize = t_call_us - self.last_update_us.get();
 
-        // Look through all tracked state and accumulate usages.
-        let mut acc: usize = 0;
-        acc += self.adc_state.map(|adc_state| {
-            let mut acc = 0;
-            for channel_state in adc_state.iter() {
-                match channel_state {
-                    Usage::Inactive => {  },
+        let acc = self.adc_state.map(|adc_state| {
+            // Look through all tracked state and calculate their usages.
+            let mut in_use_count: u8 = 0;
+            let mut usages: [usize; ADC_CHANNELS] = [0; 5];
+            // Keep track of the largest usage.
+            // Use the ADC_CHANNELS constant to signify none assigned.
+            let mut base_usage_idx: Option<usize> = None;
+
+            for channel_no in 0..ADC_CHANNELS {
+                usages[channel_no] = match adc_state[channel_no] {
+                    Usage::Inactive => 0,
 
                     // Usage is still pending, so we are not ready to count this usage.
-                    Usage::Pending(_usage) => {  },
+                    Usage::Pending(_usage) => 0,
 
                     // One-shot operation completed.
                     // Count its usage.
-                    Usage::OneShot(usage) => acc += *usage,
+                    Usage::OneShot(usage) => {
+                        in_use_count += 1;
+                        usage
+                    },
 
                     // Long-term operation continues.
                     // Use how much time has passed to calculate its contribution.
-                    Usage::Long(usage_rate) => acc += (*usage_rate * d_prev_call_us),
+                    Usage::Long(usage_rate) => {
+                        in_use_count += 1;
+                        let usage = usage_rate * (d_prev_call_us / 1000) / 10;
+                        usage
+                    },
                 };
+
+                // Update base usage index.
+                if usages[channel_no] > 0 {
+                    // If we already have a base usage index, compare it to the channel we just looked at.
+                    // If it is greater, then we have a new base usage.
+                    // Otherwise, we simply use the usage we just looked at as the base usage
+                    // since there was no other usage looked at yet.
+                    if let Some(idx) = base_usage_idx {
+                        if usages[channel_no] < usages[idx] {
+                            base_usage_idx = Some(channel_no);
+                        }
+                    } else {
+                        base_usage_idx = Some(channel_no);
+                    }
+                }
             }
 
-            acc
+            // Sum up the usages according to my fancy heuristic.
+            if let Some(base_usage_idx) = base_usage_idx {
+                let mut acc_usage: usize = 0;
+                for i in 0..ADC_CHANNELS {
+                    if i == base_usage_idx {
+                        acc_usage += usages[i];
+                    } else {
+                        acc_usage += usages[i] / in_use_count as usize;
+                    }
+                }
+
+                acc_usage
+            } else {
+                // There was no base usage picked up, so there are no active usages.
+                // We return 0 here, and this call's only effect was to update the
+                // time we last performed the accounting update.
+                0
+            }
+
         }).unwrap();
 
         self.accounted_energy.set(self.accounted_energy.get() + acc as u64);
@@ -111,14 +157,14 @@ impl<A: 'static + time::Frequency,
      B: 'static + time::Ticks>
     DriverEnergyAccounting for SimultaneousAccounting<A, B>
 {
-    fn on_command(&self, invocation: &Syscall, outcome: &SyscallReturn) {
+    fn on_command(&self, invocation: &Syscall, _outcome: &SyscallReturn) {
         // Apply the state change signalled by the syscall.
         match invocation {
             Syscall::Command {
                 driver_number: driver_no,
                 subdriver_number: command_no,
                 arg0,
-                arg1
+                arg1: _,
             } => {
                 match *driver_no {
                     capsules::channeled_adc::DRIVER_NUM => {
@@ -146,7 +192,8 @@ impl<A: 'static + time::Frequency,
 
                             2 => {
                                 let channel_no = arg0;
-                                self.adc_state.map(|s| { s[*channel_no] = Usage::Long(14) });
+                                self.update_accounting();
+                                self.adc_state.map(|s| { s[*channel_no] = Usage::Long(36) });
                             },
 
                             // Stopping sampling on a channel.
@@ -200,7 +247,7 @@ impl<A: 'static + time::Frequency,
                 match upcall_info.driver_num {
                     capsules::channeled_adc::DRIVER_NUM => {
                         // We take a peek into the arguments since the driver uses the same callback.
-                        let (_sampling_type_no, channel_no) = (
+                        let (sampling_type_no, channel_no) = (
                             call.argument0,
                             call.argument1);
                         // kernel::debug!("adc upcall: {} ({}, {}, {}, {})",
@@ -210,16 +257,22 @@ impl<A: 'static + time::Frequency,
                         //                call.argument2,
                         //                call.argument3);
 
-                        // Mark the channel as one-shot if this was a pending usage.
-                        // The next update will count it toward the total and mark the channel as inactive.
-                        self.adc_state.map(|s| {
-                            let channel_usage = &mut s[channel_no];
-                            if let Usage::Pending(usage) = channel_usage {
-                                *channel_usage = Usage::OneShot(*usage);
-                            }
-                        });
+                        // Check the type of the sampling operation.
+                        // We only want to perform any state updates when it is a one-shot operation (type 0).
+                        if sampling_type_no == 0 {
+                            // Mark the channel as one-shot if this was a pending usage.
+                            // The next update will count it toward the total and mark the channel as inactive.
+                            self.adc_state.map(|s| {
+                                let channel_usage = &mut s[channel_no];
+                                if let Usage::Pending(usage) = channel_usage {
+                                    *channel_usage = Usage::OneShot(*usage);
+                                }
+                            });
 
-                        true
+                            true
+                        } else {
+                            false
+                        }
                     },
 
                     // Ignore all other drivers making upcalls.
