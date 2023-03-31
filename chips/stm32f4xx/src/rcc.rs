@@ -979,6 +979,34 @@ impl Rcc {
         self.registers.apb2enr.modify(APB2ENR::ADC1EN::CLEAR)
     }
 
+    // ADC2 clock
+
+    fn is_enabled_adc2_clock(&self) -> bool {
+        self.registers.apb2enr.is_set(APB2ENR::ADC2EN)
+    }
+
+    fn enable_adc2_clock(&self) {
+        self.registers.apb2enr.modify(APB2ENR::ADC2EN::SET)
+    }
+
+    fn disable_adc2_clock(&self) {
+        self.registers.apb2enr.modify(APB2ENR::ADC2EN::CLEAR)
+    }
+
+    // ADC3 clock
+
+    fn is_enabled_adc3_clock(&self) -> bool {
+        self.registers.apb2enr.is_set(APB2ENR::ADC3EN)
+    }
+
+    fn enable_adc3_clock(&self) {
+        self.registers.apb2enr.modify(APB2ENR::ADC3EN::SET)
+    }
+
+    fn disable_adc3_clock(&self) {
+        self.registers.apb2enr.modify(APB2ENR::ADC3EN::CLEAR)
+    }
+
     // RNG clock
 
     fn is_enabled_rng_clock(&self) -> bool {
@@ -1066,6 +1094,8 @@ pub enum PCLK1 {
 /// Peripherals clocked by PCLK2
 pub enum PCLK2 {
     ADC1,
+    ADC2,
+    ADC3,
     SYSCFG,
 }
 
@@ -1109,6 +1139,8 @@ impl<'a> ClockInterface for PeripheralClock<'a> {
             },
             PeripheralClockType::APB2(ref v) => match v {
                 PCLK2::ADC1 => self.rcc.is_enabled_adc1_clock(),
+                PCLK2::ADC2 => self.rcc.is_enabled_adc2_clock(),
+                PCLK2::ADC3 => self.rcc.is_enabled_adc3_clock(),
                 PCLK2::SYSCFG => self.rcc.is_enabled_syscfg_clock(),
             },
         }
@@ -1177,6 +1209,15 @@ impl<'a> ClockInterface for PeripheralClock<'a> {
                 PCLK2::ADC1 => {
                     self.rcc.enable_adc1_clock();
                 }
+
+                PCLK2::ADC2 => {
+                    self.rcc.enable_adc2_clock();
+                }
+
+                PCLK2::ADC3 => {
+                    self.rcc.enable_adc3_clock();
+                }
+
                 PCLK2::SYSCFG => {
                     self.rcc.enable_syscfg_clock();
                 }
@@ -1247,6 +1288,15 @@ impl<'a> ClockInterface for PeripheralClock<'a> {
                 PCLK2::ADC1 => {
                     self.rcc.disable_adc1_clock();
                 }
+
+                PCLK2::ADC2 => {
+                    self.rcc.disable_adc2_clock();
+                }
+
+                PCLK2::ADC3 => {
+                    self.rcc.disable_adc3_clock();
+                }
+
                 PCLK2::SYSCFG => {
                     self.rcc.disable_syscfg_clock();
                 }

@@ -60,6 +60,7 @@ struct NucleoF446RE {
         'static,
         VirtualMuxAlarm<'static, stm32f446re::tim2::Tim2<'static>>,
     >,
+    adc: &'static capsules::channeled_adc::ChanneledADC<stm32f446re::adc::Adc<'static>>,
 
     scheduler: &'static RoundRobinSched<'static>,
     systick: cortexm4::systick::SysTick,
@@ -76,6 +77,7 @@ impl SyscallDriverLookup for NucleoF446RE {
             capsules::led::DRIVER_NUM => f(Some(self.led)),
             capsules::button::DRIVER_NUM => f(Some(self.button)),
             capsules::alarm::DRIVER_NUM => f(Some(self.alarm)),
+            capsules::channeled_adc::DRIVER_NUM => f(Some(self.adc)),
             kernel::ipc::DRIVER_NUM => f(Some(&self.ipc)),
             _ => f(None),
         }
@@ -331,7 +333,41 @@ pub unsafe fn main() {
         capsules::alarm::DRIVER_NUM,
         mux_alarm,
     )
-    .finalize(components::alarm_component_helper!(stm32f446re::tim2::Tim2));
+        .finalize(components::alarm_component_helper!(stm32f446re::tim2::Tim2));
+
+    let channeled_adc_capsule = {
+        use stm32f446re::adc::Channel;
+        let channels = static_init!([Channel; 19], [
+                Channel::Channel0,
+                Channel::Channel1,
+                Channel::Channel2,
+                Channel::Channel3,
+                Channel::Channel4,
+                Channel::Channel5,
+                Channel::Channel6,
+                Channel::Channel7,
+                Channel::Channel8,
+                Channel::Channel9,
+                Channel::Channel10,
+                Channel::Channel11,
+                Channel::Channel12,
+                Channel::Channel13,
+                Channel::Channel14,
+                Channel::Channel15,
+                Channel::Channel16,
+                Channel::Channel17,
+                Channel::Channel18,
+        ]);
+
+        static_init!(capsules::channeled_adc::ChanneledADC::<stm32f446re::adc::Adc<'static>>,
+                     capsules::channeled_adc::ChanneledADC::<stm32f446re::adc::Adc<'static>>::new(
+                         &peripherals.stm32f4.adc1,
+                         channels,
+                         board_kernel.create_grant(capsules::channeled_adc::DRIVER_NUM,
+                                                   &memory_allocation_capability)))
+    };
+    use kernel::hil::adc::Adc;
+    peripherals.stm32f4.adc1.set_client(channeled_adc_capsule);
 
     // PROCESS CONSOLE
     let _process_console =
@@ -351,6 +387,7 @@ pub unsafe fn main() {
         led: led,
         button: button,
         alarm: alarm,
+        adc: channeled_adc_capsule,
 
         scheduler,
         systick: cortexm4::systick::SysTick::new(),

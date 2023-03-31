@@ -1,12 +1,16 @@
 use crate::rcc;
+use crate::rcc::{PeripheralClock, PeripheralClockType};
 use core::cell::Cell;
 use kernel::hil;
+use kernel::hil::time::{Frequency, Time};
 use kernel::platform::chip::ClockInterface;
-use kernel::utilities::cells::OptionalCell;
+use kernel::utilities::cells::{MapCell, OptionalCell};
 use kernel::utilities::registers::interfaces::{ReadWriteable, Readable};
 use kernel::utilities::registers::{register_bitfields, ReadOnly, ReadWrite};
 use kernel::utilities::StaticRef;
 use kernel::ErrorCode;
+
+use crate::tim2::{CCConfig, Tim2};
 
 pub trait EverythingClient: hil::adc::Client + hil::adc::HighSpeedClient {}
 impl<C: hil::adc::Client + hil::adc::HighSpeedClient> EverythingClient for C {}
@@ -39,6 +43,7 @@ struct AdcRegisters {
 struct AdcCommonRegisters {
     csr: ReadOnly<u32, CSR::Register>,
     ccr: ReadWrite<u32, CCR::Register>,
+    cdr: ReadOnly<u32, CDR::Register>,
 }
 
 register_bitfields![u32,
@@ -93,9 +98,37 @@ register_bitfields![u32,
         /// Start conversion of regular channels
         SWSTART OFFSET(30) NUMBITS(1) [],
         /// External trigger enable for regular channels
-        EXTEN OFFSET(28) NUMBITS(2) [],
+        EXTEN OFFSET(28) NUMBITS(2) [
+            DISABLED = 0b00,
+            RISING = 0b01,
+            FALLING = 0b10,
+            BOTH = 0b11,
+        ],
         /// External event select for regular group
-        EXTSEL OFFSET(24) NUMBITS(4) [],
+        EXTSEL OFFSET(24) NUMBITS(4) [
+            TIM1_CC1 = 0b0000,
+            TIM1_CC2 = 0b0001,
+            TIM1_CC3 = 0b0010,
+
+            TIM2_CC2 = 0b0011,
+            TIM2_CC3 = 0b0100,
+            TIM2_CC4 = 0b0101,
+            TIM2_TRGO = 0b0110,
+
+            TIM3_CC1 = 0b0111,
+            TIM3_TRGO = 0b1000,
+
+            TIM4_CC4 = 0b1001,
+
+            TIM5_CC1 = 0b1010,
+            TIM5_CC2 = 0b1011,
+            TIM5_CC3 = 0b1100,
+
+            TIM8_CC1 = 0b1101,
+            TIM8_TRGO = 0b1110,
+
+            EXTI_LINE11 = 0b1111,
+        ],
         /// Start conversion of injected channels
         JSWSTART OFFSET(22) NUMBITS(1) [],
         /// External trigger enable for injected channels
@@ -253,15 +286,68 @@ register_bitfields![u32,
         /// VBAT enable
         VBATE OFFSET(22) NUMBITS(1) [],
         /// ADC prescaler
-        ADCPRE OFFSET(16) NUMBITS(2) []
-    ]
+        ADCPRE OFFSET(16) NUMBITS(2) [
+            PCLKDIV2 = 0b00,
+            PCLKDIV4 = 0b01,
+            PCLKDIV6 = 0b10,
+            PCLKDIV8 = 0b11,
+        ]
+    ],
+
+    /// Common regular data register
+    CDR [
+        OVR3 OFFSET(21) NUMBITS(1) [],
+        STRT3 OFFSET(20) NUMBITS(1) [],
+        JSTRT3 OFFSET(19) NUMBITS(1) [],
+        JEOC3 OFFSET(18) NUMBITS(1) [],
+        EOC3 OFFSET(17) NUMBITS(1) [],
+        AWD3 OFFSET(16) NUMBITS(1) [],
+
+        OVR2 OFFSET(13) NUMBITS(1) [],
+        STRT2 OFFSET(12) NUMBITS(1) [],
+        JSTRT2 OFFSET(11) NUMBITS(1) [],
+        JEOC2 OFFSET(10) NUMBITS(1) [],
+        EOC2 OFFSET(9) NUMBITS(1) [],
+        AWD2 OFFSET(8) NUMBITS(1) [],
+
+        OVR1 OFFSET(5) NUMBITS(1) [],
+        STRT1 OFFSET(4) NUMBITS(1) [],
+        JSTRT1 OFFSET(3) NUMBITS(1) [],
+        JEOC1 OFFSET(2) NUMBITS(1) [],
+        EOC1 OFFSET(1) NUMBITS(1) [],
+        AWD1 OFFSET(0) NUMBITS(1) [],
+    ],
 ];
 
 const ADC1_BASE: StaticRef<AdcRegisters> =
     unsafe { StaticRef::new(0x4001_2000 as *const AdcRegisters) };
 
+const ADC2_BASE: StaticRef<AdcRegisters> =
+    unsafe { StaticRef::new(0x4001_2100 as *const AdcRegisters) };
+
+const ADC3_BASE: StaticRef<AdcRegisters> =
+    unsafe { StaticRef::new(0x4001_2200 as *const AdcRegisters) };
+
 const ADC_COMMON_BASE: StaticRef<AdcCommonRegisters> =
     unsafe { StaticRef::new(0x4001_2300 as *const AdcCommonRegisters) };
+
+/// Channel sampling time.
+///
+/// It is possible for each sample to spend different amounts of time sampling.
+/// This is configurable through the ADC_SMPR1 and ADC_SMPR2 registers.
+/// The registers have fields for each channel.
+#[repr(u8)]
+#[derive(Clone, Copy, PartialEq)]
+enum SamplingTime {
+    Cycles3   = 0b000,
+    Cycles15  = 0b001,
+    Cycles28  = 0b010,
+    Cycles56  = 0b011,
+    Cycles84  = 0b100,
+    Cycles112 = 0b101,
+    Cycles144 = 0b110,
+    Cycles480 = 0b111,
+}
 
 #[allow(dead_code)]
 #[repr(u32)]
@@ -299,76 +385,145 @@ enum DataResolution {
 
 #[derive(Copy, Clone, PartialEq)]
 enum ADCStatus {
-    Idle,
     Off,
+    Idle,
     OneSample,
+    Continuous(u8),
 }
 
-pub struct Adc<'a> {
-    registers: StaticRef<AdcRegisters>,
-    common_registers: StaticRef<AdcCommonRegisters>,
+struct SubADC<'a> {
     clock: AdcClock<'a>,
+    registers: StaticRef<AdcRegisters>,
     status: Cell<ADCStatus>,
-    client: OptionalCell<&'static dyn hil::adc::Client>,
+    cc_config: MapCell<CCConfig>,
+    sample_ticks: OptionalCell<usize>,
 }
 
-impl<'a> Adc<'a> {
-    pub const fn new(rcc: &'a rcc::Rcc) -> Adc {
-        Adc {
-            registers: ADC1_BASE,
-            common_registers: ADC_COMMON_BASE,
-            clock: AdcClock(rcc::PeripheralClock::new(
-                rcc::PeripheralClockType::APB2(rcc::PCLK2::ADC1),
-                rcc,
-            )),
+impl<'a> SubADC<'a> {
+    const fn new(clock: AdcClock<'a>,
+                 registers: StaticRef<AdcRegisters>) -> SubADC {
+        SubADC {
+            clock,
+            registers,
             status: Cell::new(ADCStatus::Off),
-            client: OptionalCell::empty(),
+            cc_config: MapCell::empty(),
+            sample_ticks: OptionalCell::empty(),
         }
     }
 
     pub fn enable(&self) {
-        // Enable adc clock
-        self.enable_clock();
-
-        // Enable ADC
+        kernel::debug!("powering ADC...");
+        if !self.clock.is_enabled() {
+            self.clock.enable();
+        }
         self.registers.cr2.modify(CR2::ADON::SET);
-
-        // set idle state
+        while self.registers.cr2.read(CR2::ADON) != 1 {  }
         self.status.set(ADCStatus::Idle);
     }
 
-    pub fn handle_interrupt(&self) {
-        // Check if regular group conversion ended
-        if self.registers.sr.is_set(SR::EOC) {
-            // Clear interrupt
-            self.registers.cr1.modify(CR1::EOCIE::CLEAR);
-            if self.status.get() == ADCStatus::OneSample {
-                // set state
-                self.status.set(ADCStatus::Idle);
-            }
-            self.client
-                .map(|client| client.sample_ready((self.registers.dr.read(DR::DATA) as u16) << 4));
+    pub fn disable(&self) {
+        kernel::debug!("disabling ADC...");
+        if self.clock.is_enabled() {
+            self.clock.disable();
+        }
+        self.registers.cr2.modify(CR2::ADON::CLEAR);
+        while self.registers.cr2.read(CR2::ADON) == 1 {  }
+        self.status.set(ADCStatus::Off);
+    }
+
+    #[inline]
+    fn is_available(&self) -> bool {
+        let status = self.status.get();
+        status == ADCStatus::Off || status == ADCStatus::Idle
+    }
+
+    fn reset(&self) {
+        if let Some(f) = self.sample_ticks.extract() {
+            self.cc_config.map(|ccc| ccc.schedule_in(f as u32));
+        }
+    }
+}
+
+pub struct Adc<'a> {
+    adcs: [MapCell<SubADC<'a>>; 3],
+    common_registers: StaticRef<AdcCommonRegisters>,
+    client: OptionalCell<&'static dyn hil::adc::Client>,
+    timer: OptionalCell<&'a Tim2<'a>>,
+}
+
+impl<'a> Adc<'a> {
+    pub const fn new(rcc: &'a rcc::Rcc) -> Adc<'a> {
+        Adc {
+            adcs: [MapCell::new(SubADC::new(AdcClock(PeripheralClock::new(PeripheralClockType::APB2(rcc::PCLK2::ADC1), rcc)), ADC1_BASE)),
+                   MapCell::new(SubADC::new(AdcClock(PeripheralClock::new(PeripheralClockType::APB2(rcc::PCLK2::ADC2), rcc)), ADC2_BASE)),
+                   MapCell::new(SubADC::new(AdcClock(PeripheralClock::new(PeripheralClockType::APB2(rcc::PCLK2::ADC3), rcc)), ADC3_BASE))],
+            common_registers: ADC_COMMON_BASE,
+            client: OptionalCell::empty(),
+            timer: OptionalCell::empty(),
         }
     }
 
-    pub fn is_enabled_clock(&self) -> bool {
-        self.clock.is_enabled()
+    pub fn configure(&self, timer: &'a Tim2<'a>) {
+        self.common_registers.ccr.modify(CCR::ADCPRE::PCLKDIV8);
+        self.timer.set(timer);
     }
 
-    pub fn enable_clock(&self) {
-        self.clock.enable();
-    }
+    pub fn handle_interrupt(&self) {
+        // kernel::debug!("bh: ADC interrupt");
+        // Find out which ADC this was for.
+        // Read the common status to get status of all ADCs in just one read.
+        let common_status = self.common_registers.csr.get();
+        // kernel::debug!("bh: common status: {:X}", common_status);
+        // kernel::debug!("bh: adc2 cr1: {:X}, cr2: {:X}",
+        //                self.adcs[1].map(|adc| adc.registers.cr1.get()).unwrap(),
+        //                self.adcs[1].map(|adc| adc.registers.cr2.get()).unwrap());
+        for adc_no in 0..2 {
+            // Check each's EOC bit.
+            if ((common_status >> (1 + (8 * adc_no))) & 1) == 1 {
+                // kernel::debug!("bh: it is for ADC {}", adc_no);
+                let (channel_no, sample) = self.adcs[adc_no].map(|adc| {
+                    if adc.status.get() == ADCStatus::OneSample {
+                        adc.registers.cr1.modify(CR1::EOCIE::CLEAR);
+                        adc.status.set(ADCStatus::Idle);
+                        adc.registers.cr2.modify(CR2::ADON::CLEAR);
+                        adc.disable();
+                        adc.status.set(ADCStatus::Off);
+                    }
 
-    pub fn disable_clock(&self) {
-        self.clock.disable();
+                    let source_channel = adc.registers.sqr3.read(SQR3::SQ1);
+                    // Reading the DR register clears the status register EOC bit.
+                    let sample = adc.registers.dr.read(DR::DATA);
+
+                    // Reschedule the next sample for continuous sampling.
+                    adc.reset();
+
+                    (source_channel, sample)
+                }).unwrap();
+
+                // There is currently no parameter that would provide the ADC channel.
+                // Instead, employ a hack to encode the source ADC channel with the callback to the driver.
+                // We use the top four bits of the u16 to hold the channel no.
+                let sample_with_channel: u16 = ((channel_no as u16) << 12) | ((sample as u16) & 0x0FFF);
+                self.client.map(|c| c.sample_ready(sample_with_channel));
+            }
+        }
     }
 
     pub fn enable_temperature(&self) {
         self.common_registers.ccr.modify(CCR::TSVREFE::SET);
     }
+
+    /// Find an inactive ADC component that can sample.
+    ///
+    /// Inspects all internal ADCs and returns the first inactive one.
+    /// Returns None if no ADC is free.
+    fn inactive_adc(&self) -> Option<&MapCell<SubADC<'a>>> {
+        self.adcs.iter()
+            .find(|mc_adc| mc_adc.map(|adc| adc.is_available()).unwrap())
+    }
 }
 
-struct AdcClock<'a>(rcc::PeripheralClock<'a>);
+struct AdcClock<'a>(PeripheralClock<'a>);
 
 impl ClockInterface for AdcClock<'_> {
     fn is_enabled(&self) -> bool {
@@ -388,18 +543,21 @@ impl hil::adc::Adc for Adc<'_> {
     type Channel = Channel;
 
     fn sample(&self, channel: &Self::Channel) -> Result<(), ErrorCode> {
-        if self.status.get() == ADCStatus::Off {
-            self.enable();
-        }
-        if *channel as u32 == 18 {
-            self.enable_temperature();
-        }
-        if self.status.get() == ADCStatus::Idle {
-            self.status.set(ADCStatus::OneSample);
-            self.registers.sqr1.modify(SQR1::L.val(0b0000));
-            self.registers.sqr3.modify(SQR3::SQ1.val(*channel as u32));
-            self.registers.cr1.modify(CR1::EOCIE::SET);
-            self.registers.cr2.modify(CR2::SWSTART::SET);
+        // Find an off/idle ADC.
+        if let Some(mc_adc) = self.inactive_adc() {
+            mc_adc.map(|adc| {
+                if adc.status.get() == ADCStatus::Off {
+                    adc.enable();
+                }
+
+                adc.status.set(ADCStatus::OneSample);
+                // adc.registers.smpr2.modify(SMPR2::SMP0.val(0b110));
+                adc.registers.sqr1.modify(SQR1::L.val(0));
+                adc.registers.sqr3.modify(SQR3::SQ1.val(*channel as u32));
+                adc.registers.cr1.modify(CR1::EOCIE::SET);
+                adc.registers.cr2.modify(CR2::SWSTART::SET);
+            }).unwrap();
+
             Ok(())
         } else {
             Err(ErrorCode::BUSY)
@@ -408,14 +566,94 @@ impl hil::adc::Adc for Adc<'_> {
 
     fn sample_continuous(
         &self,
-        _channel: &Self::Channel,
-        _frequency: u32,
+        channel: &Self::Channel,
+        frequency: u32,
     ) -> Result<(), ErrorCode> {
-        Err(ErrorCode::NOSUPPORT)
+        // Cannot sample faster than the timer's frequency.
+        if frequency > <Tim2<'_> as Time>::Frequency::frequency() {
+            return Err(ErrorCode::INVAL);
+        }
+
+        // Find an off/idle ADC.
+        if let Some(mc_adc) = self.inactive_adc() {
+            mc_adc.map(|adc| {
+                if adc.status.get() == ADCStatus::Off {
+                    adc.enable();
+                }
+
+                adc.status.set(ADCStatus::Continuous(*channel as u32 as u8));
+                // adc.registers.smpr2.modify(SMPR2::SMP0.val(0b001));
+                adc.registers.sqr1.modify(SQR1::L.val(0));
+                adc.registers.sqr3.modify(SQR3::SQ1.val(*channel as u32));
+                adc.registers.cr1.modify(CR1::EOCIE::SET);
+
+                // Start a new conversion as soon as the previous one finishes.
+                // This produces samples at a _very_ fast rate---faster than Tock can keep up.
+                // adc.registers.cr2.modify(CR2::CONT::SET);
+                // adc.registers.cr2.modify(CR2::SWSTART::SET);
+
+                // Use the timer to trigger conversions close to a specific frequency.
+                let cc_config = self.timer
+                    .expect("no timer set")
+                    .allocate_channel()
+                    .unwrap();
+                kernel::debug!("allocated timer CC channel {}", cc_config.channel_no());
+                adc.registers.cr2.modify(match cc_config.channel_no() {
+                    2 => CR2::EXTSEL::TIM2_CC2,
+                    3 => CR2::EXTSEL::TIM2_CC3,
+                    4 => CR2::EXTSEL::TIM2_CC4,
+                    // There are only specific channels that we can use to perform periodic sampling.
+                    // There must be some way to state the channels that are capable of doing this.
+                    // But, for the sake of science, we make shortcut here and just throw an error
+                    // if we cannot get Timer2's channels 2, 3, or 4.
+                    _ => unimplemented!(),
+                });
+                let ticks_per_sample = <Tim2<'_> as Time>::Frequency::frequency() / frequency;
+                cc_config.output_compare(ticks_per_sample);
+                adc.cc_config.put(cc_config);
+                adc.sample_ticks.set(ticks_per_sample as usize);
+                adc.registers.cr2.modify(CR2::EXTEN::BOTH);
+
+                // kernel::debug!("CR1: {:X}", adc.registers.cr1.get());
+                // kernel::debug!("CR2: {:X}", adc.registers.cr2.get());
+            }).unwrap();
+
+            Ok(())
+        } else {
+            Err(ErrorCode::BUSY)
+        }
     }
 
     fn stop_sampling(&self) -> Result<(), ErrorCode> {
         Err(ErrorCode::NOSUPPORT)
+    }
+
+    fn stop_sampling_channel(&self, channel_no: usize) -> Result<(), ErrorCode> {
+        let sampling_adc = self.adcs.iter()
+            .find(|mc_adc| {
+                mc_adc.map(|adc| match adc.status.get() {
+                    ADCStatus::Continuous(currently_sampling) => currently_sampling as usize == channel_no,
+                    _ => false
+                }).unwrap()
+            });
+
+        if let Some(sampling_adc) = sampling_adc {
+            sampling_adc.map(|adc| {
+                adc.registers.cr1.modify(CR1::EOCIE::CLEAR);
+                // We do not use the continuous conversion to periodically sample.
+                // adc.registers.cr2.modify(CR2::CONT::CLEAR);
+                adc.registers.cr2.modify(CR2::ADON::CLEAR);
+                adc.status.set(ADCStatus::Off);
+                adc.registers.cr2.modify(CR2::EXTEN::DISABLED);
+                adc.sample_ticks.clear();
+                let cc_config = adc.cc_config.take().unwrap();
+                self.timer.map(|t| (*t).deallocate_channel(&cc_config));
+
+                Ok(())
+            }).unwrap()
+        } else {
+            Err(ErrorCode::INVAL)
+        }
     }
 
     fn get_resolution_bits(&self) -> usize {

@@ -167,7 +167,12 @@ register_bitfields![u32,
         /// OC2CE
         OC2CE OFFSET(15) NUMBITS(1) [],
         /// OC2M
-        OC2M OFFSET(12) NUMBITS(3) [],
+        OC2M OFFSET(12) NUMBITS(3) [
+            KEEP_LEVEL = 0b00,
+            SET_ACTIVE = 0b01,
+            SET_INACTIVE = 0b10,
+            TOGGLE = 0b11,
+        ],
         /// OC2PE
         OC2PE OFFSET(11) NUMBITS(1) [],
         /// OC2FE
@@ -203,7 +208,12 @@ register_bitfields![u32,
         /// O24CE
         O24CE OFFSET(15) NUMBITS(1) [],
         /// OC4M
-        OC4M OFFSET(12) NUMBITS(3) [],
+        OC4M OFFSET(12) NUMBITS(3) [
+            KEEP_LEVEL = 0b00,
+            SET_ACTIVE = 0b01,
+            SET_INACTIVE = 0b10,
+            TOGGLE = 0b11,
+        ],
         /// OC4PE
         OC4PE OFFSET(11) NUMBITS(1) [],
         /// OC4FE
@@ -213,7 +223,12 @@ register_bitfields![u32,
         /// OC3CE
         OC3CE OFFSET(7) NUMBITS(1) [],
         /// OC3M
-        OC3M OFFSET(4) NUMBITS(3) [],
+        OC3M OFFSET(4) NUMBITS(3) [
+            KEEP_LEVEL = 0b00,
+            SET_ACTIVE = 0b01,
+            SET_INACTIVE = 0b10,
+            TOGGLE = 0b11,
+        ],
         /// OC3PE
         OC3PE OFFSET(3) NUMBITS(1) [],
         /// OC3FE
@@ -308,11 +323,82 @@ register_bitfields![u32,
 const TIM2_BASE: StaticRef<Tim2Registers> =
     unsafe { StaticRef::new(0x40000000 as *const Tim2Registers) };
 
+/// Configuration for a single capture/control register.
+///
+/// We supply the registers to allow each instance to update its own registers
+/// through functions on CCConfig.
+#[derive(Clone)]
+pub struct CCConfig {
+    channel_no: u8,
+    registers: StaticRef<Tim2Registers>,
+}
+
+impl CCConfig {
+    const fn new(channel_no: u8) -> CCConfig {
+        CCConfig {
+            channel_no,
+            registers: TIM2_BASE,
+        }
+    }
+
+    pub fn channel_no(&self) -> u8 {
+        self.channel_no
+    }
+
+    pub fn output_compare(&self, compare_value: u32) {
+        match self.channel_no {
+            1 => panic!("configuring channel used for alarms"),
+
+            2 => {
+                self.registers.ccr2.set(self.registers.cnt.get() + compare_value + 8000);
+                self.registers.ccmr1_output.modify(CCMR1_Output::OC2M::TOGGLE);
+                self.registers.ccmr1_output.modify(CCMR1_Output::OC2PE::CLEAR);
+                self.registers.sr.modify(SR::CC2IF::CLEAR);
+                self.registers.ccer.modify(CCER::CC2E::SET);
+            },
+
+            3 => {
+                self.registers.ccr3.set(self.registers.cnt.get() + compare_value + 8000);
+                self.registers.ccmr2_output.modify(CCMR2_Output::OC3M::TOGGLE);
+                self.registers.ccmr2_output.modify(CCMR2_Output::OC3PE::CLEAR);
+                self.registers.sr.modify(SR::CC3IF::CLEAR);
+                self.registers.ccer.modify(CCER::CC3E::SET);
+            },
+
+            4 => unimplemented!(),
+
+            _ => panic!(),
+        };
+    }
+
+    pub fn schedule_in(&self, offset: u32) {
+        match self.channel_no {
+            1 => panic!("configuring channel used for alarms"),
+
+            2 => {
+                self.registers.sr.modify(SR::CC2IF::CLEAR);
+                self.registers.ccr2.set(self.registers.cnt.get().wrapping_add(offset));
+            },
+
+            3 => {
+                self.registers.sr.modify(SR::CC3IF::CLEAR);
+                self.registers.ccr3.set(self.registers.cnt.get().wrapping_add(offset));
+            },
+
+            4 => unimplemented!(),
+
+            _ => panic!(),
+        }
+    }
+}
+
 pub struct Tim2<'a> {
     registers: StaticRef<Tim2Registers>,
     clock: Tim2Clock<'a>,
     client: OptionalCell<&'a dyn AlarmClient>,
     irqn: u32,
+
+    channels: [OptionalCell<CCConfig>; 4],
 }
 
 impl<'a> Tim2<'a> {
@@ -325,6 +411,11 @@ impl<'a> Tim2<'a> {
             )),
             client: OptionalCell::empty(),
             irqn: nvic::TIM2,
+
+            channels: [OptionalCell::new(CCConfig::new(1)), // CC channel 1 is used to keep track of time.
+                       OptionalCell::empty(),
+                       OptionalCell::empty(),
+                       OptionalCell::empty()],
         }
     }
 
@@ -342,7 +433,6 @@ impl<'a> Tim2<'a> {
 
     pub fn handle_interrupt(&self) {
         self.registers.sr.modify(SR::CC1IF::CLEAR);
-
         self.client.map(|client| client.alarm());
     }
 
@@ -358,6 +448,28 @@ impl<'a> Tim2<'a> {
         self.registers.psc.set((999 - 1) as u32);
         self.registers.egr.write(EGR::UG::SET);
         self.registers.cr1.modify(CR1::CEN::SET);
+    }
+
+    /// Allocate a timer capture/compare channel.
+    ///
+    /// The timer peripheral includes multiple CC channels which can work independently based on the timer activity.
+    /// Use these to trigger interrupts or perform periodic operations in other peripherals.
+    pub fn allocate_channel(&self) -> Option<CCConfig> {
+        for i in 0..self.channels.len() {
+            if self.channels[i].is_none() {
+                let config = CCConfig::new((i + 1) as u8); // Channel enumeration starts at 1.
+                self.channels[i].set(config.clone());
+
+                return Some(config);
+            }
+        }
+
+        return None;
+    }
+
+    /// Deallocate a timer capture/compare channel.
+    pub fn deallocate_channel(&self, channel: &CCConfig) {
+        self.channels[channel.channel_no as usize].clear();
     }
 }
 
