@@ -6,6 +6,7 @@ use kernel::utilities::StaticRef;
 
 use crate::nvic;
 use crate::rcc;
+use crate::rcc::PeripheralClock;
 use crate::spi;
 use crate::usart;
 
@@ -116,6 +117,25 @@ struct Dma1Registers {
     s7m1ar: ReadWrite<u32>,
     /// stream x FIFO control register
     s7fcr: ReadWrite<u32, S7FCR::Register>,
+}
+
+#[repr(C)]
+pub struct DMARegisters {
+    lisr: ReadOnly<u32, LISR::Register>,
+    hisr: ReadOnly<u32, HISR::Register>,
+    lifcr: ReadWrite<u32, LIFCR::Register>,
+    hifcr: ReadWrite<u32, HIFCR::Register>,
+    stream_registers: [StreamRegisters; 8],
+}
+
+#[repr(C)]
+pub struct StreamRegisters {
+    sxcr: ReadWrite<u32, SXCR::Register>,
+    sxndtr: ReadWrite<u32>,
+    sxpar: ReadWrite<u32>,
+    sxm0ar: ReadWrite<u32>,
+    sxm1ar: ReadWrite<u32>,
+    sxfcr: ReadWrite<u32, SXFCR::Register>,
 }
 
 register_bitfields![u32,
@@ -287,6 +307,59 @@ register_bitfields![u32,
         /// Stream x clear FIFO error interrupt flag (x = 7..4)
         CFEIF4 OFFSET(0) NUMBITS(1) []
     ],
+
+    SXCR [
+        /// Channel selection
+        CHSEL OFFSET(25) NUMBITS(3) [],
+        /// Memory burst transfer configuration
+        MBURST OFFSET(23) NUMBITS(2) [],
+        /// Peripheral burst transfer configuration
+        PBURST OFFSET(21) NUMBITS(2) [],
+        /// Current target (only in double buffer mode)
+        CT OFFSET(19) NUMBITS(1) [],
+        /// Double buffer mode
+        DBM OFFSET(18) NUMBITS(1) [],
+        /// Priority level
+        PL OFFSET(16) NUMBITS(2) [],
+        /// Peripheral increment offset size
+        PINCOS OFFSET(15) NUMBITS(1) [],
+        /// Memory data size
+        MSIZE OFFSET(13) NUMBITS(2) [],
+        /// Peripheral data size
+        PSIZE OFFSET(11) NUMBITS(2) [],
+        /// Memory increment mode
+        MINC OFFSET(10) NUMBITS(1) [],
+        /// Peripheral increment mode
+        PINC OFFSET(9) NUMBITS(1) [],
+        /// Circular mode
+        CIRC OFFSET(8) NUMBITS(1) [],
+        /// Data transfer direction
+        DIR OFFSET(6) NUMBITS(2) [],
+        /// Peripheral flow controller
+        PFCTRL OFFSET(5) NUMBITS(1) [],
+        /// Transfer complete interrupt enable
+        TCIE OFFSET(4) NUMBITS(1) [],
+        /// Half transfer interrupt enable
+        HTIE OFFSET(3) NUMBITS(1) [],
+        /// Transfer error interrupt enable
+        TEIE OFFSET(2) NUMBITS(1) [],
+        /// Direct mode error interrupt enable
+        DMEIE OFFSET(1) NUMBITS(1) [],
+        /// Stream enable / flag stream ready when read low
+        EN OFFSET(0) NUMBITS(1) []
+    ],
+
+    SXFCR [
+        /// FIFO error interrupt enable
+        FEIE OFFSET(7) NUMBITS(1) [],
+        /// FIFO status
+        FS OFFSET(3) NUMBITS(3) [],
+        /// Direct mode disable
+        DMDIS OFFSET(2) NUMBITS(1) [],
+        /// FIFO threshold selection
+        FTH OFFSET(0) NUMBITS(2) []
+    ],
+
     S0CR [
         /// Channel selection
         CHSEL OFFSET(25) NUMBITS(3) [],
@@ -705,6 +778,8 @@ register_bitfields![u32,
 
 const DMA1_BASE: StaticRef<Dma1Registers> =
     unsafe { StaticRef::new(0x40026000 as *const Dma1Registers) };
+const DMA2_BASE: StaticRef<DMARegisters> =
+    unsafe { StaticRef::new(0x4002_6000 as *const DMARegisters) };
 
 /// The DMA stream number. What other microcontrollers refer to as "channel",
 /// STM32F446RE refers to as "streams". STM32F446RE has eight streams. A stream
@@ -1546,4 +1621,12 @@ impl ClockInterface for Dma1Clock<'_> {
     fn disable(&self) {
         self.0.disable();
     }
+}
+
+pub struct DMA {
+    registers: StaticRef<DMARegisters>,
+    clock: PeripheralClock<'static>,
+}
+
+impl DMA {
 }
