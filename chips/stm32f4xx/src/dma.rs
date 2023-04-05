@@ -1,5 +1,6 @@
 //! Direct Memory Access driver.
 
+use kernel::hil;
 use kernel::platform::chip::ClockInterface;
 use kernel::utilities::cells::{OptionalCell, TakeCell};
 use kernel::utilities::registers::interfaces::{ReadWriteable, Readable, Writeable};
@@ -8,7 +9,7 @@ use kernel::utilities::StaticRef;
 
 use crate::nvic;
 use crate::rcc;
-use crate::rcc::PeripheralClock;
+use crate::rcc::{PeripheralClock, Rcc};
 
 #[repr(C)]
 pub struct DMARegisters {
@@ -252,15 +253,64 @@ register_bitfields![u32,
     ]
 ];
 
-const DMA1_BASE: StaticRef<Dma1Registers> =
-    unsafe { StaticRef::new(0x40026000 as *const Dma1Registers) };
-const DMA2_BASE: StaticRef<DMARegisters> =
+const DMA1_BASE: StaticRef<DMARegisters> =
     unsafe { StaticRef::new(0x4002_6000 as *const DMARegisters) };
+const DMA2_BASE: StaticRef<DMARegisters> =
+    unsafe { StaticRef::new(0x4002_6400 as *const DMARegisters) };
+
+/// Specifiers for the DMA controllers.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Controller {
+    DMA1,
+    DMA2,
+}
+
+pub struct Stream {
+    registers: &'static StreamRegisters,
+}
+
+impl Stream {
+    unsafe fn unconfigured(registers: &'static StreamRegisters) -> Stream {
+        Stream {
+            registers,
+        }
+    }
+}
 
 pub struct DMA {
     registers: StaticRef<DMARegisters>,
     clock: PeripheralClock<'static>,
+    streams: [Stream; 8],
 }
 
 impl DMA {
+    pub unsafe fn get_dma(controller: Controller, rcc: &'static Rcc) -> DMA {
+        match controller {
+            Controller::DMA1 => DMA {
+                registers: DMA1_BASE,
+                clock: PeripheralClock::new(rcc::PeripheralClockType::AHB1(rcc::HCLK1::DMA1), rcc),
+                streams: [Stream::unconfigured(&DMA1_BASE.stream_registers[0]),
+                          Stream::unconfigured(&DMA1_BASE.stream_registers[1]),
+                          Stream::unconfigured(&DMA1_BASE.stream_registers[2]),
+                          Stream::unconfigured(&DMA1_BASE.stream_registers[3]),
+                          Stream::unconfigured(&DMA1_BASE.stream_registers[4]),
+                          Stream::unconfigured(&DMA1_BASE.stream_registers[5]),
+                          Stream::unconfigured(&DMA1_BASE.stream_registers[6]),
+                          Stream::unconfigured(&DMA1_BASE.stream_registers[7])],
+            },
+
+            Controller::DMA2 => DMA {
+                registers: DMA2_BASE,
+                clock: PeripheralClock::new(rcc::PeripheralClockType::AHB1(rcc::HCLK1::DMA2), rcc),
+                streams: [Stream::unconfigured(&DMA2_BASE.stream_registers[0]),
+                          Stream::unconfigured(&DMA2_BASE.stream_registers[1]),
+                          Stream::unconfigured(&DMA2_BASE.stream_registers[2]),
+                          Stream::unconfigured(&DMA2_BASE.stream_registers[3]),
+                          Stream::unconfigured(&DMA2_BASE.stream_registers[4]),
+                          Stream::unconfigured(&DMA2_BASE.stream_registers[5]),
+                          Stream::unconfigured(&DMA2_BASE.stream_registers[6]),
+                          Stream::unconfigured(&DMA2_BASE.stream_registers[7])],
+            },
+        }
+    }
 }
