@@ -1622,11 +1622,3 @@ impl ClockInterface for Dma1Clock<'_> {
         self.0.disable();
     }
 }
-
-pub struct DMA {
-    registers: StaticRef<DMARegisters>,
-    clock: PeripheralClock<'static>,
-}
-
-impl DMA {
-}

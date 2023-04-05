@@ -15,6 +15,7 @@ pub mod nvic;
 pub mod adc;
 pub mod dbg;
 pub mod deferred_calls;
+pub mod dma;
 pub mod dma1;
 pub mod exti;
 pub mod fsmc;
