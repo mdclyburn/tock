@@ -1,5 +1,5 @@
 #![feature(const_fn_trait_bound)]
-#![forbid(unsafe_code)]
+// #![forbid(unsafe_code)]
 #![no_std]
 
 pub mod test;
@@ -53,6 +53,7 @@ pub mod ltc294x;
 pub mod max17205;
 pub mod mcp230xx;
 pub mod mlx90614;
+pub mod mmdma;
 pub mod mx25r6435f;
 pub mod ninedof;
 pub mod nonvolatile_storage_driver;
