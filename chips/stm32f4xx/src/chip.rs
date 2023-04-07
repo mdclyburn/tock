@@ -20,6 +20,7 @@ pub struct Stm32f4xx<'a, I: InterruptService<DeferredCallTask> + 'a> {
 pub struct Stm32f4xxDefaultPeripherals<'a> {
     pub adc1: crate::adc::Adc<'a>,
     pub dma_streams: [crate::dma1::Stream<'a>; 8],
+    pub dma2: crate::dma::DMA<'a>,
     pub exti: &'a crate::exti::Exti<'a>,
     pub i2c1: crate::i2c::I2C<'a>,
     pub spi3: crate::spi::Spi<'a>,
@@ -39,6 +40,7 @@ impl<'a> Stm32f4xxDefaultPeripherals<'a> {
         Self {
             adc1: crate::adc::Adc::new(rcc),
             dma_streams: crate::dma1::new_dma1_stream(dma),
+            dma2: crate::dma::DMA::new(crate::dma::Controller::DMA2, rcc),
             exti,
             i2c1: crate::i2c::I2C::new(rcc),
             spi3: crate::spi::Spi::new(
@@ -93,6 +95,8 @@ impl<'a> InterruptService<DeferredCallTask> for Stm32f4xxDefaultPeripherals<'a> 
             nvic::DMA1_Stream7 => {
                 self.dma_streams[dma1::Dma1Peripheral::SPI3_TX.get_stream_idx()].handle_interrupt()
             }
+
+            nvic::DMA2_Stream0 => {  }
 
             nvic::USART2 => self.usart2.handle_interrupt(),
             nvic::USART3 => self.usart3.handle_interrupt(),
