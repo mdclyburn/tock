@@ -55,23 +55,22 @@ impl MMDMA {
 impl DMAClient for MMDMA {
     fn transfer_done(&self,
                      channel: &dyn DMAChannel,
-                     _src_buffer: Option<&'static mut [usize]>,
-                     _dst_buffer: Option<&'static mut [usize]>)
+                     src_buffer: Option<&'static mut [usize]>,
+                     dst_buffer: Option<&'static mut [usize]>)
     {
-        kernel::debug!("DMA request on channel {} completed.", channel.channel_no());
+        // kernel::debug!("DMA request on channel {} completed.", channel.channel_no());
+        channel.start(src_buffer, dst_buffer).unwrap();
+        // kernel::debug!("cap: ndtr = {}", channel.transfers_remaining());
     }
 }
 
 impl SyscallDriver for MMDMA {
     fn command(&self, command_no: usize, r2: usize, r3: usize, pid: ProcessId) -> CommandReturn {
-        match command_no {
-            0 => CommandReturn::success(),
+        match (command_no, r2, r3) {
+            (0, _r2, _r3) => CommandReturn::success(),
 
             // Simple one-shot memory-to-memory operation.
-            10 => {
-                let src_addr = r2;
-                let dst_addr = r3;
-
+            (10, src_addr, dst_addr) => {
                 let new_request_cell = self.requests.iter()
                     .find(|oc| oc.is_none());
                 if new_request_cell.is_none() {
@@ -81,7 +80,7 @@ impl SyscallDriver for MMDMA {
 
                     let dma_params = dma::Parameters {
                         kind: dma::TransferKind::MemoryToMemory,
-                        transfer_count: 1, // Heh...
+                        transfer_count: 256, // Heh...
                         transfer_size: dma::TransferSize::Word,
                         increment_on_read: true,
                         increment_on_write: true,
@@ -98,8 +97,8 @@ impl SyscallDriver for MMDMA {
                             });
 
                             let (src_buffer, dst_buffer): (&mut [usize], &mut [usize]) = unsafe {
-                                (core::slice::from_raw_parts_mut(src_addr as *mut usize, 1),
-                                 core::slice::from_raw_parts_mut(dst_addr as *mut usize, 1))
+                                (core::slice::from_raw_parts_mut(src_addr as *mut usize, 256),
+                                 core::slice::from_raw_parts_mut(dst_addr as *mut usize, 256))
                             };
 
                             allocated_channel.start(Some(src_buffer), Some(dst_buffer));
@@ -111,6 +110,9 @@ impl SyscallDriver for MMDMA {
                     }
                 }
             },
+
+            // DMA status
+            (200, _r2, _r3) => CommandReturn::success_u32(self.dma.status() as u32),
 
             _ => CommandReturn::failure(ErrorCode::INVAL),
         }
