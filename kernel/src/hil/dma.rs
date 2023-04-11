@@ -29,11 +29,11 @@ pub enum TargetPeripheral {
 #[derive(Copy, Clone)]
 pub enum TransferKind {
     /// Memory-to-memory transfer (e.g. RAM to RAM, ROM to RAM, etc).
-    MemoryToMemory(usize, usize),
+    MemoryToMemory,
     /// Memory-to-peripheral (e.g., RAM to DAC).
-    MemoryToPeripheral(usize, TargetPeripheral),
+    MemoryToPeripheral(TargetPeripheral),
     /// Peripheral-to-memory.
-    PeripheralToMemory(SourcePeripheral, usize),
+    PeripheralToMemory(SourcePeripheral),
 }
 
 /// Configurable parameters for DMA channels.
@@ -60,6 +60,8 @@ pub trait DMA {
 
     /// Stop and disable a DMA channel.
     fn stop(&'static self, channel_no: usize) -> Result<(), ErrorCode>;
+
+    fn status(&'static self) -> usize;
 }
 
 pub trait DMAChannel {
@@ -67,7 +69,11 @@ pub trait DMAChannel {
     fn channel_no(&self) -> usize;
 
     /// Start a transfer on an idle DMA channel.
-    fn start(&self, buffer: &'static mut [usize]) -> Result<(), ErrorCode>;
+    fn start(&self,
+             src_buffer: Option<&'static mut [usize]>,
+             dst_buffer: Option<&'static mut [usize]>) -> Result<(), ErrorCode>;
+
+    fn transfers_remaining(&self) -> usize;
 
     /// Poll to check for a completed DMA transfer.
     fn poll(&self) -> Option<&'static mut [usize]>;
@@ -78,5 +84,8 @@ pub trait DMAChannel {
 
 /// DMA-related callbacks.
 pub trait DMAClient {
-    fn transfer_done(&self, channel: &dyn DMAChannel, buffer: &'static mut [usize]);
+    fn transfer_done(&self,
+                     channel: &dyn DMAChannel,
+                     src_buffer: Option<&'static mut [usize]>,
+                     dst_buffer: Option<&'static mut [usize]>);
 }
