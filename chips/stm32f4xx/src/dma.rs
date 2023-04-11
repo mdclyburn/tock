@@ -306,7 +306,7 @@ pub enum Controller {
 
 pub struct Stream {
     stream_no: usize,
-    registers: &'static StreamRegisters,
+    controller_registers: StaticRef<DMARegisters>,
     client: OptionalCell<&'static dyn hil::dma::DMAClient>,
     src_buffer: TakeCell<'static, [usize]>,
     dst_buffer: TakeCell<'static, [usize]>,
@@ -314,10 +314,10 @@ pub struct Stream {
 }
 
 impl Stream {
-    fn unconfigured(stream_no: usize, registers: &'static StreamRegisters) -> Stream {
+    fn unconfigured(stream_no: usize, controller_registers: StaticRef<DMARegisters>) -> Stream {
         Stream {
             stream_no,
-            registers,
+            controller_registers,
             client: OptionalCell::empty(),
             src_buffer: TakeCell::empty(),
             dst_buffer: TakeCell::empty(),
@@ -330,21 +330,29 @@ impl Stream {
         self.busy.get() == false
     }
 
+    #[inline]
+    fn stream_registers(&self) -> &StreamRegisters {
+        &self.controller_registers.stream_registers[self.stream_no]
+    }
+
     fn enable_interrupts(&self) {
-        self.registers.sxcr.modify(SXCR::TCIE::SET + SXCR::TEIE::SET);
+        self.stream_registers()
+            .sxcr.modify(SXCR::TCIE::SET + SXCR::TEIE::SET);
     }
 
     fn disable_interrupts(&self) {
-        self.registers.sxcr.modify(SXCR::TCIE::CLEAR + SXCR::TEIE::CLEAR);
+        self.stream_registers()
+            .sxcr.modify(SXCR::TCIE::CLEAR + SXCR::TEIE::CLEAR);
     }
 
     fn configure(&self, params: &hil::dma::Parameters) -> Result<(), ErrorCode> {
         self.busy.set(true);
 
+        let stream_registers = self.stream_registers();
         // Set the source/destination address for peripherals.
         // For memory-to-memory, simply set it to zero.
         // It will get set just before we start the transfer.
-        self.registers.sxpar.set(match params.kind {
+        stream_registers.sxpar.set(match params.kind {
             TransferKind::MemoryToPeripheral(target_peripheral) =>
                 peripheral_target_address(target_peripheral) as u32,
             TransferKind::PeripheralToMemory(source_peripheral) =>
@@ -352,10 +360,10 @@ impl Stream {
             _ => 0x0,
         });
         // Set transfer count.
-        self.registers.sxndtr.set(params.transfer_count as u32);
+        stream_registers.sxndtr.set(params.transfer_count as u32);
         // Configure direction and address incrementation.
         // We also set the peripheral address if there is a peripheral involved.
-        self.registers.sxcr.modify(match params.kind {
+        stream_registers.sxcr.modify(match params.kind {
             TransferKind::MemoryToMemory => SXCR::DIR::MEMORY_TO_MEMORY + SXCR::PINC::SET + SXCR::MINC::SET,
             TransferKind::MemoryToPeripheral(_p) => SXCR::DIR::MEMORY_TO_PERIPHERAL + SXCR::PINC::CLEAR + SXCR::MINC::SET,
             TransferKind::PeripheralToMemory(_p) => SXCR::DIR::PERIPHERAL_TO_MEMORY + SXCR::PINC::CLEAR + SXCR::MINC::SET,
@@ -364,21 +372,21 @@ impl Stream {
         // These could be different and incur different behavior with the FIFO,
         // but this code does not support that unless the hardware enforces its usage
         // (i.e., memory-to-memory mode).
-        self.registers.sxcr.modify(match params.transfer_size {
+        stream_registers.sxcr.modify(match params.transfer_size {
             TransferSize::Byte => SXCR::MSIZE::BYTE + SXCR::PSIZE::BYTE,
             TransferSize::HalfWord => SXCR::MSIZE::HALFWORD + SXCR::PSIZE::HALFWORD,
             TransferSize::Word => SXCR::MSIZE::WORD + SXCR::PSIZE::WORD,
         });
 
         // Set priority.
-        self.registers.sxcr.modify(if params.high_priority { SXCR::PL::VERY_HIGH } else { SXCR::PL::MEDIUM });
+        stream_registers.sxcr.modify(if params.high_priority { SXCR::PL::VERY_HIGH } else { SXCR::PL::MEDIUM });
 
         Ok(())
     }
 
     fn stop(&self) {
-        self.registers.sxcr.modify(SXCR::EN::CLEAR);
-        while self.registers.sxcr.read(SXCR::EN) != 0 {  }
+        self.stream_registers().sxcr.modify(SXCR::EN::CLEAR);
+        while self.stream_registers().sxcr.read(SXCR::EN) != 0 {  }
         self.busy.set(false);
     }
 
@@ -407,12 +415,12 @@ impl hil::dma::DMAChannel for Stream {
              src_buffer: Option<&'static mut [usize]>,
              dst_buffer: Option<&'static mut [usize]>) -> Result<(), ErrorCode>
     {
-        self.registers.sxcr.modify(SXCR::EN::CLEAR);
-        while self.registers.sxcr.read(SXCR::EN) != 0 {  }
+        let stream_registers = self.stream_registers();
 
-        // kernel::debug!("bh-start: SxCR: {:X}", self.registers.sxcr.get());
+        stream_registers.sxcr.modify(SXCR::EN::CLEAR);
+        while stream_registers.sxcr.read(SXCR::EN) != 0 {  }
 
-        match self.registers.sxcr.read(SXCR::DIR) {
+        match stream_registers.sxcr.read(SXCR::DIR) {
             // Peripheral-to-memory
             0b00 => unimplemented!(),
 
@@ -423,9 +431,9 @@ impl hil::dma::DMAChannel for Stream {
             0b10 => {
                 let s_addr = src_buffer.as_ref().map(|b| b.as_ptr() as u32).ok_or(ErrorCode::INVAL)?;
                 let d_addr = dst_buffer.as_ref().map(|b| b.as_ptr() as u32).ok_or(ErrorCode::INVAL)?;
-                self.registers.sxndtr.set(src_buffer.as_ref().map(|b| b.len() as u32).ok_or(ErrorCode::INVAL)?);
-                self.registers.sxpar.set(s_addr);
-                self.registers.sxm0ar.set(d_addr);
+                stream_registers.sxndtr.set(src_buffer.as_ref().map(|b| b.len() as u32).ok_or(ErrorCode::INVAL)?);
+                stream_registers.sxpar.set(s_addr);
+                stream_registers.sxm0ar.set(d_addr);
                 self.src_buffer.put(src_buffer);
                 self.dst_buffer.put(dst_buffer);
             },
@@ -433,25 +441,17 @@ impl hil::dma::DMAChannel for Stream {
             _ => panic!(), // Invalid value present in DIR register field.
         };
 
-        // kernel::debug!("par: {:X}, m0ar: {:X}",
-        //                self.registers.sxpar.get(),
-        //                self.registers.sxm0ar.get());
-        // kernel::debug!("starting ndtr: {}", self.registers.sxndtr.get());
-
         self.enable_interrupts();
+
         unsafe { *(0x4002_6408 as *mut u32) |= 0b111101 };
         unsafe { *(0x4002_6408 as *mut u32) |= (0b111101 << 6) };
-        // kernel::debug!("status: {:X}", unsafe { *(0x4002_6400 as *const u32) });
-        self.registers.sxcr.modify(SXCR::EN::SET);
-        // while self.registers.sxcr.read(SXCR::EN) == 0 {
-        //     self.registers.sxcr.modify(SXCR::EN::SET);
-        // }
+        stream_registers.sxcr.modify(SXCR::EN::SET);
 
         Ok(())
     }
 
     fn transfers_remaining(&self) -> usize {
-        self.registers.sxndtr.get() as usize
+        self.stream_registers().sxndtr.get() as usize
     }
 
     fn poll(&self) -> Option<&'static mut [usize]> {
@@ -477,28 +477,28 @@ impl<'a> DMA<'a> {
                 controller,
                 registers: DMA1_BASE,
                 clock: PeripheralClock::new(rcc::PeripheralClockType::AHB1(rcc::HCLK1::DMA1), rcc),
-                streams: [Stream::unconfigured(0, &DMA1_BASE.stream_registers[0]),
-                          Stream::unconfigured(1, &DMA1_BASE.stream_registers[1]),
-                          Stream::unconfigured(2, &DMA1_BASE.stream_registers[2]),
-                          Stream::unconfigured(3, &DMA1_BASE.stream_registers[3]),
-                          Stream::unconfigured(4, &DMA1_BASE.stream_registers[4]),
-                          Stream::unconfigured(5, &DMA1_BASE.stream_registers[5]),
-                          Stream::unconfigured(6, &DMA1_BASE.stream_registers[6]),
-                          Stream::unconfigured(7, &DMA1_BASE.stream_registers[7])],
+                streams: [Stream::unconfigured(0, DMA1_BASE),
+                          Stream::unconfigured(1, DMA1_BASE),
+                          Stream::unconfigured(2, DMA1_BASE),
+                          Stream::unconfigured(3, DMA1_BASE),
+                          Stream::unconfigured(4, DMA1_BASE),
+                          Stream::unconfigured(5, DMA1_BASE),
+                          Stream::unconfigured(6, DMA1_BASE),
+                          Stream::unconfigured(7, DMA1_BASE)],
             },
 
             Controller::DMA2 => DMA {
                 controller,
                 registers: DMA2_BASE,
                 clock: PeripheralClock::new(rcc::PeripheralClockType::AHB1(rcc::HCLK1::DMA2), rcc),
-                streams: [Stream::unconfigured(0, &DMA2_BASE.stream_registers[0]),
-                          Stream::unconfigured(1, &DMA2_BASE.stream_registers[1]),
-                          Stream::unconfigured(2, &DMA2_BASE.stream_registers[2]),
-                          Stream::unconfigured(3, &DMA2_BASE.stream_registers[3]),
-                          Stream::unconfigured(4, &DMA2_BASE.stream_registers[4]),
-                          Stream::unconfigured(5, &DMA2_BASE.stream_registers[5]),
-                          Stream::unconfigured(6, &DMA2_BASE.stream_registers[6]),
-                          Stream::unconfigured(7, &DMA2_BASE.stream_registers[7])],
+                streams: [Stream::unconfigured(0, DMA2_BASE),
+                          Stream::unconfigured(1, DMA2_BASE),
+                          Stream::unconfigured(2, DMA2_BASE),
+                          Stream::unconfigured(3, DMA2_BASE),
+                          Stream::unconfigured(4, DMA2_BASE),
+                          Stream::unconfigured(5, DMA2_BASE),
+                          Stream::unconfigured(6, DMA2_BASE),
+                          Stream::unconfigured(7, DMA2_BASE)],
             },
         }
     }
