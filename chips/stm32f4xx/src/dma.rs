@@ -327,7 +327,7 @@ impl Stream {
 
     #[inline]
     fn is_available(&self) -> bool {
-        self.busy.get()
+        self.busy.get() == false
     }
 
     fn enable_interrupts(&self) {
@@ -378,10 +378,12 @@ impl Stream {
 
     fn stop(&self) {
         self.registers.sxcr.modify(SXCR::EN::CLEAR);
+        while self.registers.sxcr.read(SXCR::EN) != 0 {  }
         self.busy.set(false);
     }
 
     fn transfer_complete(&self) {
+        // kernel::debug!("bh-transfer-complete: SxCR: {:X}", self.registers.sxcr.get());
         if let Some(client) = self.client.extract() {
             client.transfer_done(self, self.src_buffer.take(), self.dst_buffer.take());
         } else {
@@ -405,6 +407,11 @@ impl hil::dma::DMAChannel for Stream {
              src_buffer: Option<&'static mut [usize]>,
              dst_buffer: Option<&'static mut [usize]>) -> Result<(), ErrorCode>
     {
+        self.registers.sxcr.modify(SXCR::EN::CLEAR);
+        while self.registers.sxcr.read(SXCR::EN) != 0 {  }
+
+        // kernel::debug!("bh-start: SxCR: {:X}", self.registers.sxcr.get());
+
         match self.registers.sxcr.read(SXCR::DIR) {
             // Peripheral-to-memory
             0b00 => unimplemented!(),
@@ -416,6 +423,7 @@ impl hil::dma::DMAChannel for Stream {
             0b10 => {
                 let s_addr = src_buffer.as_ref().map(|b| b.as_ptr() as u32).ok_or(ErrorCode::INVAL)?;
                 let d_addr = dst_buffer.as_ref().map(|b| b.as_ptr() as u32).ok_or(ErrorCode::INVAL)?;
+                self.registers.sxndtr.set(src_buffer.as_ref().map(|b| b.len() as u32).ok_or(ErrorCode::INVAL)?);
                 self.registers.sxpar.set(s_addr);
                 self.registers.sxm0ar.set(d_addr);
                 self.src_buffer.put(src_buffer);
@@ -425,10 +433,25 @@ impl hil::dma::DMAChannel for Stream {
             _ => panic!(), // Invalid value present in DIR register field.
         };
 
+        // kernel::debug!("par: {:X}, m0ar: {:X}",
+        //                self.registers.sxpar.get(),
+        //                self.registers.sxm0ar.get());
+        // kernel::debug!("starting ndtr: {}", self.registers.sxndtr.get());
+
         self.enable_interrupts();
+        unsafe { *(0x4002_6408 as *mut u32) |= 0b111101 };
+        unsafe { *(0x4002_6408 as *mut u32) |= (0b111101 << 6) };
+        // kernel::debug!("status: {:X}", unsafe { *(0x4002_6400 as *const u32) });
         self.registers.sxcr.modify(SXCR::EN::SET);
+        // while self.registers.sxcr.read(SXCR::EN) == 0 {
+        //     self.registers.sxcr.modify(SXCR::EN::SET);
+        // }
 
         Ok(())
+    }
+
+    fn transfers_remaining(&self) -> usize {
+        self.registers.sxndtr.get() as usize
     }
 
     fn poll(&self) -> Option<&'static mut [usize]> {
@@ -514,10 +537,46 @@ impl<'a> DMA<'a> {
         }
     }
 
+    /// Disable interrupts for DMA streams.
+    fn disable_interrupts(&self) {
+        let irqns = match self.controller {
+            Controller::DMA1 => &[
+                nvic::DMA1_Stream0,
+                nvic::DMA1_Stream1,
+                nvic::DMA1_Stream2,
+                nvic::DMA1_Stream3,
+                nvic::DMA1_Stream4,
+                nvic::DMA1_Stream5,
+                nvic::DMA1_Stream6,
+                nvic::DMA1_Stream7,
+            ],
+
+            Controller::DMA2 => &[
+                nvic::DMA2_Stream0,
+                nvic::DMA2_Stream1,
+                nvic::DMA2_Stream2,
+                nvic::DMA2_Stream3,
+                nvic::DMA2_Stream4,
+                nvic::DMA2_Stream5,
+                nvic::DMA2_Stream6,
+                nvic::DMA2_Stream7,
+            ],
+
+            _ => panic!(),
+        };
+
+        // Disable interrupts at the NVIC.
+        for irqn in irqns {
+            unsafe { Nvic::new(*irqn).disable(); }
+        }
+    }
+
     pub fn handle_interrupt(&self) {
         if self.registers.lisr.is_set(LISR::TCIF0) {
             self.streams[0].transfer_complete();
-            self.registers.lifcr.modify(LIFCR::CTCIF0::SET);
+            self.registers.lifcr.modify(
+                LIFCR::CTCIF0::SET
+                    + LIFCR::CHTIF0::SET);
         }
 
         if self.registers.lisr.is_set(LISR::TEIF0) {
@@ -527,7 +586,9 @@ impl<'a> DMA<'a> {
 
         if self.registers.lisr.is_set(LISR::TCIF1) {
             self.streams[1].transfer_complete();
-            self.registers.lifcr.modify(LIFCR::CTCIF1::SET);
+            self.registers.lifcr.modify(
+                LIFCR::CTCIF1::SET
+                    + LIFCR::CHTIF1::SET);
         }
 
         if self.registers.lisr.is_set(LISR::TEIF1) {
@@ -548,6 +609,7 @@ impl<'a> hil::dma::DMA for DMA<'a> {
         if !self.clock.is_enabled() {
             self.clock.enable();
             while !self.clock.is_enabled() {  }
+            self.enable_interrupts();
         }
 
         // We can extend this to support peripheral-to-memory and memory-to-peripheral transfers
@@ -557,7 +619,6 @@ impl<'a> hil::dma::DMA for DMA<'a> {
             .find(|stream| stream.is_available());
         if let Some(stream) = found_stream {
             stream.configure(params)?;
-            self.enable_interrupts();
             Ok(stream)
         } else {
             Err(ErrorCode::BUSY)
@@ -565,7 +626,13 @@ impl<'a> hil::dma::DMA for DMA<'a> {
     }
 
     fn stop(&'static self, channel_no: usize) -> Result<(), ErrorCode> {
-        self.streams[channel_no].stop();
+        let stream = &self.streams[channel_no];
+        stream.stop();
+
         Ok(())
+    }
+
+    fn status(&'static self) -> usize {
+        self.registers.lisr.get() as usize
     }
 }

@@ -96,7 +96,14 @@ impl<'a> InterruptService<DeferredCallTask> for Stm32f4xxDefaultPeripherals<'a> 
                 self.dma_streams[dma1::Dma1Peripheral::SPI3_TX.get_stream_idx()].handle_interrupt()
             }
 
-            nvic::DMA2_Stream0 => {  }
+            nvic::DMA2_Stream0 => self.dma2.handle_interrupt(),
+            nvic::DMA2_Stream1 => self.dma2.handle_interrupt(),
+            nvic::DMA2_Stream2 => self.dma2.handle_interrupt(),
+            nvic::DMA2_Stream3 => self.dma2.handle_interrupt(),
+            nvic::DMA2_Stream4 => self.dma2.handle_interrupt(),
+            nvic::DMA2_Stream5 => self.dma2.handle_interrupt(),
+            nvic::DMA2_Stream6 => self.dma2.handle_interrupt(),
+            nvic::DMA2_Stream7 => self.dma2.handle_interrupt(),
 
             nvic::USART2 => self.usart2.handle_interrupt(),
             nvic::USART3 => self.usart3.handle_interrupt(),
