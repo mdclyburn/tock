@@ -345,6 +345,28 @@ impl Stream {
             .sxcr.modify(SXCR::TCIE::CLEAR + SXCR::TEIE::CLEAR);
     }
 
+    fn clear_interrupts(&self) {
+        match self.stream_no {
+            0 => self.controller_registers.lifcr.modify(
+                LIFCR::CFEIF0::SET + LIFCR::CTCIF0::SET + LIFCR::CHTIF0::SET + LIFCR::CDMEIF0::SET + LIFCR::CFEIF0::SET),
+            1 => self.controller_registers.lifcr.modify(
+                LIFCR::CFEIF1::SET + LIFCR::CTCIF1::SET + LIFCR::CHTIF1::SET + LIFCR::CDMEIF1::SET + LIFCR::CFEIF1::SET),
+            2 => self.controller_registers.lifcr.modify(
+                LIFCR::CFEIF2::SET + LIFCR::CTCIF2::SET + LIFCR::CHTIF2::SET + LIFCR::CDMEIF2::SET + LIFCR::CFEIF2::SET),
+            3 => self.controller_registers.lifcr.modify(
+                LIFCR::CFEIF3::SET + LIFCR::CTCIF3::SET + LIFCR::CHTIF3::SET + LIFCR::CDMEIF3::SET + LIFCR::CFEIF3::SET),
+            4 => self.controller_registers.hifcr.modify(
+                HIFCR::CFEIF4::SET + HIFCR::CTCIF4::SET + HIFCR::CHTIF4::SET + HIFCR::CDMEIF4::SET + HIFCR::CFEIF4::SET),
+            5 => self.controller_registers.hifcr.modify(
+                HIFCR::CFEIF5::SET + HIFCR::CTCIF5::SET + HIFCR::CHTIF5::SET + HIFCR::CDMEIF5::SET + HIFCR::CFEIF5::SET),
+            6 => self.controller_registers.hifcr.modify(
+                HIFCR::CFEIF6::SET + HIFCR::CTCIF6::SET + HIFCR::CHTIF6::SET + HIFCR::CDMEIF6::SET + HIFCR::CFEIF6::SET),
+            7 => self.controller_registers.hifcr.modify(
+                HIFCR::CFEIF7::SET + HIFCR::CTCIF7::SET + HIFCR::CHTIF7::SET + HIFCR::CDMEIF7::SET + HIFCR::CFEIF7::SET),
+            _ => panic!(),
+        }
+    }
+
     fn configure(&self, params: &hil::dma::Parameters) -> Result<(), ErrorCode> {
         self.busy.set(true);
 
@@ -442,9 +464,8 @@ impl hil::dma::DMAChannel for Stream {
         };
 
         self.enable_interrupts();
-
-        unsafe { *(0x4002_6408 as *mut u32) |= 0b111101 };
-        unsafe { *(0x4002_6408 as *mut u32) |= (0b111101 << 6) };
+        // These must be cleared or the stream will not start.
+        self.clear_interrupts();
         stream_registers.sxcr.modify(SXCR::EN::SET);
 
         Ok(())
