@@ -70,7 +70,7 @@ impl<'a> Stm32f4xxDefaultPeripherals<'a> {
 
     pub fn setup_circular_deps(&'a self) {
         self.gpio_ports.setup_circular_deps();
-        self.adc1.configure(&self.tim2);
+        self.adc1.configure(&self.tim2, &self.dma2);
     }
 }
 

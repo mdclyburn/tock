@@ -10,6 +10,7 @@ use kernel::utilities::registers::{register_bitfields, ReadOnly, ReadWrite};
 use kernel::utilities::StaticRef;
 use kernel::ErrorCode;
 
+use crate::dma::DMA;
 use crate::tim2::{CCConfig, Tim2};
 
 pub trait EverythingClient: hil::adc::Client + hil::adc::HighSpeedClient {}
@@ -447,6 +448,7 @@ impl<'a> SubADC<'a> {
 pub struct Adc<'a> {
     adcs: [MapCell<SubADC<'a>>; 3],
     common_registers: StaticRef<AdcCommonRegisters>,
+    dma: OptionalCell<&'a DMA<'a>>,
     client: OptionalCell<&'static dyn hil::adc::Client>,
     timer: OptionalCell<&'a Tim2<'a>>,
 }
@@ -458,14 +460,16 @@ impl<'a> Adc<'a> {
                    MapCell::new(SubADC::new(AdcClock(PeripheralClock::new(PeripheralClockType::APB2(rcc::PCLK2::ADC2), rcc)), ADC2_BASE)),
                    MapCell::new(SubADC::new(AdcClock(PeripheralClock::new(PeripheralClockType::APB2(rcc::PCLK2::ADC3), rcc)), ADC3_BASE))],
             common_registers: ADC_COMMON_BASE,
+            dma: OptionalCell::empty(),
             client: OptionalCell::empty(),
             timer: OptionalCell::empty(),
         }
     }
 
-    pub fn configure(&self, timer: &'a Tim2<'a>) {
+    pub fn configure(&self, timer: &'a Tim2<'a>, dma: &'a DMA<'a>) {
         self.common_registers.ccr.modify(CCR::ADCPRE::PCLKDIV8);
         self.timer.set(timer);
+        self.dma.set(dma);
     }
 
     pub fn handle_interrupt(&self) {
