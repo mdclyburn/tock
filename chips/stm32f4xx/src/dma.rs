@@ -304,6 +304,19 @@ pub enum Controller {
     DMA2,
 }
 
+fn map_source_to_dma_stream(peripheral: SourcePeripheral,
+                            instance: u8) -> (Controller, &'static [u8])
+{
+    match peripheral {
+        SourcePeripheral::ADC => match instance {
+            1 => (Controller::DMA2, &[0, 4]),
+            2 => (Controller::DMA2, &[2, 3]),
+            3 => (Controller::DMA2, &[0, 1]),
+            _ => panic!(),
+        },
+    }
+}
+
 pub struct Stream {
     stream_no: usize,
     controller_registers: StaticRef<DMARegisters>,
@@ -375,9 +388,9 @@ impl Stream {
         // For memory-to-memory, simply set it to zero.
         // It will get set just before we start the transfer.
         stream_registers.sxpar.set(match params.kind {
-            TransferKind::MemoryToPeripheral(target_peripheral) =>
+            TransferKind::MemoryToPeripheral(target_peripheral, instance) =>
                 peripheral_target_address(target_peripheral) as u32,
-            TransferKind::PeripheralToMemory(source_peripheral) =>
+            TransferKind::PeripheralToMemory(source_peripheral, instance) =>
                 peripheral_source_address(source_peripheral) as u32,
             _ => 0x0,
         });
@@ -387,8 +400,8 @@ impl Stream {
         // We also set the peripheral address if there is a peripheral involved.
         stream_registers.sxcr.modify(match params.kind {
             TransferKind::MemoryToMemory => SXCR::DIR::MEMORY_TO_MEMORY + SXCR::PINC::SET + SXCR::MINC::SET,
-            TransferKind::MemoryToPeripheral(_p) => SXCR::DIR::MEMORY_TO_PERIPHERAL + SXCR::PINC::CLEAR + SXCR::MINC::SET,
-            TransferKind::PeripheralToMemory(_p) => SXCR::DIR::PERIPHERAL_TO_MEMORY + SXCR::PINC::CLEAR + SXCR::MINC::SET,
+            TransferKind::MemoryToPeripheral(_p, _ins) => SXCR::DIR::MEMORY_TO_PERIPHERAL + SXCR::PINC::CLEAR + SXCR::MINC::SET,
+            TransferKind::PeripheralToMemory(_p, _ins) => SXCR::DIR::PERIPHERAL_TO_MEMORY + SXCR::PINC::CLEAR + SXCR::MINC::SET,
         });
         // Match the source and destination size.
         // These could be different and incur different behavior with the FIFO,
@@ -616,6 +629,21 @@ impl<'a> DMA<'a> {
             self.streams[1].transfer_error();
             self.registers.lifcr.modify(LIFCR::CTEIF1::SET);
         }
+
+        // let block_inactive = self.streams.iter()
+        //     .fold(true, |agg, cur| agg && cur.is_available());
+        // if block_inactive {
+        //     kernel::debug!("stopping {}",
+        //                    match self.controller {
+        //                        Controller::DMA1 => "DMA1",
+        //                        Controller::DMA2 => "DMA2",
+        //                    });
+        //     self.clock.disable();
+        // }
+    }
+
+    fn all_stream_nos() -> &'static [u8] {
+        &[0, 1, 2, 3, 4, 5, 6, 7]
     }
 }
 
@@ -633,16 +661,27 @@ impl<'a> hil::dma::DMA for DMA<'a> {
             self.enable_interrupts();
         }
 
-        // We can extend this to support peripheral-to-memory and memory-to-peripheral transfers
-        // by creating a lookup table to see which stream supports which sources/destinations.
+        // Check which controller and which streams can perform the requested operation.
+        let (req_controller, possible_stream_nos) = match params.kind {
+            TransferKind::MemoryToMemory => (Controller::DMA2, Self::all_stream_nos()),
+            TransferKind::PeripheralToMemory(p, inst) => map_source_to_dma_stream(p, inst),
+            TransferKind::MemoryToPeripheral(p, inst) => unimplemented!(),
+        };
 
-        let found_stream = self.streams.iter()
-            .find(|stream| stream.is_available());
-        if let Some(stream) = found_stream {
-            stream.configure(params)?;
-            Ok(stream)
+        if self.controller != req_controller {
+            Err(ErrorCode::NOSUPPORT) // This DMA block does not support the operation.
         } else {
-            Err(ErrorCode::BUSY)
+            // Check all possible streams.
+            let available_stream = possible_stream_nos.iter()
+                .map(|stream_no| &self.streams[*stream_no as usize]) // ...as streams
+                .filter(|stream| stream.is_available()) // ...check availability
+                .next(); // ...grab first one.
+            if let Some(stream) = available_stream {
+                stream.configure(params)?;
+                Ok(stream)
+            } else {
+                Err(ErrorCode::BUSY)
+            }
         }
     }
 
