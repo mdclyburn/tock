@@ -316,7 +316,7 @@ fn map_source_to_dma_stream(peripheral: SourcePeripheral,
 {
     match peripheral {
         SourcePeripheral::ADC => match instance {
-            1 => (Controller::DMA2, &[(0, 0), (0, 0)]),
+            1 => (Controller::DMA2, &[(0, 0), (4, 0)]),
             2 => (Controller::DMA2, &[(2, 2), (3, 2)]),
             3 => (Controller::DMA2, &[(0, 2), (1, 2)]),
             _ => panic!(),
@@ -332,6 +332,8 @@ pub struct Stream {
     dst_buffer: TakeCell<'static, [usize]>,
     busy: Cell<bool>,
 }
+
+static mut COMPLETED: usize = 0;
 
 impl Stream {
     fn unconfigured(stream_no: usize, controller_registers: StaticRef<DMARegisters>) -> Stream {
@@ -394,7 +396,6 @@ impl Stream {
 
         // Select the channel if transferring to/from a peripheral.
         stream_registers.sxcr.modify(SXCR::CHSEL.val(channel_no as u32));
-        stream_registers.sxcr.modify(SXCR::CIRC::SET);
         // Set the source/destination address for peripherals.
         // For memory-to-memory, simply set it to zero.
         // It will get set just before we start the transfer.
@@ -405,6 +406,7 @@ impl Stream {
                 peripheral_source_address(source_peripheral, instance) as u32,
             _ => 0x0,
         });
+        // stream_registers.sxfcr.modify(SXFCR::DMDIS::SET);
         // Set transfer count.
         stream_registers.sxndtr.set(params.transfer_count as u32);
         // Configure direction and address incrementation.
@@ -412,7 +414,7 @@ impl Stream {
         stream_registers.sxcr.modify(match params.kind {
             TransferKind::MemoryToMemory => SXCR::DIR::MEMORY_TO_MEMORY + SXCR::PINC::SET + SXCR::MINC::SET,
             TransferKind::MemoryToPeripheral(_p, _ins) => SXCR::DIR::MEMORY_TO_PERIPHERAL + SXCR::PINC::CLEAR + SXCR::MINC::SET,
-            TransferKind::PeripheralToMemory(_p, _ins) => SXCR::DIR::PERIPHERAL_TO_MEMORY + SXCR::PINC::CLEAR + SXCR::MINC::SET,
+            TransferKind::PeripheralToMemory(_p, _ins) => SXCR::DIR::PERIPHERAL_TO_MEMORY + SXCR::PINC::CLEAR + SXCR::MINC::SET + SXCR::CIRC::SET,
         });
         // Match the source and destination size.
         // These could be different and incur different behavior with the FIFO,
@@ -443,7 +445,14 @@ impl Stream {
         } else {
             // No client was set.
             // This is a coding error.
-            panic!();
+            let now = unsafe {
+                // kernel::debug!("buffer filled; ndtr: {}", self.stream_registers().sxndtr.get());
+                COMPLETED += 1;
+                COMPLETED
+            };
+            if now % 1000 == 0 {
+                kernel::debug!("{}", now);
+            }
         }
     }
 
@@ -468,7 +477,21 @@ impl hil::dma::DMAChannel for Stream {
 
         match stream_registers.sxcr.read(SXCR::DIR) {
             // Peripheral-to-memory
-            0b00 => unimplemented!(),
+            0b00 => {
+                let length_factor = match stream_registers.sxcr.read(SXCR::PSIZE) {
+                    0b00 => 4,
+                    0b01 => 2,
+                    0b10 => 1,
+                    _ => panic!(),
+                };
+                let d_addr = dst_buffer.as_ref().map(|b| b.as_ptr() as u32).ok_or(ErrorCode::INVAL)?;
+                stream_registers.sxndtr.set(dst_buffer.as_ref().map(|b| b.len() * length_factor).ok_or(ErrorCode::INVAL)? as u32);
+                kernel::debug!("SXNDTR = {}", stream_registers.sxndtr.get());
+                // Just need to set the destination address.
+                // Peripheral address set during the configuration.
+                stream_registers.sxm0ar.set(d_addr);
+                self.dst_buffer.put(dst_buffer);
+            },
 
             // Memory-to-peripheral
             0b01 => unimplemented!(),
@@ -641,6 +664,18 @@ impl<'a> DMA<'a> {
             self.registers.lifcr.modify(LIFCR::CTEIF1::SET);
         }
 
+        if self.registers.hisr.is_set(HISR::TCIF4) {
+            self.streams[4].transfer_complete();
+            self.registers.hifcr.modify(
+                HIFCR::CTCIF4::SET
+                    + HIFCR::CHTIF4::SET);
+        }
+
+        if self.registers.hisr.is_set(HISR::TEIF4) {
+            self.streams[4].transfer_error();
+            self.registers.hifcr.modify(HIFCR::CTEIF4::SET);
+        }
+
         // let block_inactive = self.streams.iter()
         //     .fold(true, |agg, cur| agg && cur.is_available());
         // if block_inactive {
@@ -654,7 +689,7 @@ impl<'a> DMA<'a> {
     }
 
     fn all_stream_nos() -> &'static [(u8, u8)] {
-        &[(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0), (7, 0)]
+        &[(1, 0), (0, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0), (7, 0)]
     }
 }
 

@@ -644,6 +644,7 @@ impl hil::adc::Adc for Adc<'_> {
             .find(|mc_adc| {
                 mc_adc.map(|adc| match adc.status.get() {
                     ADCStatus::Continuous(currently_sampling) => currently_sampling as usize == channel_no,
+                    ADCStatus::HighSpeed(currently_sampling) => currently_sampling as usize == channel_no,
                     _ => false
                 }).unwrap()
             });
@@ -652,13 +653,15 @@ impl hil::adc::Adc for Adc<'_> {
             sampling_adc.map(|adc| {
                 adc.registers.cr1.modify(CR1::EOCIE::CLEAR);
                 // We do not use the continuous conversion to periodically sample.
-                // adc.registers.cr2.modify(CR2::CONT::CLEAR);
+                adc.registers.cr2.modify(CR2::CONT::CLEAR);
                 adc.registers.cr2.modify(CR2::ADON::CLEAR);
                 adc.status.set(ADCStatus::Off);
                 adc.registers.cr2.modify(CR2::EXTEN::DISABLED);
                 adc.sample_ticks.clear();
-                let cc_config = adc.cc_config.take().unwrap();
-                self.timer.map(|t| (*t).deallocate_channel(&cc_config));
+
+                if let Some(cc_config) = adc.cc_config.take() {
+                    self.timer.map(|t| (*t).deallocate_channel(&cc_config));
+                }
 
                 Ok(())
             }).unwrap()
@@ -740,8 +743,9 @@ impl hil::adc::AdcHighSpeed for Adc<'static> {
                     adc.status.set(ADCStatus::HighSpeed(*channel as u8));
                     adc.registers.sqr1.modify(SQR1::L.val(0));
                     adc.registers.sqr3.modify(SQR3::SQ1.val(*channel as u32));
-                    adc.registers.smpr2.modify(SMPR2::SMP0.val(0b001));
+                    adc.registers.smpr2.modify(SMPR2::SMP0.val(0b010));
                     adc.registers.cr2.modify(CR2::DMA::SET);
+                    adc.registers.cr2.modify(CR2::DDS::SET);
                     adc.registers.cr2.modify(CR2::CONT::SET);
 
                     adc.registers.cr2.modify(CR2::SWSTART::SET);

@@ -13,24 +13,34 @@ pub const DRIVER_NUM: usize = crate::driver::NUM::Adc as usize;
 
 const MAX_CHANNEL_STATES: usize = 8;
 
+mod grant_nos {
+    pub const SAMPLE_BUFFER_1: usize = 0;
+    pub const SAMPLE_BUFFER_2: usize = 1;
+}
+
 #[derive(Clone, Copy, Debug)]
 struct ChannelState {
     continuous: bool,
     client_pid: ProcessId,
 }
 
+static mut BUFFER: Option<*mut u16> = None;
+
 /// An ADC driver that allows multiple processes to access individual channels.
-pub struct ChanneledADC<A: 'static + hil::adc::Adc> {
+pub struct ChanneledADC<A: 'static + hil::adc::Adc + hil::adc::AdcHighSpeed> {
     adc: &'static A,
     grant_data: Grant<(), 1>,
     channels: &'static [A::Channel],
     channel_states: [OptionalCell<ChannelState>; MAX_CHANNEL_STATES],
 }
 
-impl<A: 'static + hil::adc::Adc> ChanneledADC<A> {
+impl<A: 'static + hil::adc::Adc + hil::adc::AdcHighSpeed> ChanneledADC<A> {
     pub fn new(adc: &'static A,
                channels: &'static [A::Channel],
-               grant_data: Grant<(), 1>) -> ChanneledADC<A> {
+               grant_data: Grant<(), 1>,
+               buffer: *mut u16) -> ChanneledADC<A> {
+        unsafe { BUFFER = Some(buffer); }
+
         ChanneledADC {
             adc,
             grant_data,
@@ -49,22 +59,20 @@ impl<A: 'static + hil::adc::Adc> ChanneledADC<A> {
     }
 }
 
-impl<A: 'static + hil::adc::Adc> SyscallDriver for ChanneledADC<A> {
+impl<A: 'static + hil::adc::Adc + hil::adc::AdcHighSpeed> SyscallDriver for ChanneledADC<A> {
     fn command(&self,
                command_no: usize,
                r2: usize,
                r3: usize,
                pid: ProcessId) -> CommandReturn {
         // kernel::debug!("adc-cn: ({}, {}, {})", command_no, r2, r3);
-        match command_no {
+        match (command_no, r2, r3) {
             // Capsule exists.
             // Return the no. of channels available.
-            0 => CommandReturn::success_u32(self.channels.len() as u32),
+            (0, _r2, _r3) => CommandReturn::success_u32(self.channels.len() as u32),
 
             // Single sample on a channel.
-            1 => {
-                let (channel_no, _r3) = (r2, r3);
-
+            (1, channel_no, _r3) => {
                 if self.channel_states[channel_no].is_some() {
                     CommandReturn::failure(ErrorCode::BUSY)
                 } else {
@@ -83,9 +91,7 @@ impl<A: 'static + hil::adc::Adc> SyscallDriver for ChanneledADC<A> {
             },
 
             // Continous sampling on a channel.
-            2 => {
-                let (channel_no, frequency) = (r2, r3);
-
+            (2, channel_no, frequency) => {
                 if self.channel_states[channel_no].is_some() {
                     CommandReturn::failure(ErrorCode::BUSY)
                 } else {
@@ -104,12 +110,12 @@ impl<A: 'static + hil::adc::Adc> SyscallDriver for ChanneledADC<A> {
             },
 
             // Get resolution bits.
-            101 => {
+            (101, _r2, _r3) => {
                 CommandReturn::success_u32(self.adc.get_resolution_bits() as u32)
             },
 
             // Get voltage reference mV.
-            102 => {
+            (102, _r2, _r3) => {
                 self.adc.get_voltage_reference_mv()
                     .map(|mv| CommandReturn::success_u32(mv as u32))
                     .unwrap_or(CommandReturn::failure(ErrorCode::NOSUPPORT))
@@ -117,15 +123,14 @@ impl<A: 'static + hil::adc::Adc> SyscallDriver for ChanneledADC<A> {
 
             // Non-standard command no.
             // Stop sampling on a channel.
-            500 => {
-                let (channel_no, _r3) = (r2, r3);
-
+            (500, channel_no, _r3) => {
                 if channel_no > self.channel_states.len() {
                     CommandReturn::failure(ErrorCode::INVAL)
                 } else {
                     let opt_owner_pid: Option<ProcessId> = self.channel_states[channel_no]
                         .map(|s| s.client_pid);
 
+                    self.adc.stop_sampling_channel(0).unwrap();
                     // Check that the request came from the current owner,
                     // if the channel is currently in use.
                     if let Some(owner_pid) = opt_owner_pid {
@@ -147,6 +152,18 @@ impl<A: 'static + hil::adc::Adc> SyscallDriver for ChanneledADC<A> {
                 }
             },
 
+            // Start the experiment.
+            (505, frequency, _r3) => {
+                let buffer = unsafe { core::slice::from_raw_parts_mut(BUFFER.unwrap(), 4096) };
+                let buffer2 = unsafe { core::slice::from_raw_parts_mut(BUFFER.unwrap(), 4096) };
+
+                let r = self.adc.sample_highspeed(&self.channels[0], frequency as u32, buffer, buffer.len(), buffer2, buffer.len());
+                match r {
+                    Ok(()) => CommandReturn::success(),
+                    Err((rc, _buffer1, _buffer2)) => CommandReturn::failure(rc),
+                }
+            },
+
             _ => CommandReturn::failure(ErrorCode::INVAL),
         }
     }
@@ -156,7 +173,7 @@ impl<A: 'static + hil::adc::Adc> SyscallDriver for ChanneledADC<A> {
     }
 }
 
-impl<A: 'static + hil::adc::Adc> hil::adc::Client for ChanneledADC<A> {
+impl<A: 'static + hil::adc::Adc + hil::adc::AdcHighSpeed> hil::adc::Client for ChanneledADC<A> {
     fn sample_ready(&self, sample_data: u16) {
         // kernel::debug!("adc-cn: got sample ready");
         // We expect that the underlying ADC hardware will not use more than 12 bits.
