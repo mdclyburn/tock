@@ -2,9 +2,10 @@ use crate::rcc;
 use crate::rcc::{PeripheralClock, PeripheralClockType};
 use core::cell::Cell;
 use kernel::hil;
+use kernel::hil::dma::{DMAChannel, DMAClient};
 use kernel::hil::time::{Frequency, Time};
 use kernel::platform::chip::ClockInterface;
-use kernel::utilities::cells::{MapCell, OptionalCell};
+use kernel::utilities::cells::{MapCell, OptionalCell, TakeCell};
 use kernel::utilities::registers::interfaces::{ReadWriteable, Readable};
 use kernel::utilities::registers::{register_bitfields, ReadOnly, ReadWrite};
 use kernel::utilities::StaticRef;
@@ -390,6 +391,7 @@ enum ADCStatus {
     Idle,
     OneSample,
     Continuous(u8),
+    HighSpeed(u8),
 }
 
 struct SubADC<'a> {
@@ -398,6 +400,8 @@ struct SubADC<'a> {
     status: Cell<ADCStatus>,
     cc_config: MapCell<CCConfig>,
     sample_ticks: OptionalCell<usize>,
+    dma_stream: OptionalCell<&'static dyn DMAChannel>,
+    buffers: (TakeCell<'static, [u16]>, TakeCell<'static, [u16]>),
 }
 
 impl<'a> SubADC<'a> {
@@ -409,6 +413,8 @@ impl<'a> SubADC<'a> {
             status: Cell::new(ADCStatus::Off),
             cc_config: MapCell::empty(),
             sample_ticks: OptionalCell::empty(),
+            dma_stream: OptionalCell::empty(),
+            buffers: (TakeCell::empty(), TakeCell::empty()),
         }
     }
 
@@ -521,9 +527,10 @@ impl<'a> Adc<'a> {
     ///
     /// Inspects all internal ADCs and returns the first inactive one.
     /// Returns None if no ADC is free.
-    fn inactive_adc(&self) -> Option<&MapCell<SubADC<'a>>> {
+    fn inactive_adc(&self) -> Option<(&MapCell<SubADC<'a>>, u8)> {
         self.adcs.iter()
-            .find(|mc_adc| mc_adc.map(|adc| adc.is_available()).unwrap())
+            .zip(1..)
+            .find(|(mc_adc, _adc_no)| mc_adc.map(|adc| adc.is_available()).unwrap())
     }
 }
 
@@ -548,7 +555,7 @@ impl hil::adc::Adc for Adc<'_> {
 
     fn sample(&self, channel: &Self::Channel) -> Result<(), ErrorCode> {
         // Find an off/idle ADC.
-        if let Some(mc_adc) = self.inactive_adc() {
+        if let Some((mc_adc, _adc_no)) = self.inactive_adc() {
             mc_adc.map(|adc| {
                 if adc.status.get() == ADCStatus::Off {
                     adc.enable();
@@ -579,7 +586,7 @@ impl hil::adc::Adc for Adc<'_> {
         }
 
         // Find an off/idle ADC.
-        if let Some(mc_adc) = self.inactive_adc() {
+        if let Some((mc_adc, _adc_no)) = self.inactive_adc() {
             mc_adc.map(|adc| {
                 if adc.status.get() == ADCStatus::Off {
                     adc.enable();
@@ -674,7 +681,7 @@ impl hil::adc::Adc for Adc<'_> {
 }
 
 /// Not yet supported
-impl hil::adc::AdcHighSpeed for Adc<'_> {
+impl hil::adc::AdcHighSpeed for Adc<'static> {
     /// Capture buffered samples from the ADC continuously at a given
     /// frequency, calling the client whenever a buffer fills up. The client is
     /// then expected to either stop sampling or provide an additional buffer
@@ -690,14 +697,63 @@ impl hil::adc::AdcHighSpeed for Adc<'_> {
     /// - `length2`: number of samples to collect (up to buffer length)
     fn sample_highspeed(
         &self,
-        _channel: &Self::Channel,
-        _frequency: u32,
+        channel: &Self::Channel,
+        frequency: u32,
         buffer1: &'static mut [u16],
-        _length1: usize,
+        length1: usize,
         buffer2: &'static mut [u16],
-        _length2: usize,
+        length2: usize,
     ) -> Result<(), (ErrorCode, &'static mut [u16], &'static mut [u16])> {
-        Err((ErrorCode::NOSUPPORT, buffer1, buffer2))
+        if let Some((mc_adc, adc_no)) = self.inactive_adc() {
+            use hil::dma::{
+                DMA as _,
+                Parameters,
+                SourcePeripheral,
+                TransferKind,
+                TransferSize
+            };
+
+            if let Some(dma) = self.dma.extract() {
+                let stream = dma.configure(&Parameters {
+                    kind: TransferKind::PeripheralToMemory(SourcePeripheral::ADC, adc_no),
+                    transfer_count: length1,
+                    transfer_size: TransferSize::HalfWord,
+                    increment_on_read: false,
+                    increment_on_write: true,
+                    high_priority: true,
+                }).unwrap(); // Need to fix to return buffers, but get lifetime compile error.
+
+                mc_adc.map(move |adc| {
+                    if adc.status.get() == ADCStatus::Off {
+                        adc.enable();
+                    }
+
+                    // Gross.
+                    let dma_buffer1 = unsafe {
+                        core::slice::from_raw_parts_mut(buffer1.as_mut_ptr() as *mut usize, buffer1.len() / 2)
+                    };
+                    stream.start(None, Some(dma_buffer1));
+
+                    adc.dma_stream.set(stream);
+                    adc.buffers.1.put(Some(buffer2));
+
+                    adc.status.set(ADCStatus::HighSpeed(*channel as u8));
+                    adc.registers.sqr1.modify(SQR1::L.val(0));
+                    adc.registers.sqr3.modify(SQR3::SQ1.val(*channel as u32));
+                    adc.registers.smpr2.modify(SMPR2::SMP0.val(0b001));
+                    adc.registers.cr2.modify(CR2::DMA::SET);
+                    adc.registers.cr2.modify(CR2::CONT::SET);
+
+                    adc.registers.cr2.modify(CR2::SWSTART::SET);
+
+                    Ok(())
+                }).unwrap()
+            } else {
+                Err((ErrorCode::NOSUPPORT, buffer1, buffer2))
+            }
+        } else {
+            Err((ErrorCode::NOSUPPORT, buffer1, buffer2))
+        }
     }
 
     /// Provide a new buffer to send on-going buffered continuous samples to.

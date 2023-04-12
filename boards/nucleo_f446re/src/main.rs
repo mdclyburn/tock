@@ -61,6 +61,7 @@ struct NucleoF446RE {
         VirtualMuxAlarm<'static, stm32f446re::tim2::Tim2<'static>>,
     >,
     adc: &'static capsules::channeled_adc::ChanneledADC<stm32f446re::adc::Adc<'static>>,
+    dma: &'static capsules::mmdma::MMDMA,
 
     scheduler: &'static RoundRobinSched<'static>,
     systick: cortexm4::systick::SysTick,
@@ -78,6 +79,7 @@ impl SyscallDriverLookup for NucleoF446RE {
             capsules::button::DRIVER_NUM => f(Some(self.button)),
             capsules::alarm::DRIVER_NUM => f(Some(self.alarm)),
             capsules::channeled_adc::DRIVER_NUM => f(Some(self.adc)),
+            capsules::mmdma::DRIVER_NUM => f(Some(self.dma)),
             kernel::ipc::DRIVER_NUM => f(Some(&self.ipc)),
             _ => f(None),
         }
@@ -224,6 +226,7 @@ unsafe fn get_peripherals() -> (
         Stm32f446reDefaultPeripherals,
         Stm32f446reDefaultPeripherals::new(rcc, exti, dma1)
     );
+
     (peripherals, syscfg, dma1)
 }
 
@@ -262,6 +265,14 @@ pub unsafe fn main() {
         stm32f446re::chip::Stm32f4xx::new(peripherals)
     );
     CHIP = Some(chip);
+
+    // DMA2
+
+
+    let mmdma_capsule = static_init!(
+        capsules::mmdma::MMDMA,
+        capsules::mmdma::MMDMA::new(&base_peripherals.dma2));
+    mmdma_capsule.configure(mmdma_capsule);
 
     // UART
 
@@ -388,6 +399,7 @@ pub unsafe fn main() {
         button: button,
         alarm: alarm,
         adc: channeled_adc_capsule,
+        dma: mmdma_capsule,
 
         scheduler,
         systick: cortexm4::systick::SysTick::new(),

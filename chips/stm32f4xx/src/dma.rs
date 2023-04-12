@@ -285,13 +285,20 @@ const DMA1_BASE: StaticRef<DMARegisters> =
 const DMA2_BASE: StaticRef<DMARegisters> =
     unsafe { StaticRef::new(0x4002_6400 as *const DMARegisters) };
 
-fn peripheral_source_address(p: SourcePeripheral) -> usize {
+fn peripheral_source_address(p: SourcePeripheral, instance: u8) -> usize {
     match p {
+        SourcePeripheral::ADC => match instance {
+            1 => 0x4001_2000 + 0x4C,
+            2 => 0x4001_2100 + 0x4C,
+            3 => 0x4001_2200 + 0x4C,
+            _ => panic!(),
+        },
+
         _ => unimplemented!(),
     }
 }
 
-fn peripheral_target_address(p: TargetPeripheral) -> usize {
+fn peripheral_target_address(p: TargetPeripheral, instance: u8) -> usize {
     match p {
         _ => unimplemented!(),
     }
@@ -305,13 +312,13 @@ pub enum Controller {
 }
 
 fn map_source_to_dma_stream(peripheral: SourcePeripheral,
-                            instance: u8) -> (Controller, &'static [u8])
+                            instance: u8) -> (Controller, &'static [(u8, u8)])
 {
     match peripheral {
         SourcePeripheral::ADC => match instance {
-            1 => (Controller::DMA2, &[0, 4]),
-            2 => (Controller::DMA2, &[2, 3]),
-            3 => (Controller::DMA2, &[0, 1]),
+            1 => (Controller::DMA2, &[(0, 0), (0, 0)]),
+            2 => (Controller::DMA2, &[(2, 2), (3, 2)]),
+            3 => (Controller::DMA2, &[(0, 2), (1, 2)]),
             _ => panic!(),
         },
     }
@@ -380,18 +387,22 @@ impl Stream {
         }
     }
 
-    fn configure(&self, params: &hil::dma::Parameters) -> Result<(), ErrorCode> {
+    fn configure(&self, params: &hil::dma::Parameters, channel_no: u8) -> Result<(), ErrorCode> {
         self.busy.set(true);
 
         let stream_registers = self.stream_registers();
+
+        // Select the channel if transferring to/from a peripheral.
+        stream_registers.sxcr.modify(SXCR::CHSEL.val(channel_no as u32));
+        stream_registers.sxcr.modify(SXCR::CIRC::SET);
         // Set the source/destination address for peripherals.
         // For memory-to-memory, simply set it to zero.
         // It will get set just before we start the transfer.
         stream_registers.sxpar.set(match params.kind {
             TransferKind::MemoryToPeripheral(target_peripheral, instance) =>
-                peripheral_target_address(target_peripheral) as u32,
+                peripheral_target_address(target_peripheral, instance) as u32,
             TransferKind::PeripheralToMemory(source_peripheral, instance) =>
-                peripheral_source_address(source_peripheral) as u32,
+                peripheral_source_address(source_peripheral, instance) as u32,
             _ => 0x0,
         });
         // Set transfer count.
@@ -642,8 +653,8 @@ impl<'a> DMA<'a> {
         // }
     }
 
-    fn all_stream_nos() -> &'static [u8] {
-        &[0, 1, 2, 3, 4, 5, 6, 7]
+    fn all_stream_nos() -> &'static [(u8, u8)] {
+        &[(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0), (7, 0)]
     }
 }
 
@@ -673,11 +684,12 @@ impl<'a> hil::dma::DMA for DMA<'a> {
         } else {
             // Check all possible streams.
             let available_stream = possible_stream_nos.iter()
-                .map(|stream_no| &self.streams[*stream_no as usize]) // ...as streams
-                .filter(|stream| stream.is_available()) // ...check availability
+                .map(|(stream_no, channel_no)| (&self.streams[*stream_no as usize], *channel_no)) // ...as streams
+                .filter(|(stream, _channel_no)| stream.is_available()) // ...check availability
                 .next(); // ...grab first one.
-            if let Some(stream) = available_stream {
-                stream.configure(params)?;
+            if let Some((stream, channel_no)) = available_stream {
+                kernel::debug!("Configuring DMA stream {}.", stream.stream_no);
+                stream.configure(params, channel_no)?;
                 Ok(stream)
             } else {
                 Err(ErrorCode::BUSY)

@@ -16,7 +16,7 @@ pub enum TransferSize {
 
 #[derive(Copy, Clone)]
 pub enum SourcePeripheral {
-    /// Analog-to-digial converter.
+    /// Analog-to-digital converter.
     ADC,
 }
 
@@ -31,9 +31,9 @@ pub enum TransferKind {
     /// Memory-to-memory transfer (e.g. RAM to RAM, ROM to RAM, etc).
     MemoryToMemory,
     /// Memory-to-peripheral (e.g., RAM to DAC).
-    MemoryToPeripheral(TargetPeripheral),
+    MemoryToPeripheral(TargetPeripheral, u8),
     /// Peripheral-to-memory.
-    PeripheralToMemory(SourcePeripheral),
+    PeripheralToMemory(SourcePeripheral, u8),
 }
 
 /// Configurable parameters for DMA channels.
