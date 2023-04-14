@@ -419,7 +419,7 @@ impl<'a> SubADC<'a> {
     }
 
     pub fn enable(&self) {
-        kernel::debug!("powering ADC...");
+        // kernel::debug!("powering ADC...");
         if !self.clock.is_enabled() {
             self.clock.enable();
         }
@@ -743,7 +743,7 @@ impl hil::adc::AdcHighSpeed for Adc<'static> {
                     adc.status.set(ADCStatus::HighSpeed(*channel as u8));
                     adc.registers.sqr1.modify(SQR1::L.val(0));
                     adc.registers.sqr3.modify(SQR3::SQ1.val(*channel as u32));
-                    adc.registers.smpr2.modify(SMPR2::SMP0.val(0b010));
+                    adc.registers.smpr2.modify(SMPR2::SMP0.val(0b001));
                     adc.registers.cr2.modify(CR2::DMA::SET);
                     adc.registers.cr2.modify(CR2::DDS::SET);
                     adc.registers.cr2.modify(CR2::CONT::SET);

@@ -61,6 +61,8 @@ pub trait DMA {
     /// Stop and disable a DMA channel.
     fn stop(&'static self, channel_no: usize) -> Result<(), ErrorCode>;
 
+    fn power_off(&'static self) -> Result<(), ErrorCode>;
+
     fn status(&'static self) -> usize;
 }
 

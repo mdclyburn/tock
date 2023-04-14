@@ -151,6 +151,12 @@ impl SyscallDriver for MMDMA {
                 CommandReturn::success()
             },
 
+            // Power off
+            (150, _r2, _r3) => {
+                let _r = self.dma.power_off();
+                CommandReturn::success()
+            },
+
             // DMA status
             (200, _r2, _r3) => {
                 let total = self.requests.iter()

@@ -486,7 +486,7 @@ impl hil::dma::DMAChannel for Stream {
                 };
                 let d_addr = dst_buffer.as_ref().map(|b| b.as_ptr() as u32).ok_or(ErrorCode::INVAL)?;
                 stream_registers.sxndtr.set(dst_buffer.as_ref().map(|b| b.len() * length_factor).ok_or(ErrorCode::INVAL)? as u32);
-                kernel::debug!("SXNDTR = {}", stream_registers.sxndtr.get());
+                // kernel::debug!("SXNDTR = {}", stream_registers.sxndtr.get());
                 // Just need to set the destination address.
                 // Peripheral address set during the configuration.
                 stream_registers.sxm0ar.set(d_addr);
@@ -675,17 +675,6 @@ impl<'a> DMA<'a> {
             self.streams[4].transfer_error();
             self.registers.hifcr.modify(HIFCR::CTEIF4::SET);
         }
-
-        // let block_inactive = self.streams.iter()
-        //     .fold(true, |agg, cur| agg && cur.is_available());
-        // if block_inactive {
-        //     kernel::debug!("stopping {}",
-        //                    match self.controller {
-        //                        Controller::DMA1 => "DMA1",
-        //                        Controller::DMA2 => "DMA2",
-        //                    });
-        //     self.clock.disable();
-        // }
     }
 
     fn all_stream_nos() -> &'static [(u8, u8)] {
@@ -741,5 +730,10 @@ impl<'a> hil::dma::DMA for DMA<'a> {
 
     fn status(&'static self) -> usize {
         self.registers.lisr.get() as usize
+    }
+
+    fn power_off(&'static self) -> Result<(), ErrorCode> {
+        self.clock.disable();
+        Ok(())
     }
 }
