@@ -350,7 +350,7 @@ impl CCConfig {
             1 => panic!("configuring channel used for alarms"),
 
             2 => {
-                self.registers.ccr2.set(self.registers.cnt.get() + compare_value + 8000);
+                self.registers.ccr2.set(compare_value);
                 self.registers.ccmr1_output.modify(CCMR1_Output::OC2M::TOGGLE);
                 self.registers.ccmr1_output.modify(CCMR1_Output::OC2PE::CLEAR);
                 self.registers.sr.modify(SR::CC2IF::CLEAR);
@@ -358,14 +358,20 @@ impl CCConfig {
             },
 
             3 => {
-                self.registers.ccr3.set(self.registers.cnt.get() + compare_value + 8000);
+                self.registers.ccr3.set(compare_value);
                 self.registers.ccmr2_output.modify(CCMR2_Output::OC3M::TOGGLE);
                 self.registers.ccmr2_output.modify(CCMR2_Output::OC3PE::CLEAR);
                 self.registers.sr.modify(SR::CC3IF::CLEAR);
                 self.registers.ccer.modify(CCER::CC3E::SET);
             },
 
-            4 => unimplemented!(),
+            4 => {
+                self.registers.ccr3.set(compare_value);
+                self.registers.ccmr2_output.modify(CCMR2_Output::OC4M::TOGGLE);
+                self.registers.ccmr2_output.modify(CCMR2_Output::OC4PE::CLEAR);
+                self.registers.sr.modify(SR::CC4IF::CLEAR);
+                self.registers.ccer.modify(CCER::CC4E::SET);
+            },
 
             _ => panic!(),
         };
@@ -385,7 +391,10 @@ impl CCConfig {
                 self.registers.ccr3.set(self.registers.cnt.get().wrapping_add(offset));
             },
 
-            4 => unimplemented!(),
+            4 => {
+                self.registers.sr.modify(SR::CC4IF::CLEAR);
+                self.registers.ccr4.set(self.registers.cnt.get().wrapping_add(offset));
+            },
 
             _ => panic!(),
         }
@@ -432,8 +441,39 @@ impl<'a> Tim2<'a> {
     }
 
     pub fn handle_interrupt(&self) {
-        self.registers.sr.modify(SR::CC1IF::CLEAR);
-        self.client.map(|client| client.alarm());
+        if self.registers.sr.is_set(SR::CC1IF) {
+            self.registers.sr.modify(SR::CC1IF::CLEAR);
+            // kernel::debug!("handling underflow?");
+            self.client.map(|client| client.alarm());
+        }
+
+        if self.registers.sr.is_set(SR::CC2IF) {
+            self.registers.sr.modify(SR::CC2IF::CLEAR);
+        }
+
+        if self.registers.sr.is_set(SR::CC3IF) {
+            self.registers.sr.modify(SR::CC3IF::CLEAR);
+        }
+
+        if self.registers.sr.is_set(SR::CC4IF) {
+            self.registers.sr.modify(SR::CC4IF::CLEAR);
+        }
+
+        if self.registers.sr.is_set(SR::CC1OF) {
+            self.registers.sr.modify(SR::CC1OF::CLEAR);
+        }
+
+        if self.registers.sr.is_set(SR::CC2OF) {
+            self.registers.sr.modify(SR::CC2OF::CLEAR);
+        }
+
+        if self.registers.sr.is_set(SR::CC3OF) {
+            self.registers.sr.modify(SR::CC3OF::CLEAR);
+        }
+
+        if self.registers.sr.is_set(SR::CC4OF) {
+            self.registers.sr.modify(SR::CC4OF::CLEAR);
+        }
     }
 
     // starts the timer
