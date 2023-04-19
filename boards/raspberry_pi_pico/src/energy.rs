@@ -127,14 +127,16 @@ impl<A: 'static + time::Frequency,
                 }
             }
 
-            // Sum up the usages according to my fancy heuristic.
+            let z = 7;
+            let z_usage = z * (d_prev_call_us / 1000) / 10;
+
+            // Sum up the usages according to the heuristic.
             if let Some(base_usage_idx) = base_usage_idx {
-                let mut acc_usage: usize = 0;
+                let mut acc_usage: usize = z_usage;
                 for i in 0..ADC_CHANNELS {
-                    if i == base_usage_idx {
-                        acc_usage += usages[i];
-                    } else {
-                        acc_usage += usages[i] / in_use_count as usize;
+                    if usages[i] > 0 {
+                        // kernel::debug!("usage[i]: {}, base usage: {}", usages[i], z_usage);
+                        acc_usage += usages[i] - z_usage;
                     }
                 }
 
@@ -164,7 +166,7 @@ impl<A: 'static + time::Frequency,
                 driver_number: driver_no,
                 subdriver_number: command_no,
                 arg0,
-                arg1: _,
+                arg1,
             } => {
                 match *driver_no {
                     capsules::channeled_adc::DRIVER_NUM => {
@@ -187,13 +189,13 @@ impl<A: 'static + time::Frequency,
                             // It will become inactive once the upcall carrying the sample arrives.
                             1 => {
                                 let channel_no = arg0;
-                                self.adc_state.map(|s| { s[*channel_no] = Usage::Pending(3654) });
+                                self.adc_state.map(|s| { s[*channel_no] = Usage::Pending(43) });
                             },
 
                             2 => {
                                 let channel_no = arg0;
                                 self.update_accounting();
-                                self.adc_state.map(|s| { s[*channel_no] = Usage::Long(36) });
+                                self.adc_state.map(|s| { s[*channel_no] = Usage::Long(24) });
                             },
 
                             // Stopping sampling on a channel.
@@ -292,6 +294,7 @@ impl<A: 'static + time::Frequency,
     }
 
     fn total_accounted(&self) -> u64 {
+        self.update_accounting();
         self.accounted_energy.get()
     }
 }
