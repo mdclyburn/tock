@@ -488,7 +488,7 @@ impl Kernel {
         self.energy_accounting.insert(resources.energy_accounting());
 
         loop {
-            self.kernel_loop_operation(resources, chip, ipc, false, capability);
+            self.kernel_loop_operation(resources, chip, ipc, true, capability);
         }
     }
 
@@ -602,11 +602,11 @@ impl Kernel {
                     // underlying timer is not affected.
                     process.setup_mpu();
 
-                    chip.mpu().enable_app_mpu();
+                    // chip.mpu().enable_app_mpu();
                     scheduler_timer.arm();
                     let context_switch_reason = process.switch_to();
                     scheduler_timer.disarm();
-                    chip.mpu().disable_app_mpu();
+                    // chip.mpu().disable_app_mpu();
 
                     // Now the process has returned back to the kernel. Check
                     // why and handle the process as appropriate.
