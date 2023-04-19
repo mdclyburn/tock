@@ -8,10 +8,13 @@
 #![cfg_attr(not(doc), no_main)]
 #![deny(missing_docs)]
 
+use capsules::virtual_spi::VirtualSpiMasterDevice;
 use capsules::virtual_alarm::VirtualMuxAlarm;
+
 use kernel::capabilities;
 use kernel::component::Component;
 use kernel::dynamic_deferred_call::{DynamicDeferredCall, DynamicDeferredCallClientState};
+use kernel::hil;
 use kernel::hil::gpio::Configure;
 use kernel::hil::led::LedHigh;
 use kernel::platform::{KernelResources, SyscallDriverLookup};
@@ -56,12 +59,14 @@ struct NucleoF446RE {
         LedHigh<'static, stm32f446re::gpio::Pin<'static>>,
     >,
     button: &'static capsules::button::Button<'static, stm32f446re::gpio::Pin<'static>>,
+    spi: &'static capsules::spi_controller::Spi<'static, capsules::virtual_spi::VirtualSpiMasterDevice<'static, stm32f446re::spi::Spi<'static>>>,
     alarm: &'static capsules::alarm::AlarmDriver<
         'static,
         VirtualMuxAlarm<'static, stm32f446re::tim2::Tim2<'static>>,
     >,
     adc: &'static capsules::channeled_adc::ChanneledADC<stm32f446re::adc::Adc<'static>>,
     dma: &'static capsules::mmdma::MMDMA,
+    ism_radio: &'static capsules::rfm69::RFM69<hil::time::Freq16KHz, hil::time::Ticks32>,
 
     scheduler: &'static RoundRobinSched<'static>,
     systick: cortexm4::systick::SysTick,
@@ -80,6 +85,7 @@ impl SyscallDriverLookup for NucleoF446RE {
             capsules::alarm::DRIVER_NUM => f(Some(self.alarm)),
             capsules::channeled_adc::DRIVER_NUM => f(Some(self.adc)),
             capsules::mmdma::DRIVER_NUM => f(Some(self.dma)),
+            capsules::rfm69::DRIVER_NUM => f(Some(self.ism_radio)),
             kernel::ipc::DRIVER_NUM => f(Some(&self.ipc)),
             _ => f(None),
         }
@@ -333,6 +339,17 @@ pub unsafe fn main() {
         LedHigh<'static, stm32f446re::gpio::Pin>
     ));
 
+    // SPI
+    let spi_nss = gpio_ports.get_pin(stm32f446re::gpio::PinId::PA04).unwrap();
+    let mux_spi = components::spi::SpiMuxComponent::new(&peripherals.stm32f4.spi3, dynamic_deferred_caller)
+        .finalize(components::spi_mux_component_helper!(stm32f446re::spi::Spi));
+    let spi_syscalls = components::spi::SpiSyscallComponent::new(
+        board_kernel,
+        mux_spi,
+        spi_nss,
+        capsules::spi_controller::DRIVER_NUM)
+        .finalize(components::spi_syscall_component_helper!(stm32f446re::spi::Spi));
+
     // BUTTONs
     let button = components::button::ButtonComponent::new(
         board_kernel,
@@ -399,6 +416,27 @@ pub unsafe fn main() {
     use kernel::hil::adc::Adc;
     peripherals.stm32f4.adc1.set_client(channeled_adc_capsule);
 
+    let ism_radio = {
+        use stm32f446re::gpio::PinId;
+
+        let interrupt_pin = gpio_ports.get_pin(PinId::PA13).unwrap();
+        let reset_pin = gpio_ports.get_pin(PinId::PA14).unwrap();
+        let radio_spi = components::spi::SpiComponent::new(mux_spi, spi_nss)
+            .finalize(components::spi_component_helper!(stm32f446re::spi::Spi<'static>));
+
+        static_init!(capsules::rfm69::RFM69<hil::time::Freq16KHz, kernel::hil::time::Ticks32>,
+                     capsules::rfm69::RFM69::new(
+                         board_kernel.create_grant(capsules::rfm69::DRIVER_NUM,
+                                                   &memory_allocation_capability),
+                         radio_spi,
+                         interrupt_pin,
+                         reset_pin,
+                         &peripherals.stm32f4.tim2,
+                         (static_init!([u8; 67], [0; 67]),
+                          static_init!([u8; 67], [0; 67]))))
+    };
+    ism_radio.initialize();
+
     // PROCESS CONSOLE
     let _process_console =
         components::process_console::ProcessConsoleComponent::new(board_kernel, uart_mux)
@@ -416,9 +454,11 @@ pub unsafe fn main() {
         ),
         led: led,
         button: button,
+        spi: spi_syscalls,
         alarm: alarm,
         adc: channeled_adc_capsule,
         dma: mmdma_capsule,
+        ism_radio,
 
         scheduler,
         systick: cortexm4::systick::SysTick::new(),

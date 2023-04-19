@@ -65,6 +65,7 @@ pub mod process_console;
 pub mod proximity;
 pub mod rf233;
 pub mod rf233_const;
+pub mod rfm69;
 pub mod rng;
 pub mod screen;
 pub mod sdcard;
