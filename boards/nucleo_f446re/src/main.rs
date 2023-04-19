@@ -370,14 +370,16 @@ pub unsafe fn main() {
                 Channel::Channel18,
         ]);
 
-        let buffer: &mut [u16; 4096] = static_init!([u16; 4096], [0; 4096]);
+        let buffers: (&mut [u16], &mut [u16]) = (
+            static_init!([u16; 4096], [0; 4096]),
+            static_init!([u16; 4096], [0; 4096]));
         static_init!(capsules::channeled_adc::ChanneledADC::<stm32f446re::adc::Adc<'static>>,
                      capsules::channeled_adc::ChanneledADC::<stm32f446re::adc::Adc<'static>>::new(
                          &peripherals.stm32f4.adc1,
                          channels,
                          board_kernel.create_grant(capsules::channeled_adc::DRIVER_NUM,
                                                    &memory_allocation_capability),
-                         buffer.as_mut_ptr()))
+                         buffers))
     };
     use kernel::hil::adc::Adc;
     peripherals.stm32f4.adc1.set_client(channeled_adc_capsule);

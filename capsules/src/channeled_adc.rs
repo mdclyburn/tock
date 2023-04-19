@@ -5,8 +5,16 @@ use kernel;
 use kernel::grant::Grant;
 use kernel::hil;
 use kernel::process::ProcessId;
+use kernel::processbuffer::{
+    ReadableProcessBuffer,
+    WriteableProcessBuffer,
+    ReadWriteProcessBuffer,
+};
 use kernel::syscall::{CommandReturn, SyscallDriver};
-use kernel::utilities::cells::OptionalCell;
+use kernel::utilities::cells::{
+    OptionalCell,
+    TakeCell,
+};
 use kernel::errorcode::ErrorCode;
 
 pub const DRIVER_NUM: usize = crate::driver::NUM::Adc as usize;
@@ -14,9 +22,13 @@ pub const DRIVER_NUM: usize = crate::driver::NUM::Adc as usize;
 const MAX_CHANNEL_STATES: usize = 8;
 
 mod grant_nos {
-    pub const SAMPLE_BUFFER_1: usize = 0;
-    pub const SAMPLE_BUFFER_2: usize = 1;
+    pub const ALLOW_RW_SAMPLE_BUFFER_1: usize = 0;
+    pub const ALLOW_RW_SAMPLE_BUFFER_2: usize = 1;
+
+    pub const SUBSCRIBE_SAMPLING_COMPLETE: usize = 0;
 }
+
+
 
 #[derive(Clone, Copy, Debug)]
 struct ChannelState {
@@ -24,23 +36,38 @@ struct ChannelState {
     client_pid: ProcessId,
 }
 
-static mut BUFFER: Option<*mut u16> = None;
+pub struct AppData {
+    sample_buffer_1: ReadWriteProcessBuffer,
+    sample_buffer_2: ReadWriteProcessBuffer,
+}
+
+impl Default for AppData {
+    fn default() -> AppData {
+        AppData {
+            sample_buffer_1: ReadWriteProcessBuffer::default(),
+            sample_buffer_2: ReadWriteProcessBuffer::default(),
+        }
+    }
+}
 
 /// An ADC driver that allows multiple processes to access individual channels.
 pub struct ChanneledADC<A: 'static + hil::adc::Adc + hil::adc::AdcHighSpeed> {
     adc: &'static A,
-    grant_data: Grant<(), 1>,
+    grant_data: Grant<AppData, 1>,
     channels: &'static [A::Channel],
     channel_states: [OptionalCell<ChannelState>; MAX_CHANNEL_STATES],
+    buffers: (TakeCell<'static, [u16]>,
+              TakeCell<'static, [u16]>),
 }
 
 impl<A: 'static + hil::adc::Adc + hil::adc::AdcHighSpeed> ChanneledADC<A> {
     pub fn new(adc: &'static A,
                channels: &'static [A::Channel],
-               grant_data: Grant<(), 1>,
-               buffer: *mut u16) -> ChanneledADC<A> {
-        unsafe { BUFFER = Some(buffer); }
-
+               grant_data: Grant<AppData, 1>,
+               buffers: (&'static mut [u16],
+                         &'static mut [u16])
+    ) -> ChanneledADC<A>
+    {
         ChanneledADC {
             adc,
             grant_data,
@@ -55,11 +82,17 @@ impl<A: 'static + hil::adc::Adc + hil::adc::AdcHighSpeed> ChanneledADC<A> {
                 OptionalCell::empty(),
                 OptionalCell::empty(),
             ],
+            buffers: (TakeCell::new(buffers.0),
+                      TakeCell::new(buffers.1)),
         }
     }
 }
 
 impl<A: 'static + hil::adc::Adc + hil::adc::AdcHighSpeed> SyscallDriver for ChanneledADC<A> {
+    fn allocate_grant(&self, pid: ProcessId) -> Result<(), kernel::process::Error> {
+        self.grant_data.enter(pid, |_data, _upcall_table| {  })
+    }
+
     fn command(&self,
                command_no: usize,
                r2: usize,
@@ -154,13 +187,24 @@ impl<A: 'static + hil::adc::Adc + hil::adc::AdcHighSpeed> SyscallDriver for Chan
 
             // Start the experiment.
             (505, frequency, _r3) => {
-                let buffer = unsafe { core::slice::from_raw_parts_mut(BUFFER.unwrap(), 4096) };
-                let buffer2 = unsafe { core::slice::from_raw_parts_mut(BUFFER.unwrap(), 4096) };
-
-                let r = self.adc.sample_highspeed(&self.channels[0], frequency as u32, buffer, buffer.len(), buffer2, buffer.len());
-                match r {
-                    Ok(()) => CommandReturn::success(),
-                    Err((rc, _buffer1, _buffer2)) => CommandReturn::failure(rc),
+                if let Some(buffer1) = self.buffers.0.take() {
+                    if let Some(buffer2) = self.buffers.1.take() {
+                        match self.adc.sample_highspeed(
+                            &self.channels[0],
+                            frequency as u32,
+                            buffer1,
+                            buffer1.len(),
+                            buffer2,
+                            buffer2.len())
+                        {
+                            Ok(()) => CommandReturn::success(),
+                            Err((rc, _buffer1, _buffer2)) => CommandReturn::failure(rc),
+                        }
+                    } else {
+                        CommandReturn::failure(ErrorCode::BUSY)
+                    }
+                } else {
+                    CommandReturn::failure(ErrorCode::BUSY)
                 }
             },
 
@@ -168,8 +212,30 @@ impl<A: 'static + hil::adc::Adc + hil::adc::AdcHighSpeed> SyscallDriver for Chan
         }
     }
 
-    fn allocate_grant(&self, pid: ProcessId) -> Result<(), kernel::process::Error> {
-        self.grant_data.enter(pid, |_data, _upcall_table| {  })
+    fn allow_readwrite(
+        &self,
+        pid: ProcessId,
+        allow_no: usize,
+        mut buffer: ReadWriteProcessBuffer
+    ) -> Result<ReadWriteProcessBuffer, (ReadWriteProcessBuffer, ErrorCode)> {
+        let res = match allow_no {
+            grant_nos::ALLOW_RW_SAMPLE_BUFFER_1 =>
+                self.grant_data.enter(pid, |grant_data, _upcall_table| {
+                    core::mem::swap(&mut buffer, &mut grant_data.sample_buffer_1);
+                }).map_err(|_k_err| ErrorCode::FAIL),
+
+            grant_nos::ALLOW_RW_SAMPLE_BUFFER_2 =>
+                self.grant_data.enter(pid, |grant_data, _upcall_table| {
+                    core::mem::swap(&mut buffer, &mut grant_data.sample_buffer_2);
+                }).map_err(|_k_err| ErrorCode::FAIL),
+
+            _ => Err(ErrorCode::INVAL),
+        };
+
+        match res {
+            Ok(()) => Ok(buffer),
+            Err(err) => Err((buffer, err)),
+        }
     }
 }
 
