@@ -197,7 +197,7 @@ unsafe fn set_pin_primary_functions(
     // NSS - *PA04, PA15
     // SCK - *PB03, PC10
     // MISO - *PB04, PC11
-    // MOSI - *PB00, PB02, PB05, PC01, PC12, PD00, PD06
+    // MOSI - PB00, PB02, *PB05, PC01, PC12, PD00, PD06
     gpio_ports.get_port_from_port_id(PortId::B).enable_clock();
     let spi_pin_ids = [PinId::PA04, PinId::PB03, PinId::PB04, PinId::PB05];
     for pin_id in spi_pin_ids {
