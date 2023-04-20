@@ -8,7 +8,6 @@
 #![cfg_attr(not(doc), no_main)]
 #![deny(missing_docs)]
 
-use capsules::virtual_spi::VirtualSpiMasterDevice;
 use capsules::virtual_alarm::VirtualMuxAlarm;
 
 use kernel::capabilities;
@@ -340,6 +339,18 @@ pub unsafe fn main() {
     ));
 
     // SPI
+    use stm32f446re::{dma1, spi};
+    peripherals.stm32f4.spi3.enable_clock();
+    let spi_tx_stream = &base_peripherals.dma_streams[dma1::Dma1Peripheral::SPI3_TX.get_stream_idx()];
+    let spi_rx_stream = &base_peripherals.dma_streams[dma1::Dma1Peripheral::SPI3_RX.get_stream_idx()];
+    peripherals.stm32f4.spi3.set_dma(spi::TxDMA(spi_tx_stream),
+                                     spi::RxDMA(spi_rx_stream));
+    spi_tx_stream.set_client(&peripherals.stm32f4.spi3);
+    spi_rx_stream.set_client(&peripherals.stm32f4.spi3);
+    spi_tx_stream.setup(dma1::Dma1Peripheral::SPI3_TX);
+    spi_rx_stream.setup(dma1::Dma1Peripheral::SPI3_RX);
+    cortexm4::nvic::Nvic::new(dma1::Dma1Peripheral::SPI3_TX.get_stream_irqn()).enable();
+    cortexm4::nvic::Nvic::new(dma1::Dma1Peripheral::SPI3_RX.get_stream_irqn()).enable();
     let spi_nss = gpio_ports.get_pin(stm32f446re::gpio::PinId::PA04).unwrap();
     let mux_spi = components::spi::SpiMuxComponent::new(&peripherals.stm32f4.spi3, dynamic_deferred_caller)
         .finalize(components::spi_mux_component_helper!(stm32f446re::spi::Spi));

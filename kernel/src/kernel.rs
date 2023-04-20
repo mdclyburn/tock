@@ -488,7 +488,7 @@ impl Kernel {
         self.energy_accounting.insert(resources.energy_accounting());
 
         loop {
-            self.kernel_loop_operation(resources, chip, ipc, false, capability);
+            self.kernel_loop_operation(resources, chip, ipc, true, capability);
         }
     }
 
