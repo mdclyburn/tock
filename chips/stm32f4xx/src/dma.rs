@@ -300,6 +300,28 @@ fn peripheral_source_address(p: SourcePeripheral, instance: u8) -> usize {
 
 fn peripheral_target_address(p: TargetPeripheral, instance: u8) -> usize {
     match p {
+        TargetPeripheral::DigitalAudio(channel_no) => match instance {
+            // SAI1
+            1 => match channel_no {
+                // SAI1A
+                0 => 0x4001_5800 + 0x20,
+                // SAI1B
+                1 => 0x4001_5800 + 0x40,
+                _ => panic!(),
+            },
+
+            // SAI2
+            2 => match channel_no {
+                //SAI2A
+                0 => 0x4001_5C00 + 0x20,
+                // SAI2B
+                1 => 0x4001_5C00 + 0x40,
+                _ => panic!(),
+            },
+
+            _ => panic!(),
+        },
+
         _ => unimplemented!(),
     }
 }
@@ -525,7 +547,21 @@ impl hil::dma::DMAChannel for Stream {
             },
 
             // Memory-to-peripheral
-            0b01 => unimplemented!(),
+            0b01 => {
+                let length_factor = match stream_registers.sxcr.read(SXCR::PSIZE) {
+                    0b00 => 4,
+                    0b01 => 2,
+                    0b10 => 1,
+                    _ => panic!(),
+                };
+                let s_addr = src_buffer.as_ref().map(|b| b.as_ptr() as u32).ok_or(ErrorCode::INVAL)?;
+                stream_registers.sxndtr.set(src_buffer.as_ref().map(|b| b.len() * length_factor).ok_or(ErrorCode::INVAL)? as u32);
+                // kernel::debug!("SXNDTR = {}", stream_registers.sxndtr.get());
+                // Just need to set the source address.
+                // Peripheral address (the destination, in this case) set during the configuration.
+                stream_registers.sxm0ar.set(s_addr);
+                self.dst_buffer.put(src_buffer);
+            },
 
             // Memory-to-memory
             0b10 => {
@@ -731,7 +767,7 @@ impl<'a> hil::dma::DMA for DMA<'a> {
         let (req_controller, possible_stream_nos) = match params.kind {
             TransferKind::MemoryToMemory => (Controller::DMA2, Self::all_stream_nos()),
             TransferKind::PeripheralToMemory(p, inst) => map_source_to_dma_stream(p, inst),
-            TransferKind::MemoryToPeripheral(p, inst) => unimplemented!(),
+            TransferKind::MemoryToPeripheral(p, inst) => map_target_to_dma_stream(p, inst),
         };
 
         if self.controller != req_controller {

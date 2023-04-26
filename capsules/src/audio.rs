@@ -27,6 +27,14 @@ impl AudioPlayer {
             buffer: TakeCell::new(buffer),
         }
     }
+
+    pub fn configure(&'static self) {
+        self.dai.set_client(self)
+    }
+
+    pub fn test(&self) {
+        self.dai.play(self.buffer.take().unwrap());
+    }
 }
 
 impl DigitalAudioClient for AudioPlayer {

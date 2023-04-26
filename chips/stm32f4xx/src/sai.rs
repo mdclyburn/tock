@@ -49,9 +49,9 @@ struct SAIRegisters {
 }
 
 const SAI1_BASE: StaticRef<SAIRegisters> =
-    unsafe { StaticRef::new(0x4002_5800 as *const SAIRegisters) };
+    unsafe { StaticRef::new(0x4001_5800 as *const SAIRegisters) };
 const SAI2_BASE: StaticRef<SAIRegisters> =
-    unsafe { StaticRef::new(0x4002_5C00 as *const SAIRegisters) };
+    unsafe { StaticRef::new(0x4001_5C00 as *const SAIRegisters) };
 
 register_bitfields![
     u32,
@@ -357,6 +357,10 @@ impl<'a> hil::digital_audio::DigitalAudioInterface for SAI<'a> {
         } else {
             hil::digital_audio::State::Idle
         }
+    }
+
+    fn set_client(&self, client: &'static dyn hil::digital_audio::DigitalAudioClient) {
+        self.client.set(client);
     }
 }
 

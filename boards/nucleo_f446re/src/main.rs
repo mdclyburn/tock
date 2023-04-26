@@ -452,10 +452,16 @@ pub unsafe fn main() {
 
     // AUDIO
     let audio = {
-        static_init!(capsules::audio::AudioPlayer,
-                     capsules::audio::AudioPlayer::new(&peripherals.stm32f4.sai,
-                                                       static_init!([u16; 12288], [0; 12288])))
+        let audio = static_init!(
+            capsules::audio::AudioPlayer,
+            capsules::audio::AudioPlayer::new(&peripherals.stm32f4.sai,
+                                              static_init!([u16; 1024], [0; 1024])));
+
+        audio
     };
+
+    audio.configure();
+    audio.test();
 
     // PROCESS CONSOLE
     let _process_console =

@@ -22,6 +22,10 @@ pub enum SourcePeripheral {
 
 #[derive(Copy, Clone)]
 pub enum TargetPeripheral {
+    /// Digital audio interface.
+    ///
+    /// Additionally specifies a channel no.
+    DigitalAudio(u8),
     /// Hardware-dependent peripheral.
     Custom(u8),
 }
