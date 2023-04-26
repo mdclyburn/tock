@@ -324,6 +324,37 @@ fn map_source_to_dma_stream(peripheral: SourcePeripheral,
     }
 }
 
+fn map_target_to_dma_stream(peripheral: TargetPeripheral,
+                            instance: u8) -> (Controller, &'static [(u8, u8)])
+{
+    match peripheral {
+        // Match instance, then channel.
+        TargetPeripheral::DigitalAudio(channel_no) => match instance {
+            // SAI1
+            1 => match channel_no {
+                // SAI1A
+                0 => (Controller::DMA2, &[(1, 0), (3, 0)]),
+                // SAI1B
+                1 => (Controller::DMA2, &[(4, 1), (5, 0)]),
+                _ => panic!(),
+            },
+
+            // SAI2
+            2 => match channel_no {
+                // SAI2A
+                0 => (Controller::DMA2, &[(4, 3)]),
+                // SAI2B
+                1 => (Controller::DMA2, &[(6, 3), (7, 0)]),
+                _ => panic!(),
+            },
+
+            _ => panic!(),
+        },
+
+        _ => panic!(),
+    }
+}
+
 pub struct Stream {
     stream_no: usize,
     controller_registers: StaticRef<DMARegisters>,
@@ -712,7 +743,7 @@ impl<'a> hil::dma::DMA for DMA<'a> {
                 .filter(|(stream, _channel_no)| stream.is_available()) // ...check availability
                 .next(); // ...grab first one.
             if let Some((stream, channel_no)) = available_stream {
-                kernel::debug!("Configuring DMA stream {}.", stream.stream_no);
+                // kernel::debug!("Configuring DMA stream {}.", stream.stream_no);
                 stream.configure(params, channel_no)?;
                 Ok(stream)
             } else {
@@ -730,6 +761,11 @@ impl<'a> hil::dma::DMA for DMA<'a> {
 
     fn status(&'static self) -> usize {
         self.registers.lisr.get() as usize
+    }
+
+    fn power_on(&'static self) -> Result<(), ErrorCode> {
+        self.clock.enable();
+        Ok(())
     }
 
     fn power_off(&'static self) -> Result<(), ErrorCode> {

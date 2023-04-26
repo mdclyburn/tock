@@ -29,6 +29,7 @@ pub struct Stm32f4xxDefaultPeripherals<'a> {
     pub usart3: crate::usart::Usart<'a>,
     pub gpio_ports: crate::gpio::GpioPorts<'a>,
     pub fsmc: crate::fsmc::Fsmc<'a>,
+    pub sai: crate::sai::SAI<'a>,
 }
 
 impl<'a> Stm32f4xxDefaultPeripherals<'a> {
@@ -65,12 +66,17 @@ impl<'a> Stm32f4xxDefaultPeripherals<'a> {
                 ],
                 rcc,
             ),
+            sai: crate::sai::SAI::new(crate::sai::Instance::SAI1,
+                                      crate::rcc::PeripheralClock::new(
+                                          crate::rcc::PeripheralClockType::APB2(crate::rcc::PCLK2::SAI1),
+                                          rcc)),
         }
     }
 
     pub fn setup_circular_deps(&'a self) {
         self.gpio_ports.setup_circular_deps();
         self.adc1.configure(&self.tim2, &self.dma2);
+        self.sai.configure(&self.dma2);
     }
 }
 

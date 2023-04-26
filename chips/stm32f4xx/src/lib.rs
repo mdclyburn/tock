@@ -22,6 +22,7 @@ pub mod fsmc;
 pub mod gpio;
 pub mod i2c;
 pub mod rcc;
+pub mod sai;
 pub mod spi;
 pub mod syscfg;
 pub mod tim2;

@@ -66,6 +66,7 @@ struct NucleoF446RE {
     adc: &'static capsules::channeled_adc::ChanneledADC<stm32f446re::adc::Adc<'static>>,
     dma: &'static capsules::mmdma::MMDMA,
     ism_radio: &'static capsules::rfm69::RFM69<hil::time::Freq16KHz, hil::time::Ticks32>,
+    audio: &'static capsules::audio::AudioPlayer,
 
     scheduler: &'static RoundRobinSched<'static>,
     systick: cortexm4::systick::SysTick,
@@ -85,6 +86,7 @@ impl SyscallDriverLookup for NucleoF446RE {
             capsules::channeled_adc::DRIVER_NUM => f(Some(self.adc)),
             capsules::mmdma::DRIVER_NUM => f(Some(self.dma)),
             capsules::rfm69::DRIVER_NUM => f(Some(self.ism_radio)),
+            capsules::audio::DRIVER_NUM => f(Some(self.audio)),
             kernel::ipc::DRIVER_NUM => f(Some(&self.ipc)),
             _ => f(None),
         }
@@ -287,11 +289,11 @@ pub unsafe fn main() {
     CHIP = Some(chip);
 
     // DMA2
-
-
     let mmdma_capsule = static_init!(
         capsules::mmdma::MMDMA,
-        capsules::mmdma::MMDMA::new(&base_peripherals.dma2));
+        capsules::mmdma::MMDMA::new(
+            dma1,
+            &base_peripherals.dma2));
     mmdma_capsule.configure(mmdma_capsule);
 
     // UART
@@ -448,6 +450,13 @@ pub unsafe fn main() {
     };
     ism_radio.initialize();
 
+    // AUDIO
+    let audio = {
+        static_init!(capsules::audio::AudioPlayer,
+                     capsules::audio::AudioPlayer::new(&peripherals.stm32f4.sai,
+                                                       static_init!([u16; 12288], [0; 12288])))
+    };
+
     // PROCESS CONSOLE
     let _process_console =
         components::process_console::ProcessConsoleComponent::new(board_kernel, uart_mux)
@@ -470,6 +479,7 @@ pub unsafe fn main() {
         adc: channeled_adc_capsule,
         dma: mmdma_capsule,
         ism_radio,
+        audio,
 
         scheduler,
         systick: cortexm4::systick::SysTick::new(),

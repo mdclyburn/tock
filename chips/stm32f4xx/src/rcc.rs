@@ -97,6 +97,7 @@ register_bitfields![u32,
         HSION OFFSET(0) NUMBITS(1) []
     ],
     PLLCFGR [
+        PLLR OFFSET(28) NUMBITS(3) [],
         /// Main PLL (PLL) division factor for USB OTG FS, SDIO and random num
         PLLQ OFFSET(24) NUMBITS(4) [],
         /// Main PLL(PLL) and audio PLL (PLLI2S) entry clock source
@@ -735,7 +736,7 @@ impl Rcc {
     }
 
     fn configure_rng_clock(&self) {
-        self.registers.pllcfgr.modify(PLLCFGR::PLLQ.val(2));
+        self.registers.pllcfgr.modify(PLLCFGR::PLLQ.val(2) + PLLCFGR::PLLR.val(2));
         self.registers.cr.modify(CR::PLLON::SET);
     }
 
@@ -823,6 +824,34 @@ impl Rcc {
 
     fn disable_dma2_clock(&self) {
         self.registers.ahb1enr.modify(AHB1ENR::DMA2EN::CLEAR)
+    }
+
+    // SAI1 clock
+
+    fn is_enabled_sai1_clock(&self) -> bool {
+        self.registers.apb2enr.is_set(APB2ENR::SAI1EN)
+    }
+
+    fn enable_sai1_clock(&self) {
+        self.registers.apb2enr.modify(APB2ENR::SAI1EN::SET)
+    }
+
+    // SAI2 clock
+
+    fn is_enabled_sai2_clock(&self) -> bool {
+        self.registers.apb2enr.is_set(APB2ENR::SAI2EN)
+    }
+
+    fn enable_sai2_clock(&self) {
+        self.registers.apb2enr.modify(APB2ENR::SAI2EN::SET)
+    }
+
+    fn disable_sai2_clock(&self) {
+        self.registers.apb2enr.modify(APB2ENR::SAI2EN::CLEAR)
+    }
+
+    fn disable_sai1_clock(&self) {
+        self.registers.apb2enr.modify(APB2ENR::SAI1EN::CLEAR)
     }
 
     // GPIOH clock
@@ -1111,6 +1140,8 @@ pub enum PCLK2 {
     ADC1,
     ADC2,
     ADC3,
+    SAI1,
+    SAI2,
     SYSCFG,
 }
 
@@ -1157,6 +1188,8 @@ impl<'a> ClockInterface for PeripheralClock<'a> {
                 PCLK2::ADC1 => self.rcc.is_enabled_adc1_clock(),
                 PCLK2::ADC2 => self.rcc.is_enabled_adc2_clock(),
                 PCLK2::ADC3 => self.rcc.is_enabled_adc3_clock(),
+                PCLK2::SAI1 => self.rcc.is_enabled_sai1_clock(),
+                PCLK2::SAI2 => self.rcc.is_enabled_sai2_clock(),
                 PCLK2::SYSCFG => self.rcc.is_enabled_syscfg_clock(),
             },
         }
@@ -1235,6 +1268,14 @@ impl<'a> ClockInterface for PeripheralClock<'a> {
 
                 PCLK2::ADC3 => {
                     self.rcc.enable_adc3_clock();
+                }
+
+                PCLK2::SAI1 => {
+                    self.rcc.enable_sai1_clock();
+                }
+
+                PCLK2::SAI2 => {
+                    self.rcc.enable_sai2_clock();
                 }
 
                 PCLK2::SYSCFG => {
@@ -1317,6 +1358,14 @@ impl<'a> ClockInterface for PeripheralClock<'a> {
 
                 PCLK2::ADC3 => {
                     self.rcc.disable_adc3_clock();
+                }
+
+                PCLK2::SAI1 => {
+                    self.rcc.disable_sai1_clock();
+                }
+
+                PCLK2::SAI2 => {
+                    self.rcc.disable_sai2_clock();
                 }
 
                 PCLK2::SYSCFG => {

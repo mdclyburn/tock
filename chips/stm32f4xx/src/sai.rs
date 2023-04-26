@@ -1,14 +1,25 @@
 /*! Serial Audio Interface
  */
 
+use kernel::errorcode::ErrorCode;
+use kernel::hil;
+use kernel::hil::dma::DMAChannel;
+use kernel::platform::chip::ClockInterface;
+use kernel::utilities::cells::OptionalCell;
 use kernel::utilities::registers::{
     register_bitfields,
     ReadOnly,
     ReadWrite,
     WriteOnly,
+    interfaces::{
+        Readable as _,
+        Writeable as _,
+        ReadWriteable as _
+    },
 };
 use kernel::utilities::StaticRef;
 
+use crate::dma::DMA;
 use crate::nvic;
 use crate::rcc;
 use crate::rcc::{
@@ -112,8 +123,7 @@ register_bitfields![
 
     CR2 [
         // Companding mode
-        COMP OFFSET(14) NUMBITS(2) [
-        ],
+        COMP OFFSET(14) NUMBITS(2) [  ],
         // Complement bit
         CPL OFFSET(13) NUMBITS(1) [
             ONES_COMPLEMENT = 0b0,
@@ -153,7 +163,7 @@ register_bitfields![
         // Frame synchronization polarity
         FSPOL OFFSET(17) NUMBITS(1) [
             ACTIVE_LOW = 0b0,
-            ACTIVE_HIGH 0b1,
+            ACTIVE_HIGH = 0b1,
         ],
         // Frame synchronization definition
         FSDEF OFFSET(16) NUMBITS(1) [
@@ -239,5 +249,133 @@ register_bitfields![
         COVRUDR OFFSET(0) NUMBITS(1) [  ],
     ],
 
-    DR [  ]
+    DR [
+        DATA OFFSET(0) NUMBITS(32) [  ],
+    ],
 ];
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum Instance {
+    SAI1,
+    SAI2,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum Channel {
+    A,
+    B,
+}
+
+pub struct SAI<'a> {
+    instance: Instance,
+    registers: StaticRef<SAIRegisters>,
+    clock: PeripheralClock<'a>,
+    dma: OptionalCell<&'a DMA<'a>>,
+    a_dma_channel: OptionalCell<&'static dyn DMAChannel>,
+    b_dma_channel: OptionalCell<&'static dyn DMAChannel>,
+    client: OptionalCell<&'static dyn hil::digital_audio::DigitalAudioClient>,
+}
+
+impl<'a> SAI<'a> {
+    pub fn new(instance: Instance,
+               clock: PeripheralClock<'a>,
+    ) -> SAI<'a>
+    {
+        let registers = match instance {
+            Instance::SAI1 => SAI1_BASE,
+            Instance::SAI2 => SAI2_BASE,
+        };
+
+        SAI {
+            instance,
+            registers,
+            clock,
+            dma: OptionalCell::empty(),
+            a_dma_channel: OptionalCell::empty(),
+            b_dma_channel: OptionalCell::empty(),
+            client: OptionalCell::empty(),
+        }
+    }
+
+    pub fn configure(&self, dma: &'a DMA<'a>) {
+        self.dma.set(dma);
+    }
+}
+
+impl<'a> hil::digital_audio::DigitalAudioInterface for SAI<'a> {
+    fn play(&'static self, buffer: &'static mut [u16]) -> Result<(), (&'static mut [u16], ErrorCode)> {
+        use kernel::hil::dma::DMA as _;
+        if self.a_dma_channel.is_none() {
+            let res = self.dma.extract().unwrap().configure(&hil::dma::Parameters {
+                kind: hil::dma::TransferKind::MemoryToPeripheral(
+                    hil::dma::TargetPeripheral::DigitalAudio(0),
+                    match self.instance {
+                        Instance::SAI1 => 1,
+                        Instance::SAI2 => 2,
+                    }),
+                transfer_count: buffer.len(),
+                transfer_size: hil::dma::TransferSize::HalfWord,
+                increment_on_read: true,
+                increment_on_write: false,
+                high_priority: true,
+            });
+
+            if res.is_err() {
+                return Err((buffer, ErrorCode::FAIL));
+            }
+
+            let channel = res.unwrap();
+            channel.set_client(self);
+            self.a_dma_channel.set(channel);
+        }
+
+        let resized_buffer = unsafe {
+            core::slice::from_raw_parts_mut(buffer.as_mut_ptr() as *mut usize, buffer.len() / 2)
+        };
+        self.a_dma_channel.extract().unwrap().start(Some(resized_buffer), None)
+            .map_err(|e| (buffer, e))?;
+
+        while !self.clock.is_enabled() { self.clock.enable(); }
+
+        // Set up the SAI.
+        self.registers.acr1.modify(
+            CR1::DS::BITS16
+                + CR1::DMAEN::SET
+                + CR1::MCKDIV.val(0b1100));
+        self.registers.acr2.modify(CR2::FTH::FIFO_1_2);
+        self.registers.afrcr.modify(FRCR::FRL.val(15));
+
+        self.registers.acr1.modify(CR1::SAIEN::SET);
+
+        Ok(())
+    }
+
+    fn state(&self) -> hil::digital_audio::State {
+        kernel::debug!("SAI SR: {:b}", self.registers.asr.get());
+        if self.registers.acr1.read(CR1::SAIEN) == 1 {
+            hil::digital_audio::State::Playing
+        } else {
+            hil::digital_audio::State::Idle
+        }
+    }
+}
+
+impl<'a> hil::dma::DMAClient for SAI<'a> {
+    fn transfer_done(&self,
+                     channel: &dyn DMAChannel,
+                     src_buffer: Option<&'static mut [usize]>,
+                     dst_buffer: Option<&'static mut [usize]>)
+    {
+        self.registers.acr1.modify(CR1::DMAEN::CLEAR + CR1::SAIEN::CLEAR);
+        kernel::debug!("Done transferring audio");
+
+        let buffer = unsafe {
+            let buffer = src_buffer.unwrap();
+            core::slice::from_raw_parts_mut(
+                buffer.as_mut_ptr() as *mut u16,
+                buffer.len() * 2)
+        };
+
+        self.client.extract().unwrap().playback_finished(buffer);
+    }
+}
