@@ -3,6 +3,7 @@
 
 use crate::errorcode::ErrorCode;
 
+#[derive(Debug)]
 pub enum State {
     Idle,
     Playing,

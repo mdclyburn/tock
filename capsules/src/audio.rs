@@ -62,8 +62,12 @@ impl SyscallDriver for AudioPlayer {
                 if self.buffer.is_some() {
                     let buffer = self.buffer.take().unwrap();
                     match self.dai.play(buffer) {
-                        Ok(_) => CommandReturn::success(),
+                        Ok(_) => {
+                            kernel::debug!("playing audio: {:?}", self.dai.state());
+                            CommandReturn::success()
+                        },
                         Err((buffer, e)) => {
+                            kernel::debug!("failed to play audio");
                             self.buffer.put(Some(buffer));
                             CommandReturn::failure(e)
                         },

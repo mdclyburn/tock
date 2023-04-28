@@ -385,7 +385,7 @@ enum DataResolution {
     Bit6 = 0b11,
 }
 
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 enum ADCStatus {
     Off,
     Idle,
@@ -641,6 +641,7 @@ impl hil::adc::Adc for Adc<'_> {
 
     fn stop_sampling_channel(&self, channel_no: usize) -> Result<(), ErrorCode> {
         let sampling_adc = self.adcs.iter()
+            .inspect(|adc| kernel::debug!("adc: {:?}", adc.map(|adc| adc.status.get())))
             .find(|mc_adc| {
                 mc_adc.map(|adc| match adc.status.get() {
                     ADCStatus::Continuous(currently_sampling) => currently_sampling as usize == channel_no,
@@ -661,6 +662,10 @@ impl hil::adc::Adc for Adc<'_> {
 
                 if let Some(cc_config) = adc.cc_config.take() {
                     self.timer.map(|t| (*t).deallocate_channel(&cc_config));
+                }
+
+                if let Some(dma_channel) = adc.dma_stream.extract() {
+                    dma_channel.done();
                 }
 
                 Ok(())
@@ -715,6 +720,7 @@ impl hil::adc::AdcHighSpeed for Adc<'static> {
                 TransferKind,
                 TransferSize
             };
+            kernel::debug!("using adc {}", adc_no);
 
             if let Some(dma) = self.dma.extract() {
                 let stream = dma.configure(&Parameters {

@@ -596,6 +596,10 @@ impl hil::dma::DMAChannel for Stream {
     fn set_client(&self, client: &'static dyn hil::dma::DMAClient) {
         self.client.set(client)
     }
+
+    fn done(&self) {
+        self.busy.set(false);
+    }
 }
 
 pub struct DMA<'a> {

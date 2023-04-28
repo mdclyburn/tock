@@ -163,7 +163,6 @@ impl<A: 'static + hil::adc::Adc + hil::adc::AdcHighSpeed> SyscallDriver for Chan
                     let opt_owner_pid: Option<ProcessId> = self.channel_states[channel_no]
                         .map(|s| s.client_pid);
 
-                    self.adc.stop_sampling_channel(0).unwrap();
                     // Check that the request came from the current owner,
                     // if the channel is currently in use.
                     if let Some(owner_pid) = opt_owner_pid {
@@ -171,7 +170,10 @@ impl<A: 'static + hil::adc::Adc + hil::adc::AdcHighSpeed> SyscallDriver for Chan
                             // Perform the cancellation.
                             self.channel_states[channel_no].clear();
                             match self.adc.stop_sampling_channel(channel_no) {
-                                Ok(()) => CommandReturn::success(),
+                                Ok(()) => {
+                                    kernel::debug!("stopped sampling on {}", channel_no);
+                                    CommandReturn::success()
+                                },
                                 Err(e) => CommandReturn::failure(e),
                             }
                         } else {
@@ -189,6 +191,11 @@ impl<A: 'static + hil::adc::Adc + hil::adc::AdcHighSpeed> SyscallDriver for Chan
             (505, frequency, _r3) => {
                 if let Some(buffer1) = self.buffers.0.take() {
                     if let Some(buffer2) = self.buffers.1.take() {
+                        unsafe {
+                            self.buffers.0.put(Some(core::slice::from_raw_parts_mut(buffer1.as_mut_ptr(), buffer1.len())));
+                            self.buffers.1.put(Some(core::slice::from_raw_parts_mut(buffer2.as_mut_ptr(), buffer2.len())));
+                        }
+
                         match self.adc.sample_highspeed(
                             &self.channels[0],
                             frequency as u32,
@@ -197,8 +204,17 @@ impl<A: 'static + hil::adc::Adc + hil::adc::AdcHighSpeed> SyscallDriver for Chan
                             buffer2,
                             buffer2.len())
                         {
-                            Ok(()) => CommandReturn::success(),
-                            Err((rc, _buffer1, _buffer2)) => CommandReturn::failure(rc),
+                            Ok(()) => {
+                                self.channel_states[0].set(ChannelState {
+                                    continuous: false,
+                                    client_pid: pid,
+                                });
+                                CommandReturn::success()
+                            },
+                            Err((rc, _buffer1, _buffer2)) => {
+                                kernel::debug!("failed to start ADC experiment: {:?}", rc);
+                                CommandReturn::failure(rc)
+                            },
                         }
                     } else {
                         CommandReturn::failure(ErrorCode::BUSY)

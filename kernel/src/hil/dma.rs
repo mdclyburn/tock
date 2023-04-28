@@ -65,6 +65,8 @@ pub trait DMA {
     /// Stop and disable a DMA channel.
     fn stop(&'static self, channel_no: usize) -> Result<(), ErrorCode>;
 
+    fn power_on(&'static self) -> Result<(), ErrorCode>;
+
     fn power_off(&'static self) -> Result<(), ErrorCode>;
 
     fn status(&'static self) -> usize;
@@ -86,6 +88,8 @@ pub trait DMAChannel {
 
     /// Assign a client interrupt processing will notify when a transfer completes for this DMA channel.
     fn set_client(&self, client: &'static dyn DMAClient);
+
+    fn done(&self) {  }
 }
 
 /// DMA-related callbacks.
