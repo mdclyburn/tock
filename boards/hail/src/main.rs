@@ -75,6 +75,7 @@ struct Hail {
     ipc: kernel::ipc::IPC<NUM_PROCS, NUM_UPCALLS_IPC>,
     crc: &'static capsules::crc::CrcDriver<'static, sam4l::crccu::Crccu<'static>>,
     dac: &'static capsules::dac::Dac<'static>,
+    aes: &'static capsules::dummy_aes::DummyAES,
     scheduler: &'static RoundRobinSched<'static>,
     systick: cortexm4::systick::SysTick,
 }
@@ -105,6 +106,8 @@ impl SyscallDriverLookup for Hail {
             capsules::crc::DRIVER_NUM => f(Some(self.crc)),
 
             capsules::dac::DRIVER_NUM => f(Some(self.dac)),
+
+            capsules::dummy_aes::DRIVER_NUM => f(Some(self.aes)),
 
             kernel::ipc::DRIVER_NUM => f(Some(&self.ipc)),
             _ => f(None),
@@ -497,6 +500,16 @@ pub unsafe fn main() {
     // );
     // peripherals.pa[16].set_client(debug_process_restart);
 
+    let aes = {
+        let src_buffer = static_init!([u8; 4096], [0; 4096]);
+        let dst_buffer = static_init!([u8; 4096], [0; 4096]);
+
+        static_init!(
+            capsules::dummy_aes::DummyAES,
+            capsules::dummy_aes::DummyAES::new(&peripherals.aes, src_buffer, dst_buffer))
+    };
+    aes.configure();
+
     // Configure application fault policy
     let fault_policy = static_init!(
         kernel::process::ThresholdRestartThenPanicFaultPolicy,
@@ -527,6 +540,7 @@ pub unsafe fn main() {
         ),
         crc,
         dac,
+        aes,
         scheduler,
         systick: cortexm4::systick::SysTick::new(),
     };
