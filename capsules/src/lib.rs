@@ -27,6 +27,7 @@ pub mod ctap;
 pub mod dac;
 pub mod debug_process_restart;
 pub mod driver;
+pub mod dummy_aes;
 pub mod energy;
 pub mod fm25cl;
 pub mod ft6x06;
