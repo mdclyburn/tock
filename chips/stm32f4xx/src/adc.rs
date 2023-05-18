@@ -641,7 +641,7 @@ impl hil::adc::Adc for Adc<'_> {
 
     fn stop_sampling_channel(&self, channel_no: usize) -> Result<(), ErrorCode> {
         let sampling_adc = self.adcs.iter()
-            .inspect(|adc| kernel::debug!("adc: {:?}", adc.map(|adc| adc.status.get())))
+            // .inspect(|adc| kernel::debug!("adc: {:?}", adc.map(|adc| adc.status.get())))
             .find(|mc_adc| {
                 mc_adc.map(|adc| match adc.status.get() {
                     ADCStatus::Continuous(currently_sampling) => currently_sampling as usize == channel_no,
@@ -720,7 +720,7 @@ impl hil::adc::AdcHighSpeed for Adc<'static> {
                 TransferKind,
                 TransferSize
             };
-            kernel::debug!("using adc {}", adc_no);
+            // kernel::debug!("using adc {}", adc_no);
 
             if let Some(dma) = self.dma.extract() {
                 let stream = dma.configure(&Parameters {
@@ -751,7 +751,7 @@ impl hil::adc::AdcHighSpeed for Adc<'static> {
                     adc.registers.sqr3.modify(SQR3::SQ1.val(*channel as u32));
                     adc.registers.smpr2.modify(SMPR2::SMP0.val(0b001));
                     adc.registers.cr2.modify(CR2::DMA::SET);
-                    adc.registers.cr2.modify(CR2::DDS::SET);
+                    // adc.registers.cr2.modify(CR2::DDS::SET);
                     adc.registers.cr2.modify(CR2::CONT::SET);
 
                     adc.registers.cr2.modify(CR2::SWSTART::SET);

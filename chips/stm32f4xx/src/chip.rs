@@ -121,6 +121,8 @@ impl<'a> InterruptService<DeferredCallTask> for Stm32f4xxDefaultPeripherals<'a> 
 
             nvic::SPI3 => self.spi3.handle_interrupt(),
 
+            nvic::SAI1 => self.sai.handle_interrupt(),
+
             nvic::EXTI0 => self.exti.handle_interrupt(),
             nvic::EXTI1 => self.exti.handle_interrupt(),
             nvic::EXTI2 => self.exti.handle_interrupt(),

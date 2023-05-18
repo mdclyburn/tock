@@ -467,7 +467,7 @@ impl Stream {
         stream_registers.sxcr.modify(match params.kind {
             TransferKind::MemoryToMemory => SXCR::DIR::MEMORY_TO_MEMORY + SXCR::PINC::SET + SXCR::MINC::SET,
             TransferKind::MemoryToPeripheral(_p, _ins) => SXCR::DIR::MEMORY_TO_PERIPHERAL + SXCR::PINC::CLEAR + SXCR::MINC::SET,
-            TransferKind::PeripheralToMemory(_p, _ins) => SXCR::DIR::PERIPHERAL_TO_MEMORY + SXCR::PINC::CLEAR + SXCR::MINC::SET + SXCR::CIRC::SET,
+            TransferKind::PeripheralToMemory(_p, _ins) => SXCR::DIR::PERIPHERAL_TO_MEMORY + SXCR::PINC::CLEAR + SXCR::MINC::SET, // + SXCR::CIRC::SET,
         });
         // Match the source and destination size.
         // These could be different and incur different behavior with the FIFO,

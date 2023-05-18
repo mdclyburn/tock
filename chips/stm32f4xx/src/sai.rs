@@ -300,6 +300,10 @@ impl<'a> SAI<'a> {
     pub fn configure(&self, dma: &'a DMA<'a>) {
         self.dma.set(dma);
     }
+
+    pub fn handle_interrupt(&self) {
+        panic!("Unhandled SAI interrupt: {:X}", self.registers.asr.get());
+    }
 }
 
 impl<'a> hil::digital_audio::DigitalAudioInterface for SAI<'a> {
@@ -343,7 +347,8 @@ impl<'a> hil::digital_audio::DigitalAudioInterface for SAI<'a> {
                 + CR1::DMAEN::SET
                 + CR1::MCKDIV.val(0b1100));
         self.registers.acr2.modify(CR2::FTH::FIFO_1_2);
-        self.registers.afrcr.modify(FRCR::FRL.val(15));
+        // self.registers.afrcr.modify(FRCR::FRL.val(15));
+        self.registers.aslotr.modify(SLOTR::SLOTEN.val(0b0000000000000001));
 
         self.registers.acr1.modify(CR1::SAIEN::SET);
 

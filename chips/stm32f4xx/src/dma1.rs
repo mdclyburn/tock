@@ -1,3 +1,5 @@
+use kernel::errorcode::ErrorCode;
+use kernel::hil;
 use kernel::platform::chip::ClockInterface;
 use kernel::utilities::cells::{OptionalCell, TakeCell};
 use kernel::utilities::registers::interfaces::{ReadWriteable, Readable, Writeable};
@@ -1604,6 +1606,40 @@ impl<'a> Dma1<'a> {
 
     pub fn disable_clock(&self) {
         self.clock.disable();
+    }
+}
+
+impl hil::dma::DMA for Dma1<'static> {
+    fn configure(&'static self, params: &hil::dma::Parameters) -> Result<&'static dyn hil::dma::DMAChannel, ErrorCode> {
+        Err(ErrorCode::NOSUPPORT)
+    }
+
+    fn stop(&'static self, channel_no: usize) -> Result<(), ErrorCode> {
+        Err(ErrorCode::NOSUPPORT)
+    }
+
+    fn power_on(&'static self) -> Result<(), ErrorCode> {
+        self.enable_clock();
+        Ok(())
+    }
+
+    fn power_off(&'static self) -> Result<(), ErrorCode> {
+        self.disable_clock();
+        Ok(())
+    }
+
+    fn status(&'static self) -> usize {
+        let mut s: u32 = 0;
+        s |= self.registers.s0cr.get() & 1 << 0;
+        s |= self.registers.s1cr.get() & 1 << 1;
+        s |= self.registers.s2cr.get() & 1 << 2;
+        s |= self.registers.s3cr.get() & 1 << 3;
+        s |= self.registers.s4cr.get() & 1 << 4;
+        s |= self.registers.s5cr.get() & 1 << 5;
+        s |= self.registers.s6cr.get() & 1 << 6;
+        s |= self.registers.s7cr.get() & 1 << 7;
+
+        s as usize
     }
 }
 

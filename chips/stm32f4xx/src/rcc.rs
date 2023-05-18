@@ -736,7 +736,7 @@ impl Rcc {
     }
 
     fn configure_rng_clock(&self) {
-        self.registers.pllcfgr.modify(PLLCFGR::PLLQ.val(2) + PLLCFGR::PLLR.val(2));
+        self.registers.pllcfgr.modify(PLLCFGR::PLLQ.val(2) + PLLCFGR::PLLR.val(7));
         self.registers.cr.modify(CR::PLLON::SET);
     }
 

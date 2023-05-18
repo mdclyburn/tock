@@ -270,7 +270,7 @@ impl<'a> Usart<'a> {
         // Ignore if USARTStateTX is in some other state other than
         // Transfer_Completing.
         if self.usart_tx_state.get() == USARTStateTX::Transfer_Completing {
-            self.disable_tx();
+            // self.disable_tx();
             self.usart_tx_state.set(USARTStateTX::Idle);
 
             // get buffer
