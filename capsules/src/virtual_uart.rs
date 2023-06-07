@@ -439,6 +439,10 @@ impl<'a> uart::Transmit<'a> for UartDevice<'a> {
             Ok(())
         }
     }
+
+    fn power_off(&self) -> Result<(), ErrorCode> {
+        self.mux.uart.power_off()
+    }
 }
 
 impl<'a> uart::Receive<'a> for UartDevice<'a> {
