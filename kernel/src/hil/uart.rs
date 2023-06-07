@@ -153,6 +153,8 @@ pub trait Transmit<'a> {
     ///    not be synchronously cancelled. A callback will be made on the
     ///    client indicating whether the call was successfully cancelled.
     fn transmit_abort(&self) -> Result<(), ErrorCode>;
+
+    fn power_off(&self) -> Result<(), ErrorCode> { Err(ErrorCode::NOSUPPORT) }
 }
 
 pub trait Receive<'a> {

@@ -8,6 +8,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use kernel::hil;
 use kernel::hil::spi;
 use kernel::hil::uart;
+use kernel::platform::chip::ClockInterface;
 use kernel::utilities::cells::OptionalCell;
 use kernel::utilities::registers::interfaces::{ReadWriteable, Readable, Writeable};
 use kernel::utilities::registers::{register_bitfields, ReadOnly, ReadWrite, WriteOnly};
@@ -890,6 +891,11 @@ impl<'a> uart::Transmit<'a> for USART<'a> {
         tx_buffer: &'static mut [u8],
         tx_len: usize,
     ) -> Result<(), (ErrorCode, &'static mut [u8])> {
+        // Enable USART power.
+        if !self.clock.is_enabled() {
+            self.clock.enable();
+        }
+
         if self.usart_tx_state.get() != USARTStateTX::Idle {
             Err((ErrorCode::BUSY, tx_buffer))
         } else {
@@ -935,6 +941,14 @@ impl<'a> uart::Transmit<'a> for USART<'a> {
 
     fn transmit_word(&self, _word: u32) -> Result<(), ErrorCode> {
         Err(ErrorCode::FAIL)
+    }
+
+    fn power_off(&self) -> Result<(), ErrorCode> {
+        if self.clock.is_enabled() {
+            self.clock.disable();
+        }
+
+        Ok(())
     }
 }
 

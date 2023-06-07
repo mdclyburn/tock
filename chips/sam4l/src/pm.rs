@@ -1088,7 +1088,14 @@ pub fn deep_sleep_ready() -> bool {
     let pba = PM_REGS.pbamask.get() & !deep_sleep_pbamask.mask() == 0;
     let pbb = PM_REGS.pbbmask.get() & !deep_sleep_pbbmask.mask() == 0;
     let gpio = gpio::INTERRUPT_COUNT.load(Ordering::Relaxed) == 0;
-    hsb && pba && pbb && gpio
+
+    let can_deep_sleep = hsb && pba && pbb && gpio;
+    if !can_deep_sleep {
+        // kernel::debug!("HSB: {}, PBA: {}, PBB: {}, GPIO: {}", hsb, pba, pbb, gpio);
+        // kernel::debug!("PBA mask: {:016b}", PM_REGS.pbamask.get() & !deep_sleep_pbamask.mask());
+    }
+
+    can_deep_sleep
 }
 
 impl ClockInterface for Clock {

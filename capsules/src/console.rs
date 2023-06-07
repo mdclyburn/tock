@@ -310,6 +310,9 @@ impl uart::TransmitClient for Console<'_> {
                             let written = app.write_len;
                             app.write_len = 0;
                             upcalls.schedule_upcall(1, (written, 0, 0)).ok();
+                            // Disable UART clock.
+                            self.uart.power_off()
+                                .expect("failed to power down UART");
                         }
                     }
                     Err(return_code) => {
