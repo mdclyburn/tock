@@ -40,6 +40,8 @@ use crate::utilities::cells::{
 /// is less than this threshold.
 pub(crate) const MIN_QUANTA_THRESHOLD_US: u32 = 500;
 
+const BATCHING_PATTERN: [usize; 2] = [5, 5];
+
 /// Main object for the kernel. Each board will need to create one.
 pub struct Kernel {
     /// How many "to-do" items exist at any given time. These include
@@ -66,6 +68,12 @@ pub struct Kernel {
 
     /// Energy accounting.
     energy_accounting: OptionalCell<&'static dyn energy::DriverEnergyAccounting>,
+
+    /// Batched syscalls.
+    pending_syscalls: [OptionalCell<(ProcessId, Syscall)>; 5],
+
+    /// Batching pattern index.
+    batching_pattern: Cell<usize>,
 }
 
 /// Enum used to inform scheduler why a process stopped executing (aka why
@@ -102,6 +110,14 @@ impl Kernel {
             grant_counter: Cell::new(0),
             grants_finalized: Cell::new(false),
             energy_accounting: OptionalCell::empty(),
+            pending_syscalls: [
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+            ],
+            batching_pattern: Cell::new(0),
         }
     }
 
@@ -488,7 +504,7 @@ impl Kernel {
         self.energy_accounting.insert(resources.energy_accounting());
 
         loop {
-            self.kernel_loop_operation(resources, chip, ipc, true, capability);
+            self.kernel_loop_operation(resources, chip, ipc, false, capability);
         }
     }
 
@@ -624,7 +640,43 @@ impl Kernel {
                             }
                         }
                         Some(ContextSwitchReason::SyscallFired { syscall }) => {
-                            self.handle_syscall(resources, process, syscall);
+                            match syscall {
+                                // Do not withhold alarm driver syscalls.
+                                Syscall::Command { driver_number: 0, .. } =>
+                                    self.handle_syscall(resources, process, syscall, ),
+
+                                Syscall::Command { .. } => {
+                                    // Add to the queue.
+                                    let next_slot = self.pending_syscalls.iter()
+                                        .find(|slot| slot.is_none())
+                                        .expect("pending syscall queue filled up!");
+                                    next_slot.set((process.processid(), syscall));
+
+                                    // Run syscalls if it is time.
+                                    let batch_limit = BATCHING_PATTERN[self.batching_pattern.get()];
+                                    let pending_syscall_count = self.pending_syscalls.iter()
+                                        .filter(|optc_pnd_syscall| optc_pnd_syscall.is_some())
+                                        .count();
+                                    if pending_syscall_count >= batch_limit {
+                                        // debug!("Running batch of {}", batch_limit);
+                                        self.batching_pattern.increment();
+                                        if self.batching_pattern.get() >= BATCHING_PATTERN.len() {
+                                            self.batching_pattern.set(0);
+                                        }
+
+                                        let it = self.pending_syscalls.iter()
+                                            .filter(|optc_syscall| optc_syscall.is_some());
+                                        for optc_pnd_syscall in it {
+                                            let (pid, pnd_syscall) = optc_pnd_syscall.extract().unwrap();
+                                            // debug!("In batch: {:?}", pnd_syscall);
+                                            self.handle_syscall(resources, process, pnd_syscall);
+                                            optc_pnd_syscall.clear();
+                                        }
+                                    }
+                                },
+
+                                _ => self.handle_syscall(resources, process, syscall)
+                            };
                         }
                         Some(ContextSwitchReason::Interrupted) => {
                             if scheduler_timer.get_remaining_us().is_none() {
