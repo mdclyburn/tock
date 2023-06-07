@@ -501,8 +501,8 @@ pub unsafe fn main() {
     // peripherals.pa[16].set_client(debug_process_restart);
 
     let aes = {
-        let src_buffer = static_init!([u8; 4096], [0; 4096]);
-        let dst_buffer = static_init!([u8; 4096], [0; 4096]);
+        let src_buffer = static_init!([u8; 256], [0; 256]);
+        let dst_buffer = static_init!([u8; 256], [0; 256]);
 
         static_init!(
             capsules::dummy_aes::DummyAES,
@@ -512,8 +512,8 @@ pub unsafe fn main() {
 
     // Configure application fault policy
     let fault_policy = static_init!(
-        kernel::process::ThresholdRestartThenPanicFaultPolicy,
-        kernel::process::ThresholdRestartThenPanicFaultPolicy::new(4)
+        kernel::process::PanicFaultPolicy,
+        kernel::process::PanicFaultPolicy {  }
     );
 
     let scheduler = components::sched::round_robin::RoundRobinComponent::new(&PROCESSES)
@@ -586,6 +586,8 @@ pub unsafe fn main() {
         debug!("Error loading processes!");
         debug!("{:?}", err);
     });
+
+
 
     board_kernel.kernel_loop(&hail, chip, Some(&hail.ipc), &main_loop_capability);
 }
