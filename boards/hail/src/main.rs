@@ -588,6 +588,9 @@ pub unsafe fn main() {
     });
 
 
+    board_kernel.set_alarm_driver(alarm);
+    board_kernel.set_batch_alarm(&peripherals.ast);
+    board_kernel.set_batch_window_duration(3_000);
 
     board_kernel.kernel_loop(&hail, chip, Some(&hail.ipc), &main_loop_capability);
 }
