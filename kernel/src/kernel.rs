@@ -524,17 +524,14 @@ impl Kernel {
     ) {
         // Check if we should run the pending syscalls now.
         if self.run_pending_syscalls.get() {
-            loop {
-                if let Some(pnd_syscall) = self.dequeue_syscall() {
-                    let process = self.processes.iter()
-                        .filter_map(|opt_p| *opt_p)
-                        .find(|p| p.processid() == pnd_syscall.pid)
-                        .expect("process does not exist anymore"); // Not expecting any crashes, so the PID must be valid.
-                    self.handle_syscall(resources, process, pnd_syscall.syscall)
-                } else {
-                    break;
-                }
+            while let Some(pnd_syscall) = self.dequeue_syscall() {
+                let process = self.processes.iter()
+                    .filter_map(|opt_p| *opt_p)
+                    .find(|p| p.processid() == pnd_syscall.pid)
+                    .expect("process does not exist anymore"); // Not expecting any crashes, so the PID must be valid.
+                self.handle_syscall(resources, process, pnd_syscall.syscall)
             }
+
             self.run_pending_syscalls.set(false);
         }
 
