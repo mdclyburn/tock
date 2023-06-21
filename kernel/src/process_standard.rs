@@ -24,7 +24,7 @@ use crate::process_utilities::ProcessLoadError;
 use crate::processbuffer::{ReadOnlyProcessBuffer, ReadWriteProcessBuffer};
 use crate::syscall::{self, Syscall, SyscallReturn, UserspaceKernelBoundary};
 use crate::upcall::UpcallId;
-use crate::utilities::cells::{MapCell, NumericCellExt};
+use crate::utilities::cells::{MapCell, NumericCellExt, OptionalCell};
 
 // The completion code for a process if it faulted.
 const COMPLETION_FAULT: u32 = 0xffffffff;
@@ -193,6 +193,9 @@ pub struct ProcessStandard<'a, C: 'static + Chip> {
     /// MPU regions are saved as a pointer-size pair.
     mpu_regions: [Cell<Option<mpu::Region>>; 6],
 
+    /// Waiting queue for tasks that we hold for later processing.
+    pending_tasks: [OptionalCell<Task>; 5],
+
     /// Essentially a list of upcalls that want to call functions in the
     /// process.
     tasks: MapCell<RingBuffer<'a, Task>>,
@@ -215,44 +218,24 @@ impl<C: Chip> Process for ProcessStandard<'_, C> {
     }
 
     fn enqueue_task(&self, task: Task) -> Result<(), ErrorCode> {
-        // If this app is in a `Fault` state then we shouldn't schedule
-        // any work for it.
-        if !self.is_active() {
-            return Err(ErrorCode::NODEVICE);
-        }
+        let opt_empty_slot = self.pending_tasks.iter()
+            .find(|optc| optc.is_none());
 
-        // Energy accounting hook.
-        if let Some(eacc) = self.kernel.energy_accounting_service() {
-            if let Task::FunctionCall(ref fc) = task {
-                eacc.on_upcall(fc);
-            }
-        }
-
-        let ret = self.tasks.map_or(Err(ErrorCode::FAIL), |tasks| {
-            match tasks.enqueue(task) {
-                true => {
-                    // The task has been successfully enqueued.
-                    Ok(())
-                }
-                false => {
-                    // The task could not be enqueued as there is
-                    // insufficient space in the ring buffer.
-                    Err(ErrorCode::NOMEM)
-                }
-            }
-        });
-
-        if ret.is_ok() {
-            self.kernel.increment_work();
+        if let Some(empty_slot) = opt_empty_slot {
+            empty_slot.set(task);
+            Ok(())
         } else {
-            // On any error we were unable to enqueue the task. Record the
-            // error, but importantly do _not_ increment kernel work.
-            self.debug.map(|debug| {
-                debug.dropped_upcall_count += 1;
-            });
+            Err(ErrorCode::NOMEM)
         }
+    }
 
-        ret
+    fn flush_pending_tasks(&self) {
+        let it = self.pending_tasks.iter()
+            .filter(|optc| optc.is_some());
+        for task_slot in it {
+            self.enqueue_task_internal(task_slot.extract().unwrap());
+            task_slot.clear();
+        }
     }
 
     fn ready(&self) -> bool {
@@ -1692,7 +1675,8 @@ impl<C: 'static + Chip> ProcessStandard<'_, C> {
         process.header = tbf_header;
         process.kernel_memory_break = Cell::new(kernel_memory_break);
         process.app_break = Cell::new(initial_app_brk);
-        process.grant_pointers = MapCell::new(grant_pointers);
+            process.grant_pointers = MapCell::new(grant_pointers);
+            for p in process.pending_tasks.iter() { p.clear(); }
 
         process.flash = app_flash;
 
@@ -2071,5 +2055,46 @@ impl<C: 'static + Chip> ProcessStandard<'_, C> {
     fn is_active(&self) -> bool {
         let current_state = self.state.get();
         current_state != State::Terminated && current_state != State::Faulted
+    }
+
+    fn enqueue_task_internal(&self, task: Task) -> Result<(), ErrorCode> {
+        // If this app is in a `Fault` state then we shouldn't schedule
+        // any work for it.
+        if !self.is_active() {
+            return Err(ErrorCode::NODEVICE);
+        }
+
+        // Energy accounting hook.
+        if let Some(eacc) = self.kernel.energy_accounting_service() {
+            if let Task::FunctionCall(ref fc) = task {
+                eacc.on_upcall(fc);
+            }
+        }
+
+        let ret = self.tasks.map_or(Err(ErrorCode::FAIL), |tasks| {
+            match tasks.enqueue(task) {
+                true => {
+                    // The task has been successfully enqueued.
+                    Ok(())
+                }
+                false => {
+                    // The task could not be enqueued as there is
+                    // insufficient space in the ring buffer.
+                    Err(ErrorCode::NOMEM)
+                }
+            }
+        });
+
+        if ret.is_ok() {
+            self.kernel.increment_work();
+        } else {
+            // On any error we were unable to enqueue the task. Record the
+            // error, but importantly do _not_ increment kernel work.
+            self.debug.map(|debug| {
+                debug.dropped_upcall_count += 1;
+            });
+        }
+
+        ret
     }
 }

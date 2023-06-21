@@ -109,7 +109,7 @@ pub struct Kernel {
     latest_alarm: Cell<(usize, usize)>,
 
     /// Batched syscalls.
-    pending_syscalls: [OptionalCell<PendingSyscall>; 10],
+    pending_syscalls: [OptionalCell<PendingSyscall>; 30],
 
     /// Whether the kernel should run pending syscalls.
     run_pending_syscalls: Cell<BatchingState>,
@@ -157,6 +157,26 @@ impl Kernel {
             next_batch_expiration: OptionalCell::empty(),
             latest_alarm: Cell::new((0, 0)),
             pending_syscalls: [
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
                 OptionalCell::empty(),
                 OptionalCell::empty(),
                 OptionalCell::empty(),
@@ -543,6 +563,7 @@ impl Kernel {
 
             BatchingState::CollectUpcalls => {
                 // See if any process has upcalls to handle.
+                self.process_each(|p| p.flush_pending_tasks());
                 let upcalls_pending = self.processes.iter()
                     .filter_map(|opt_proc| *opt_proc)
                     .map(|proc| proc.has_tasks())

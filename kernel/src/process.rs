@@ -570,6 +570,8 @@ pub trait Process {
 
     /// Return the lowest recorded address of the process stack, if known.
     fn debug_stack_end(&self) -> Option<*const u8>;
+
+    fn flush_pending_tasks(&self);
 }
 
 /// Opaque identifier for custom grants allocated dynamically from a process's
