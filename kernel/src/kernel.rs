@@ -202,7 +202,7 @@ impl Kernel {
 
             let expiration = (now.into_usize(), window_duration_ticks as usize);
             self.next_batch_expiration.set(expiration);
-            debug!("batch window: {:?}", expiration);
+            // debug!("batch window: {:?}", expiration);
 
             expiration
         }
@@ -215,7 +215,7 @@ impl Kernel {
         let pending_syscall = PendingSyscall::new(pid, syscall);
         empty_slot.set(pending_syscall);
         let (_reference, _dt) = self.open_batch_window();
-        debug!("queued: {:?}", pending_syscall.syscall);
+        // debug!("queued: {:?}", pending_syscall.syscall);
     }
 
     fn dequeue_syscall(&self) -> Option<PendingSyscall> {
@@ -548,10 +548,10 @@ impl Kernel {
                     .map(|proc| proc.has_tasks())
                     .fold(false, |acc, cur| cur || acc);
                 if upcalls_pending {
-                    debug!("upcalls only");
+                    // debug!("upcalls only");
                     scheduler.run_upcalls_only(true);
                 } else {
-                    debug!("finished running upcalls");
+                    // debug!("finished running upcalls");
                     scheduler.run_upcalls_only(false);
                     self.run_pending_syscalls.set(BatchingState::RunSyscalls);
                     return;
@@ -574,7 +574,7 @@ impl Kernel {
                 let alarm = self.batch_alarm.expect("window batching without alarm");
                 let (latest_reference, latest_dt) = self.latest_alarm.get();
                 if alarm.now().into_usize() < (latest_reference + latest_dt) {
-                    debug!("future alarm; opening new window");
+                    // debug!("future alarm; opening new window");
                     let (_reference, _dt) = self.open_batch_window();
                 }
 
@@ -814,7 +814,7 @@ impl Kernel {
                                                    arg0: req_reference,
                                                    arg1: req_dt } => {
                                     if subdriver_number == Self::ALARM_COMMAND_SET_ALARM {
-                                        debug!("alarm: {:?}", syscall);
+                                        // debug!("alarm: {:?}", syscall);
                                     }
 
                                     let (latest_reference, latest_dt) = self.latest_alarm.get();
@@ -863,7 +863,7 @@ impl Kernel {
                         None => break,
                         Some(cb) => match cb {
                             Task::FunctionCall(ccb) => {
-                                // if config::CONFIG.trace_syscalls {
+                                if config::CONFIG.trace_syscalls {
                                     debug!(
                                         "[{:?}] function_call @{:#x}({:#x}, {:#x}, {:#x}, {:#x})",
                                         process.processid(),
@@ -873,7 +873,7 @@ impl Kernel {
                                         ccb.argument2,
                                         ccb.argument3,
                                     );
-                                // }
+                                }
                                 process.set_process_function(ccb);
                             }
                             Task::IPC((otherapp, ipc_type)) => {
@@ -1412,7 +1412,7 @@ impl AlarmClient for Kernel {
     ///
     /// Run pending syscalls and also notify the alarm driver of expiration.
     fn alarm(&self) {
-        debug!("batch window expired");
+        // debug!("batch window expired");
         self.next_batch_expiration.clear();
 
         // Alarm upcalls could lead to other operations becoming queued.
