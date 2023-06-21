@@ -546,7 +546,7 @@ pub unsafe fn main() {
     // Uncomment to measure overheads for TakeCell and MapCell:
     // test_take_map_cell::test_take_map_cell();
 
-    debug!("Initialization complete. Entering main loop.");
+    // debug!("Initialization complete. Entering main loop.");
 
     /// These symbols are defined in the linker script.
     extern "C" {
