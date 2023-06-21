@@ -553,7 +553,7 @@ pub unsafe fn main() {
     // Uncomment to measure overheads for TakeCell and MapCell:
     // test_take_map_cell::test_take_map_cell();
 
-    debug!("Initialization complete. Entering main loop.");
+    // debug!("Initialization complete. Entering main loop.");
 
     /// These symbols are defined in the linker script.
     extern "C" {
@@ -586,6 +586,9 @@ pub unsafe fn main() {
         debug!("Error loading processes!");
         debug!("{:?}", err);
     });
+
+    use kernel::hil::uart::Transmit as _;
+    peripherals.usart0.power_off();
 
 
     board_kernel.set_alarm_driver(alarm);
