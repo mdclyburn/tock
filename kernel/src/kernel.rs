@@ -59,6 +59,13 @@ impl PendingSyscall {
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum BatchingState {
+    Batch,
+    CollectUpcalls,
+    RunSyscalls,
+}
+
 /// Main object for the kernel. Each board will need to create one.
 pub struct Kernel {
     /// How many "to-do" items exist at any given time. These include
@@ -102,7 +109,7 @@ pub struct Kernel {
     pending_syscalls: [OptionalCell<PendingSyscall>; 10],
 
     /// Whether the kernel should run pending syscalls.
-    run_pending_syscalls: Cell<bool>,
+    run_pending_syscalls: Cell<BatchingState>,
 }
 
 /// Enum used to inform scheduler why a process stopped executing (aka why
@@ -157,7 +164,7 @@ impl Kernel {
                 OptionalCell::empty(),
                 OptionalCell::empty(),
             ],
-            run_pending_syscalls: Cell::new(false),
+            run_pending_syscalls: Cell::new(BatchingState::Batch),
         }
     }
 
@@ -523,20 +530,41 @@ impl Kernel {
         no_sleep: bool,
         _capability: &dyn capabilities::MainLoopCapability,
     ) {
-        // Check if we should run the pending syscalls now.
-        if self.run_pending_syscalls.get() {
-            while let Some(pnd_syscall) = self.dequeue_syscall() {
-                let process = self.processes.iter()
-                    .filter_map(|opt_p| *opt_p)
-                    .find(|p| p.processid() == pnd_syscall.pid)
-                    .expect("process does not exist anymore"); // Not expecting any crashes, so the PID must be valid.
-                self.handle_syscall(resources, process, pnd_syscall.syscall)
-            }
-
-            self.run_pending_syscalls.set(false);
-        }
-
         let scheduler = resources.scheduler();
+
+        // Check how to handle syscalls.
+        match self.run_pending_syscalls.get() {
+            BatchingState::Batch => scheduler.run_upcalls_only(false),
+
+            BatchingState::CollectUpcalls => {
+                // See if any process has upcalls to handle.
+                let upcalls_pending = self.processes.iter()
+                    .filter_map(|opt_proc| *opt_proc)
+                    .map(|proc| proc.has_tasks())
+                    .fold(false, |acc, cur| cur || acc);
+                if upcalls_pending {
+                    debug!("upcalls only");
+                    scheduler.run_upcalls_only(true);
+                } else {
+                    debug!("finished running upcalls");
+                    scheduler.run_upcalls_only(false);
+                    self.run_pending_syscalls.set(BatchingState::RunSyscalls);
+                    return;
+                }
+            },
+
+            BatchingState::RunSyscalls => {
+                while let Some(pnd_syscall) = self.dequeue_syscall() {
+                    let process = self.processes.iter()
+                        .filter_map(|opt_p| *opt_p)
+                        .find(|p| p.processid() == pnd_syscall.pid)
+                        .expect("process does not exist anymore"); // Not expecting any crashes, so the PID must be valid.
+                    debug!("executing syscall: {:?}", pnd_syscall.syscall);
+                    self.handle_syscall(resources, process, pnd_syscall.syscall)
+                }
+                self.run_pending_syscalls.set(BatchingState::Batch);
+            },
+        }
 
         resources.watchdog().tickle();
         unsafe {
@@ -764,9 +792,9 @@ impl Kernel {
                                 //
                                 // Instead of queueing the syscall, we let it through and make sure to open a batch window
                                 // so that we will service this alarm eventually.
+                                //
+                                // Perhaps how applications use the alarms should determine the size of the batching window?
                                 Syscall::Command { driver_number: 0, .. } => {
-                                    // debug!("alarm: ({}, {}, {}, {})",
-                                    //                0, command_no, reference, dt);
                                     let (_reference, _dt) = self.open_batch_window();
                                     self.handle_syscall(resources, process, syscall)
                                 },
@@ -808,7 +836,7 @@ impl Kernel {
                         None => break,
                         Some(cb) => match cb {
                             Task::FunctionCall(ccb) => {
-                                if config::CONFIG.trace_syscalls {
+                                // if config::CONFIG.trace_syscalls {
                                     debug!(
                                         "[{:?}] function_call @{:#x}({:#x}, {:#x}, {:#x}, {:#x})",
                                         process.processid(),
@@ -818,7 +846,7 @@ impl Kernel {
                                         ccb.argument2,
                                         ccb.argument3,
                                     );
-                                }
+                                // }
                                 process.set_process_function(ccb);
                             }
                             Task::IPC((otherapp, ipc_type)) => {
@@ -1365,7 +1393,7 @@ impl AlarmClient for Kernel {
         let alarm_driver = self.alarm_driver.expect("window batching without alarm driver");
         alarm_driver.alarm();
 
-        // Signal to the kernel loop that we should run syscall queue.
-        self.run_pending_syscalls.set(true);
+        // The next step is to collect syscalls from upcalls waiting to happen.
+        self.run_pending_syscalls.set(BatchingState::CollectUpcalls);
     }
 }

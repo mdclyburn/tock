@@ -19,7 +19,7 @@ use core::cell::Cell;
 use crate::collections::list::{List, ListLink, ListNode};
 use crate::kernel::{Kernel, StoppedExecutingReason};
 use crate::platform::chip::Chip;
-use crate::process::Process;
+use crate::process::{Process, State};
 use crate::scheduler::{Scheduler, SchedulingDecision};
 
 /// A node in the linked list the scheduler uses to track processes
@@ -49,6 +49,7 @@ pub struct RoundRobinSched<'a> {
     time_remaining: Cell<u32>,
     pub processes: List<'a, RoundRobinProcessNode<'a>>,
     last_rescheduled: Cell<bool>,
+    upcalls_only: Cell<bool>,
 }
 
 impl<'a> RoundRobinSched<'a> {
@@ -59,6 +60,7 @@ impl<'a> RoundRobinSched<'a> {
             time_remaining: Cell::new(Self::DEFAULT_TIMESLICE_US),
             processes: List::new(),
             last_rescheduled: Cell::new(false),
+            upcalls_only: Cell::new(false),
         }
     }
 }
@@ -74,10 +76,10 @@ impl<'a, C: Chip> Scheduler<C> for RoundRobinSched<'a> {
 
             // Find next ready process. Place any *empty* process slots, or not-ready
             // processes, at the back of the queue.
-            for node in self.processes.iter() {
+            for node in self.processes.iter(){
                 match node.proc {
                     Some(proc) => {
-                        if proc.ready() {
+                        if (!self.upcalls_only.get() && proc.ready()) || (self.upcalls_only.get() && proc.has_tasks()) {
                             next = Some(proc.processid());
                             break;
                         }
@@ -119,5 +121,9 @@ impl<'a, C: Chip> Scheduler<C> for RoundRobinSched<'a> {
         if !reschedule {
             self.processes.push_tail(self.processes.pop_head().unwrap());
         }
+    }
+
+    fn run_upcalls_only(&self, upcalls_only: bool) {
+        self.upcalls_only.set(upcalls_only);
     }
 }

@@ -31,6 +31,8 @@ pub trait Scheduler<C: Chip> {
     /// if the the scheduler requested this process be run cooperatively.
     fn result(&self, result: StoppedExecutingReason, execution_time_us: Option<u32>);
 
+    fn run_upcalls_only(&self, upcalls_only: bool) {  }
+
     /// Tell the scheduler to execute kernel work such as interrupt bottom
     /// halves and dynamic deferred calls. Most schedulers will use this default
     /// implementation, but schedulers which at times wish to defer interrupt
