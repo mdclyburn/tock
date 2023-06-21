@@ -202,6 +202,7 @@ impl Kernel {
             .expect("pending syscall overflow");
         let pending_syscall = PendingSyscall::new(pid, syscall);
         empty_slot.set(pending_syscall);
+        let (_reference, _dt) = self.open_batch_window();
         debug!("queued: {:?}", pending_syscall.syscall);
     }
 
@@ -756,33 +757,18 @@ impl Kernel {
 
                                 // Alarm driver syscalls work differently...
                                 //
-                                // If the call to the driver is to set an alarm, we intercept that call and modify it.
-                                // We here change the alarm expiration instead to the same time as the next batch window expiration.
-                                // Then, we let the call go through.
-                                // Once the batch window expires, we will call into the alarm driver to let it handle queueing upcalls.
-                                // The alarm driver will not actually communicate with the alarm driver's bottom half.
-                                Syscall::Command { driver_number: 0,
-                                                   subdriver_number: command_no,
-                                                   arg0,
-                                                   arg1 } => {
+                                // We modified the alarm capsule to not actually interact with the bottom-half.
+                                // So, applications can register all the alarms they want.
+                                // Since the kernel controls the timer, the kernel will call into the alarm capsule
+                                // to make sure it eventually handles expired alarms set by applications.
+                                //
+                                // Instead of queueing the syscall, we let it through and make sure to open a batch window
+                                // so that we will service this alarm eventually.
+                                Syscall::Command { driver_number: 0, .. } => {
                                     // debug!("alarm: ({}, {}, {}, {})",
                                     //                0, command_no, reference, dt);
-
-                                    if command_no == Self::ALARM_COMMAND_SET_ALARM {
-                                        let (alarm_reference, alarm_dt) = (arg0, arg1);
-                                        // Create a window if necessary.
-                                        let (window_reference, window_dt) = self.open_batch_window();
-
-                                        debug!("alarm delayed: ({}, {}) -> ({}, {})", arg0, arg1, window_reference, window_dt);
-                                        self.handle_syscall(resources, process, Syscall::Command {
-                                            driver_number: 0,
-                                            subdriver_number: Self::ALARM_COMMAND_SET_ALARM,
-                                            arg0: window_reference,
-                                            arg1: window_dt - 1,
-                                        })
-                                    } else {
-                                        self.handle_syscall(resources, process, syscall)
-                                    }
+                                    let (_reference, _dt) = self.open_batch_window();
+                                    self.handle_syscall(resources, process, syscall)
                                 },
 
                                 Syscall::Command { .. } => {
