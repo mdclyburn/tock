@@ -250,10 +250,13 @@ impl<'a, A: Alarm<'a>> time::AlarmClient for AlarmDriver<'a, A> {
             if let Expiration::Enabled { reference, dt } = alarm.expiration {
                 // Now is not within reference, reference + ticks; this timer
                 // as passed (since reference must be in the past)
+                kernel::debug!("r: {}, dt: {}", reference, dt);
+                kernel::debug!("now: {}", now.into_u32());
                 if !now.within_range(
                     Ticks32::from(reference),
                     Ticks32::from(reference.wrapping_add(dt)),
                 ) {
+                    kernel::debug!("timer passed");
                     alarm.expiration = Expiration::Disabled;
                     self.num_armed.set(self.num_armed.get() - 1);
                     upcalls
@@ -266,6 +269,8 @@ impl<'a, A: Alarm<'a>> time::AlarmClient for AlarmDriver<'a, A> {
                             ),
                         )
                         .ok();
+                } else {
+                    kernel::debug!("timer active");
                 }
             }
         });

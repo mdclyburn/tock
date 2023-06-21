@@ -105,6 +105,9 @@ pub struct Kernel {
     /// Time that the batch window expires; (reference, dt).
     next_batch_expiration: OptionalCell<(usize, usize)>,
 
+    /// The latest unexpired timer; (reference, dt).
+    latest_alarm: Cell<(usize, usize)>,
+
     /// Batched syscalls.
     pending_syscalls: [OptionalCell<PendingSyscall>; 10],
 
@@ -152,6 +155,7 @@ impl Kernel {
             batch_alarm: OptionalCell::empty(),
             batch_window_duration: Cell::new(5000),
             next_batch_expiration: OptionalCell::empty(),
+            latest_alarm: Cell::new((0, 0)),
             pending_syscalls: [
                 OptionalCell::empty(),
                 OptionalCell::empty(),
@@ -198,6 +202,7 @@ impl Kernel {
 
             let expiration = (now.into_usize(), window_duration_ticks as usize);
             self.next_batch_expiration.set(expiration);
+            debug!("batch window: {:?}", expiration);
 
             expiration
         }
@@ -559,10 +564,20 @@ impl Kernel {
                         .filter_map(|opt_p| *opt_p)
                         .find(|p| p.processid() == pnd_syscall.pid)
                         .expect("process does not exist anymore"); // Not expecting any crashes, so the PID must be valid.
-                    debug!("executing syscall: {:?}", pnd_syscall.syscall);
+                    // debug!("executing syscall: {:?}", pnd_syscall.syscall);
                     self.handle_syscall(resources, process, pnd_syscall.syscall)
                 }
+
                 self.run_pending_syscalls.set(BatchingState::Batch);
+
+                use crate::hil::time::Ticks as _;
+                let alarm = self.batch_alarm.expect("window batching without alarm");
+                let (latest_reference, latest_dt) = self.latest_alarm.get();
+                if alarm.now().into_usize() < (latest_reference + latest_dt) {
+                    debug!("future alarm; opening new window");
+                    let (_reference, _dt) = self.open_batch_window();
+                }
+
             },
         }
 
@@ -794,7 +809,19 @@ impl Kernel {
                                 // so that we will service this alarm eventually.
                                 //
                                 // Perhaps how applications use the alarms should determine the size of the batching window?
-                                Syscall::Command { driver_number: 0, .. } => {
+                                Syscall::Command { driver_number: 0,
+                                                   subdriver_number,
+                                                   arg0: req_reference,
+                                                   arg1: req_dt } => {
+                                    if subdriver_number == Self::ALARM_COMMAND_SET_ALARM {
+                                        debug!("alarm: {:?}", syscall);
+                                    }
+
+                                    let (latest_reference, latest_dt) = self.latest_alarm.get();
+                                    if (latest_reference + latest_dt) < (req_reference + req_dt) {
+                                        self.latest_alarm.set((req_reference, req_dt));
+                                    }
+
                                     let (_reference, _dt) = self.open_batch_window();
                                     self.handle_syscall(resources, process, syscall)
                                 },
