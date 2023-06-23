@@ -113,6 +113,7 @@ pub mod syscall;
 pub mod upcall;
 pub mod utilities;
 
+mod batch;
 mod config;
 mod kernel;
 mod memop;

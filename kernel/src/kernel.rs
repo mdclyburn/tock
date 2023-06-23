@@ -8,6 +8,7 @@
 use core::cell::Cell;
 use core::ptr::NonNull;
 
+use crate::batch::{BatchingState, PendingSyscall};
 use crate::capabilities;
 use crate::config;
 use crate::debug;
@@ -43,28 +44,6 @@ use crate::utilities::cells::{
 pub(crate) const MIN_QUANTA_THRESHOLD_US: u32 = 500;
 
 type BatchAlarm = dyn Alarm<'static, Frequency = time::Freq16KHz, Ticks = time::Ticks32>;
-
-#[derive(Clone, Copy)]
-struct PendingSyscall {
-    pid: ProcessId,
-    syscall: Syscall,
-}
-
-impl PendingSyscall {
-    fn new(pid: ProcessId, syscall: Syscall) -> PendingSyscall {
-        PendingSyscall {
-            pid,
-            syscall,
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum BatchingState {
-    Batch,
-    CollectUpcalls,
-    RunSyscalls,
-}
 
 /// Main object for the kernel. Each board will need to create one.
 pub struct Kernel {
