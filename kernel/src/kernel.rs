@@ -8,7 +8,8 @@
 use core::cell::Cell;
 use core::ptr::NonNull;
 
-use crate::batch::{BatchingState, PendingSyscall};
+use crate::batch;
+use crate::batch::{BatchController, BatchingState};
 use crate::capabilities;
 use crate::config;
 use crate::debug;
@@ -16,8 +17,6 @@ use crate::dynamic_deferred_call::DynamicDeferredCall;
 use crate::energy;
 use crate::errorcode::ErrorCode;
 use crate::grant::Grant;
-use crate::hil::time;
-use crate::hil::time::{Alarm, AlarmClient};
 use crate::ipc;
 use crate::memop;
 use crate::platform::chip::Chip;
@@ -43,7 +42,6 @@ use crate::utilities::cells::{
 /// is less than this threshold.
 pub(crate) const MIN_QUANTA_THRESHOLD_US: u32 = 500;
 
-type BatchAlarm = dyn Alarm<'static, Frequency = time::Freq16KHz, Ticks = time::Ticks32>;
 
 /// Main object for the kernel. Each board will need to create one.
 pub struct Kernel {
@@ -72,26 +70,8 @@ pub struct Kernel {
     /// Energy accounting.
     energy_accounting: OptionalCell<&'static dyn energy::DriverEnergyAccounting>,
 
-    /// Alarm used for time window batching.
-    batch_alarm: OptionalCell<&'static BatchAlarm>,
-
-    /// Alarm driver applications interact with.
-    alarm_driver: OptionalCell<&'static dyn AlarmClient>,
-
-    /// Time window duration in milliseconds used for handling queued syscalls.
-    batch_window_duration: Cell<usize>,
-
-    /// Time that the batch window expires; (reference, dt).
-    next_batch_expiration: OptionalCell<(usize, usize)>,
-
-    /// The latest unexpired timer; (reference, dt).
-    latest_alarm: Cell<(usize, usize)>,
-
-    /// Batched syscalls.
-    pending_syscalls: [OptionalCell<PendingSyscall>; 30],
-
-    /// Whether the kernel should run pending syscalls.
-    run_pending_syscalls: Cell<BatchingState>,
+    /// Batching strategy implementation.
+    batch_controller: OptionalCell<&'static dyn BatchController>,
 }
 
 /// Enum used to inform scheduler why a process stopped executing (aka why
@@ -130,106 +110,16 @@ impl Kernel {
             grant_counter: Cell::new(0),
             grants_finalized: Cell::new(false),
             energy_accounting: OptionalCell::empty(),
-            alarm_driver: OptionalCell::empty(),
-            batch_alarm: OptionalCell::empty(),
-            batch_window_duration: Cell::new(5000),
-            next_batch_expiration: OptionalCell::empty(),
-            latest_alarm: Cell::new((0, 0)),
-            pending_syscalls: [
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-            ],
-            run_pending_syscalls: Cell::new(BatchingState::Batch),
-        }
-    }
-
-    pub fn set_alarm_driver(&'static self, alarm_driver: &'static dyn AlarmClient) {
-        self.alarm_driver.set(alarm_driver);
-    }
-
-    pub fn set_batch_alarm(&'static self, alarm: &'static BatchAlarm) {
-        alarm.set_alarm_client(self);
-        self.batch_alarm.set(alarm);
-    }
-
-    pub fn set_batch_window_duration(&self, duration_ms: usize) {
-        self.batch_window_duration.set(duration_ms);
-    }
-
-    fn open_batch_window(&self) -> (usize, usize) {
-        use time::Ticks as _; // Ticks::into_usize()
-        use time::Frequency as _; // Freq16KHz::frequency()
-
-        if let Some(next_expiration) = self.next_batch_expiration.extract() {
-            next_expiration
-        } else {
-            let alarm = self.batch_alarm.expect("time window batching without an alarm");
-
-            let now = alarm.now();
-            let window_duration_ticks = (time::Freq16KHz::frequency() as usize / 1000)
-                * self.batch_window_duration.get();
-
-            alarm.set_alarm(now, time::Ticks32::from(window_duration_ticks as u32));
-
-            let expiration = (now.into_usize(), window_duration_ticks as usize);
-            self.next_batch_expiration.set(expiration);
-            // debug!("batch window: {:?}", expiration);
-
-            expiration
-        }
-    }
-
-    fn enqueue_syscall(&self, pid: ProcessId, syscall: Syscall) {
-        let empty_slot = self.pending_syscalls.iter()
-            .find(|oc| oc.is_none())
-            .expect("pending syscall overflow");
-        let pending_syscall = PendingSyscall::new(pid, syscall);
-        empty_slot.set(pending_syscall);
-        let (_reference, _dt) = self.open_batch_window();
-        // debug!("queued: {:?}", pending_syscall.syscall);
-    }
-
-    fn dequeue_syscall(&self) -> Option<PendingSyscall> {
-        let opt_oc_pnd_syscall = self.pending_syscalls.iter()
-            .find(|oc| oc.is_some());
-
-        if let Some(oc_pnd_syscall) = opt_oc_pnd_syscall {
-            oc_pnd_syscall.take()
-        } else {
-            None
+            batch_controller: OptionalCell::empty(),
         }
     }
 
     pub fn energy_accounting_service(&self) -> Option<&'static dyn energy::DriverEnergyAccounting> {
         self.energy_accounting.extract()
+    }
+
+    pub fn set_batch_controller(&self, batch_controller: &'static dyn BatchController) {
+        self.batch_controller.set(batch_controller);
     }
 
     /// Something was scheduled for a process, so there is more work to do.
@@ -534,10 +424,13 @@ impl Kernel {
         no_sleep: bool,
         _capability: &dyn capabilities::MainLoopCapability,
     ) {
+        let batch_controller = self.batch_controller
+            .extract()
+            .unwrap();
         let scheduler = resources.scheduler();
 
         // Check how to handle syscalls.
-        match self.run_pending_syscalls.get() {
+        match batch_controller.state() {
             BatchingState::Batch => scheduler.run_upcalls_only(false),
 
             BatchingState::CollectUpcalls => {
@@ -553,31 +446,24 @@ impl Kernel {
                 } else {
                     // debug!("finished running upcalls");
                     scheduler.run_upcalls_only(false);
-                    self.run_pending_syscalls.set(BatchingState::RunSyscalls);
+                    batch_controller.notify_upcalls_completed();
+                    // Early return; this function will get called again,
+                    // then we can run syscalls since the batching state changes.
                     return;
                 }
             },
 
             BatchingState::RunSyscalls => {
-                while let Some(pnd_syscall) = self.dequeue_syscall() {
+                while let Some((pid, syscall)) = batch_controller.dequeue_syscall() {
                     let process = self.processes.iter()
                         .filter_map(|opt_p| *opt_p)
-                        .find(|p| p.processid() == pnd_syscall.pid)
+                        .find(|p| p.processid() == pid)
                         .expect("process does not exist anymore"); // Not expecting any crashes, so the PID must be valid.
                     // debug!("executing syscall: {:?}", pnd_syscall.syscall);
-                    self.handle_syscall(resources, process, pnd_syscall.syscall)
+                    self.handle_syscall(resources, process, syscall);
                 }
 
-                self.run_pending_syscalls.set(BatchingState::Batch);
-
-                use crate::hil::time::Ticks as _;
-                let alarm = self.batch_alarm.expect("window batching without alarm");
-                let (latest_reference, latest_dt) = self.latest_alarm.get();
-                if alarm.now().into_usize() < (latest_reference + latest_dt) {
-                    // debug!("future alarm; opening new window");
-                    let (_reference, _dt) = self.open_batch_window();
-                }
-
+                batch_controller.notify_syscalls_completed();
             },
         }
 
@@ -652,6 +538,12 @@ impl Kernel {
         ipc: Option<&ipc::IPC<NUM_PROCS, NUM_UPCALLS_IPC>>,
         capability: &dyn capabilities::MainLoopCapability,
     ) -> ! {
+        // Make sure the batch controller exists.
+        // This allows us to unwrap all over the kernel.
+        if self.batch_controller.is_none() {
+            panic!("Must set a batch controller!");
+        }
+
         resources.watchdog().setup();
         self.energy_accounting.insert(resources.energy_accounting());
 
@@ -792,48 +684,25 @@ impl Kernel {
                             }
                         }
                         Some(ContextSwitchReason::SyscallFired { syscall }) => {
-                            match syscall {
-                                // Driver checks do not need queueing.
-                                Syscall::Command { driver_number: _,
-                                                   subdriver_number: 0, .. } =>
-                                    self.handle_syscall(resources, process, syscall),
+                            let batch_controller = self.batch_controller
+                                .extract()
+                                .unwrap();
 
-                                // Alarm driver syscalls work differently...
-                                //
-                                // We modified the alarm capsule to not actually interact with the bottom-half.
-                                // So, applications can register all the alarms they want.
-                                // Since the kernel controls the timer, the kernel will call into the alarm capsule
-                                // to make sure it eventually handles expired alarms set by applications.
-                                //
-                                // Instead of queueing the syscall, we let it through and make sure to open a batch window
-                                // so that we will service this alarm eventually.
-                                //
-                                // Perhaps how applications use the alarms should determine the size of the batching window?
-                                Syscall::Command { driver_number: 0,
-                                                   subdriver_number,
-                                                   arg0: req_reference,
-                                                   arg1: req_dt } => {
-                                    if subdriver_number == Self::ALARM_COMMAND_SET_ALARM {
-                                        // debug!("alarm: {:?}", syscall);
-                                    }
-
-                                    let (latest_reference, latest_dt) = self.latest_alarm.get();
-                                    if (latest_reference + latest_dt) < (req_reference + req_dt) {
-                                        self.latest_alarm.set((req_reference, req_dt));
-                                    }
-
-                                    let (_reference, _dt) = self.open_batch_window();
-                                    self.handle_syscall(resources, process, syscall)
+                            match batch_controller.check_enqueue(process.processid(), &syscall) {
+                                // The batch controller added it to the queue for later execution.
+                                // No further action is necessary on the kernel's part.
+                                batch::QueueResult::Queued => {
+                                    // debug!("Queue accept: {:?}", syscall);
                                 },
 
-                                Syscall::Command { .. } => {
-                                    // Add to the queue for later execution.
-                                    self.enqueue_syscall(process.processid(), syscall)
+                                // The batch controller has rejected the syscall, it should run immediately.
+                                batch::QueueResult::Run(_ref_syscall) => {
+                                    // debug!("Queue reject: {:?}", syscall);
+                                    self.handle_syscall(resources, process, syscall);
                                 },
-
-                                _ => self.handle_syscall(resources, process, syscall)
                             };
                         }
+
                         Some(ContextSwitchReason::Interrupted) => {
                             if scheduler_timer.get_remaining_us().is_none() {
                                 // This interrupt was a timeslice expiration.
@@ -1404,23 +1273,5 @@ impl Kernel {
                 _ => process.set_syscall_return_value(SyscallReturn::Failure(ErrorCode::NOSUPPORT)),
             },
         }
-    }
-}
-
-impl AlarmClient for Kernel {
-    /// Batch window expiration handler.
-    ///
-    /// Run pending syscalls and also notify the alarm driver of expiration.
-    fn alarm(&self) {
-        // debug!("batch window expired");
-        self.next_batch_expiration.clear();
-
-        // Alarm upcalls could lead to other operations becoming queued.
-        // Perhaps we should execute those as well while we are executing syscalls?
-        let alarm_driver = self.alarm_driver.expect("window batching without alarm driver");
-        alarm_driver.alarm();
-
-        // The next step is to collect syscalls from upcalls waiting to happen.
-        self.run_pending_syscalls.set(BatchingState::CollectUpcalls);
     }
 }

@@ -12,6 +12,7 @@
 use capsules::virtual_alarm::VirtualMuxAlarm;
 use capsules::virtual_i2c::{I2CDevice, MuxI2C};
 use capsules::virtual_spi::VirtualSpiMasterDevice;
+use kernel::batch::BatchController;
 use kernel::capabilities;
 use kernel::component::Component;
 use kernel::dynamic_deferred_call::{DynamicDeferredCall, DynamicDeferredCallClientState};
@@ -32,6 +33,7 @@ use sam4l::chip::Sam4lDefaultPeripherals;
 pub mod io;
 #[allow(dead_code)]
 mod test_take_map_cell;
+mod batching;
 
 // State for loading and holding applications.
 
@@ -590,10 +592,22 @@ pub unsafe fn main() {
     use kernel::hil::uart::Transmit as _;
     peripherals.usart0.power_off();
 
+    // Batching setup.
+    let batching_strategy: &'static dyn BatchController = {
+        use kernel::hil::time::Alarm as _;
 
-    board_kernel.set_alarm_driver(alarm);
-    board_kernel.set_batch_alarm(&peripherals.ast);
-    board_kernel.set_batch_window_duration(3_000);
+        const WINDOW_DURATION_MS: usize = 3_000;
 
+        let bc = static_init!(
+            batching::TimeWindowBatching,
+            batching::TimeWindowBatching::new(
+                WINDOW_DURATION_MS,
+                &peripherals.ast,
+                alarm));
+        peripherals.ast.set_alarm_client(bc);
+        bc
+    };
+
+    board_kernel.set_batch_controller(batching_strategy);
     board_kernel.kernel_loop(&hail, chip, Some(&hail.ipc), &main_loop_capability);
 }

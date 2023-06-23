@@ -93,6 +93,7 @@
 pub const MAJOR: u16 = 2;
 pub const MINOR: u16 = 0;
 
+pub mod batch;
 pub mod capabilities;
 pub mod collections;
 pub mod component;
@@ -113,7 +114,6 @@ pub mod syscall;
 pub mod upcall;
 pub mod utilities;
 
-mod batch;
 mod config;
 mod kernel;
 mod memop;
