@@ -25,6 +25,7 @@ type BatchAlarm = dyn Alarm<'static,
                             Frequency = time::Freq16KHz,
                             Ticks = time::Ticks32>;
 
+/// Batching based on a fixed amount of time passing since the first operation arrived.
 pub struct TimeWindowBatching {
     batching_state: Cell<BatchingState>,
     /// Batch window duration in milliseconds.

@@ -71,3 +71,25 @@ pub trait BatchController {
     /// This allows a state change in the batching state machine to start batching again.
     fn notify_syscalls_completed(&self);
 }
+
+/// A no-batching implementation.
+pub type NoBatching = ();
+
+impl BatchController for NoBatching {
+    fn check_enqueue<'a>(&self, _pid: ProcessId, syscall: &'a Syscall) -> QueueResult<'a> {
+        QueueResult::Run(syscall)
+    }
+
+    fn dequeue_syscall(&self) -> Option<(ProcessId, Syscall)> {
+        None
+    }
+
+    /// This call always returns `BatchingState::Batch`, but `check_enqueue()` will always direct the kernel to run the syscall.
+    fn state(&self) -> BatchingState {
+        BatchingState::Batch
+    }
+
+    fn notify_upcalls_completed(&self) {  }
+
+    fn notify_syscalls_completed(&self) {  }
+}
