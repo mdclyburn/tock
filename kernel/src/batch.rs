@@ -32,10 +32,19 @@ pub enum QueueResult<'a> {
     Run(&'a Syscall),
 }
 
+/// States of the [`BatchController`].
 #[derive(Clone, Copy, PartialEq)]
 pub enum BatchingState {
+    /// Informs the kernel that the controller is batching syscalls.
+    ///
+    /// This is generally the state the FSM is in most of the time.
+    /// The kernel operates normally in this state.
     Batch,
+
+    /// Informs the kernel to execute upcalls; the `RunSyscalls` state will soon follow.
     CollectUpcalls,
+
+    /// Informs the kernel to empty the syscall queue.
     RunSyscalls,
 }
 
