@@ -1,7 +1,7 @@
 /** Peripheral batch scheduling
  */
 
-use crate::process::ProcessId;
+use crate::process::{Process, ProcessId};
 use crate::syscall::Syscall;
 
 pub const ALARM_COMMAND_SET_ALARM: usize = 6;
@@ -57,7 +57,7 @@ pub trait BatchController {
     fn dequeue_syscall(&self) -> Option<(ProcessId, Syscall)>;
 
     /// Returns the current batching state.
-    fn state(&self) -> BatchingState;
+    fn state(&self, k: bool) -> BatchingState;
 
     /// Notify the batch controller that upcall execution is complete.
     ///
@@ -85,7 +85,7 @@ impl BatchController for NoBatching {
     }
 
     /// This call always returns `BatchingState::Batch`, but `check_enqueue()` will always direct the kernel to run the syscall.
-    fn state(&self) -> BatchingState {
+    fn state(&self, _k: bool) -> BatchingState {
         BatchingState::Batch
     }
 

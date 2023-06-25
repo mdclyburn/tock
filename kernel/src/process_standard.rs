@@ -229,6 +229,12 @@ impl<C: Chip> Process for ProcessStandard<'_, C> {
         }
     }
 
+    fn pending_task_count(&self) -> usize {
+        self.pending_tasks.iter()
+            .filter(|optc| optc.is_some())
+            .count()
+    }
+
     fn flush_pending_tasks(&self) {
         let it = self.pending_tasks.iter()
             .filter(|optc| optc.is_some());

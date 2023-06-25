@@ -571,6 +571,8 @@ pub trait Process {
     /// Return the lowest recorded address of the process stack, if known.
     fn debug_stack_end(&self) -> Option<*const u8>;
 
+    fn pending_task_count(&self) -> usize;
+
     fn flush_pending_tasks(&self);
 }
 

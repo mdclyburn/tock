@@ -100,8 +100,6 @@ pub enum StoppedExecutingReason {
 }
 
 impl Kernel {
-    const ALARM_COMMAND_SET_ALARM: usize = 6;
-
     pub fn new(processes: &'static [Option<&'static dyn process::Process>]) -> Kernel {
         Kernel {
             work: Cell::new(0),
@@ -430,7 +428,7 @@ impl Kernel {
         let scheduler = resources.scheduler();
 
         // Check how to handle syscalls.
-        match batch_controller.state() {
+        match batch_controller.state(unsafe { scheduler.do_kernel_work_now(chip) }) {
             BatchingState::Batch => scheduler.run_upcalls_only(false),
 
             BatchingState::CollectUpcalls => {
