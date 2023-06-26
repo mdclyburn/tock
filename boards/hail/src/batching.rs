@@ -212,6 +212,9 @@ impl AlarmClient for TimeWindowBatching {
 
 /// Batching based on how we know the system will be active in the future.
 pub struct ResponsiveBatching {
+    max_window_size_ms: usize,
+    current_window_size_ms: Cell<usize>,
+    last_window_update: Cell<usize>,
     /// Current batching state.
     batching_state: Cell<BatchingState>,
     /// Active alarm durations.
@@ -226,14 +229,20 @@ pub struct ResponsiveBatching {
     latest_alarm: Cell<(usize, usize)>,
     /// Batched syscalls.
     pending_syscalls: [OptionalCell<PendingSyscall>; 30],
+    /// Latest issuance of distinct syscalls that get batched.
+    syscall_history: [OptionalCell<(usize, (usize, usize))>; 10],
 }
 
 impl ResponsiveBatching {
-    pub fn new(batch_alarm: &'static BatchAlarm,
+    pub fn new(max_window_size_ms: usize,
+               batch_alarm: &'static BatchAlarm,
                alarm_driver: &'static dyn AlarmClient)
                -> ResponsiveBatching
     {
         ResponsiveBatching {
+            max_window_size_ms,
+            current_window_size_ms: Cell::new(max_window_size_ms),
+            last_window_update: Cell::new(batch_alarm.now().into_usize()),
             batching_state: Cell::new(BatchingState::Batch),
             active_alarms: [OptionalCell::empty(),
                             OptionalCell::empty(),
@@ -276,16 +285,124 @@ impl ResponsiveBatching {
                 OptionalCell::empty(),
                 OptionalCell::empty(),
             ],
+            syscall_history: [
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+            ],
         }
     }
 
-    fn batch_window_duration(&self) -> usize {
-        let duration_ms = self.active_alarms.iter()
-            .filter_map(|optc| optc.extract())
-            .map(|(_r, dt)| dt)
-            .fold(0, |acc, cur| if cur < acc { cur } else { acc });
+    fn syscall_queue_len(&self) -> usize {
+        self.pending_syscalls.iter()
+            .filter(|optc| optc.is_some())
+            .count()
+    }
 
-        if duration_ms == 0 { 1_000 } else { duration_ms }
+    fn batch_window_duration(&self) -> usize {
+        let now = self.batch_alarm.now().into_usize();
+        let update_interval = self.max_window_size_ms * 2 / 1000 * time::Freq16KHz::frequency() as usize;
+
+        if now - self.last_window_update.get() > update_interval {
+            let mut timeline = [0usize; 10];
+            let alarm_it = self.active_alarms.iter()
+                .filter_map(|optc| optc.extract())
+                .map(|(r, dt)| r+dt);
+            let mut syscall_history_it = self.syscall_history.iter()
+                .filter_map(|optc| optc.extract())
+                .map(|(t, _syscall)| t)
+                .chain(alarm_it)
+                .filter(|t| *t > now - update_interval);
+            let timeline_it = timeline.iter_mut();
+            let mut op_count = 0;
+            for timeline_slot in timeline_it {
+                if let Some(t) = syscall_history_it.next() {
+                    op_count += 1;
+                    *timeline_slot = t;
+                } else {
+                    break;
+                }
+            }
+
+            kernel::debug!("op count: {}", op_count);
+
+            if op_count > 1 {
+                // sort timeline
+                let mut least_found = 0;
+                for current_slot in 0..(timeline.len()-1) {
+                    for maybe_slot in (current_slot+1)..(timeline.len()-1) {
+                        if timeline[maybe_slot] < timeline[current_slot] {
+                            let temp = timeline[maybe_slot];
+                            timeline[maybe_slot] = timeline[current_slot];
+                            timeline[current_slot] = temp;
+                        }
+                    }
+                }
+
+                // apply clustering to find if there is a tigher batching window that will make the system more responsive
+                let mut window = self.max_window_size_ms * 8 / 10 * time::Freq16KHz::frequency() as usize;
+                // best window found so far
+                let mut best_clusters = 0;
+                let mut best_window = self.max_window_size_ms;
+                // clustering epsilon cutoff threshold
+                let min_interval = timeline.iter()
+                    .zip(timeline[1..].iter())
+                    .filter(|(_ta, tb)| **tb > 0)
+                    .map(|(ta, tb)| *tb - *ta)
+                    .fold(self.max_window_size_ms, |acc, cur| if cur < acc { cur } else { acc });
+                while window > min_interval {
+                    let mut clusters = 0;
+                    let mut in_cluster = false;
+
+                    let it = timeline.iter()
+                        .copied()
+                        .zip(timeline[1..].iter().copied())
+                        .filter(|(_ta, tb)| *tb > 0);
+                    for (ta, tb) in it {
+                        assert!(ta < tb); // should be sorted...
+                        if tb - ta < window {
+                            if !in_cluster {
+                                in_cluster = true;
+                                clusters += 1;
+                            } else {
+                                // we're in a cluster and we do not care that we extended the cluster
+                            }
+                        } else {
+                            if in_cluster {
+                                // end of cluster
+                                in_cluster = false;
+                            } else {
+                                // we were not in a cluster, and we do not care that we are still not in one
+                            }
+                        }
+                    }
+                    kernel::debug!("window size {} ms; clusters: {}",
+                                   window / time::Freq16KHz::frequency() as usize,
+                                   clusters);
+
+                    if clusters > best_clusters {
+                        best_clusters = clusters;
+                        best_window = window;
+                    }
+
+                    window = window * 8 / 10;
+                }
+
+                kernel::debug!("best window: {}", best_window);
+                self.current_window_size_ms.set(best_window);
+            }
+
+            self.last_window_update.set(now);
+        }
+
+        self.current_window_size_ms.get()
     }
 
     fn open_batch_window(&self) {
@@ -297,13 +414,32 @@ impl ResponsiveBatching {
 
             let expiration = (now.into_usize(), window_duration_ticks as usize);
             self.next_expiration.set(expiration);
-            // kernel::debug!("batch window: {:?}", expiration);
+            kernel::debug!("batch window: {:?}", expiration);
+        }
+    }
+
+    fn add_to_history(&self, syscall: &Syscall) {
+        if let Syscall::Command { driver_number, subdriver_number, .. } = syscall {
+            let history_slot = self.syscall_history.iter()
+                .find(|optc| {
+                    optc.is_none()
+                        || optc.map(|s| s.1.0 == *driver_number && s.1.1 == *subdriver_number).unwrap()
+                })
+                .unwrap();
+
+            history_slot.set((self.batch_alarm.now().into_usize(),
+                              (*driver_number, *subdriver_number)));
+            kernel::debug!("history: {:?}", history_slot.extract().unwrap());
+        } else {
+            panic!();
         }
     }
 }
 
 impl BatchController for ResponsiveBatching {
     fn check_enqueue<'a>(&self, pid: ProcessId, syscall: &'a Syscall) -> QueueResult<'a> {
+        if self.batching_state.get() != BatchingState::Batch { return QueueResult::Run(syscall); }
+
         match syscall {
             // Driver checks do not need queueing.
             Syscall::Command { driver_number: _, subdriver_number: 0, .. } =>
@@ -330,10 +466,10 @@ impl BatchController for ResponsiveBatching {
                     // Add the alarm to the active set.
                     let empty_slot = self.active_alarms.iter()
                         .find(|optc| optc.is_none())
-                        .expect("no more remaining empty alarm slots");
+                        .unwrap();
                     empty_slot.set((*syscall_reference, *syscall_dt));
                     for a in self.active_alarms.iter().filter_map(|o| o.extract()) {
-                        // kernel::debug!("sa: {:?}", a);
+                        kernel::debug!("set alarm: {:?}", a);
                     }
                 }
 
@@ -353,7 +489,9 @@ impl BatchController for ResponsiveBatching {
                 empty_slot.set(pending_syscall);
                 // Now that we have a pending syscall, we ensure that we have a batch window open.
                 self.open_batch_window();
+                self.add_to_history(syscall);
                 // debug!("queued: {:?}", pending_syscall.syscall);
+
                 QueueResult::Queued
             },
 
@@ -378,22 +516,25 @@ impl BatchController for ResponsiveBatching {
 
     /// Returns the current batching state.
     fn state(&self, k: bool) -> BatchingState {
-        match self.batching_state.get() {
-            BatchingState::Batch => {
-                if k {
-                    // Immediately shift states if there are upcalls waiting.
-                    self.batch_alarm.disarm();
-                    self.alarm();
-                    // kernel::debug!("int. ends window early");
+        let s = match self.batching_state.get() {
+            // BatchingState::Batch => {
+            //     if k || self.syscall_queue_len() > 1 {
+            //         // Immediately shift states if there are upcalls waiting.
+            //         self.batch_alarm.disarm();
+            //         self.alarm();
+            //         // kernel::debug!("int. ends window early");
+            //         // kernel::debug!("batch size: {}", self.syscall_queue_len());
 
-                    BatchingState::CollectUpcalls
-                } else {
-                    BatchingState::Batch
-                }
-            },
+            //         BatchingState::CollectUpcalls
+            //     } else {
+            //         BatchingState::Batch
+            //     }
+            // },
 
             _ => self.batching_state.get(),
-        }
+        };
+        // kernel::debug!("batch s: {:?}", s);
+        s
     }
 
     fn notify_upcalls_completed(&self) {
@@ -411,7 +552,7 @@ impl AlarmClient for ResponsiveBatching {
     ///
     /// Run pending syscalls and also notify the alarm driver of expiration.
     fn alarm(&self) {
-        // kernel::debug!("batch window expired");
+        kernel::debug!("batch window expired");
         self.next_expiration.clear();
 
         // Alarm upcalls could lead to other operations becoming queued.

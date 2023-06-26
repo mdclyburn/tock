@@ -33,7 +33,7 @@ pub enum QueueResult<'a> {
 }
 
 /// States of the [`BatchController`].
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BatchingState {
     /// Informs the kernel that the controller is batching syscalls.
     ///
