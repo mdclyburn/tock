@@ -590,7 +590,7 @@ pub unsafe fn main() {
     });
 
     use kernel::hil::uart::Transmit as _;
-    peripherals.usart0.power_off();
+    let _result = peripherals.usart0.power_off();
 
     // Time window batching.
     // let batching_strategy: &'static dyn BatchController = {

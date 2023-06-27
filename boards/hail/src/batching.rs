@@ -215,6 +215,7 @@ pub struct ResponsiveBatching {
     max_window_size_ms: usize,
     current_window_size_ms: Cell<usize>,
     last_window_update: Cell<usize>,
+    last_syscall: Cell<usize>,
     /// Current batching state.
     batching_state: Cell<BatchingState>,
     /// Active alarm durations.
@@ -243,6 +244,7 @@ impl ResponsiveBatching {
             max_window_size_ms,
             current_window_size_ms: Cell::new(max_window_size_ms),
             last_window_update: Cell::new(batch_alarm.now().into_usize()),
+            last_syscall: Cell::new(batch_alarm.now().into_usize()),
             batching_state: Cell::new(BatchingState::Batch),
             active_alarms: [OptionalCell::empty(),
                             OptionalCell::empty(),
@@ -309,6 +311,7 @@ impl ResponsiveBatching {
     fn batch_window_duration(&self) -> usize {
         let now = self.batch_alarm.now().into_usize();
         let update_interval = self.max_window_size_ms * 2 / 1000 * time::Freq16KHz::frequency() as usize;
+        // let update_interval = time::Freq16KHz::frequency() as usize;
 
         if now - self.last_window_update.get() > update_interval {
             let mut timeline = [0usize; 10];
@@ -347,16 +350,17 @@ impl ResponsiveBatching {
                 }
 
                 // apply clustering to find if there is a tigher batching window that will make the system more responsive
-                let mut window = self.max_window_size_ms * 8 / 10 * time::Freq16KHz::frequency() as usize;
+                let mut window = (self.max_window_size_ms * 8 / 10 * time::Freq16KHz::frequency() as usize) / 1000;
                 // best window found so far
                 let mut best_clusters = 0;
-                let mut best_window = self.max_window_size_ms;
+                let mut best_window = self.max_window_size_ms * time::Freq16KHz::frequency() as usize / 1000;
                 // clustering epsilon cutoff threshold
-                let min_interval = timeline.iter()
-                    .zip(timeline[1..].iter())
-                    .filter(|(_ta, tb)| **tb > 0)
-                    .map(|(ta, tb)| *tb - *ta)
-                    .fold(self.max_window_size_ms, |acc, cur| if cur < acc { cur } else { acc });
+                // let min_interval = timeline.iter()
+                //     .zip(timeline[1..].iter())
+                //     .filter(|(_ta, tb)| **tb > 0)
+                //     .map(|(ta, tb)| *tb - *ta)
+                //     .fold(self.max_window_size_ms, |acc, cur| if cur < acc { cur } else { acc });
+                let min_interval = time::Freq16KHz::frequency() as usize / 1000 * 20;
                 while window > min_interval {
                     let mut clusters = 0;
                     let mut in_cluster = false;
@@ -383,20 +387,22 @@ impl ResponsiveBatching {
                             }
                         }
                     }
-                    kernel::debug!("window size {} ms; clusters: {}",
-                                   window / time::Freq16KHz::frequency() as usize,
-                                   clusters);
 
                     if clusters > best_clusters {
                         best_clusters = clusters;
                         best_window = window;
+
+                        // kernel::debug!("window size {} tc; clusters: {}, min: {} tc",
+                        //                window,
+                        //                clusters,
+                        //                min_interval);
                     }
 
                     window = window * 8 / 10;
                 }
 
                 kernel::debug!("best window: {}", best_window);
-                self.current_window_size_ms.set(best_window);
+                self.current_window_size_ms.set(best_window * 1000 / time::Freq16KHz::frequency() as usize);
             }
 
             self.last_window_update.set(now);
@@ -418,7 +424,16 @@ impl ResponsiveBatching {
         }
     }
 
+    const MIN_SYSCALL_DIFF: usize = 50 * 16000 / 1000;
+
     fn add_to_history(&self, syscall: &Syscall) {
+        let now = self.batch_alarm.now().into_usize();
+        // Do not record quick succession of syscalls.
+        if now - self.last_syscall.get() < Self::MIN_SYSCALL_DIFF  {
+            if let Syscall::Command { driver_number: 0, .. } = syscall {
+            } else { return; }
+        }
+
         if let Syscall::Command { driver_number, subdriver_number, .. } = syscall {
             let history_slot = self.syscall_history.iter()
                 .find(|optc| {
@@ -427,8 +442,18 @@ impl ResponsiveBatching {
                 })
                 .unwrap();
 
-            history_slot.set((self.batch_alarm.now().into_usize(),
-                              (*driver_number, *subdriver_number)));
+            if let Syscall::Command { driver_number: 0, subdriver_number, arg0, arg1 } = syscall {
+                if *subdriver_number > 10 {
+                    history_slot.set((self.batch_alarm.now().into_usize() + arg1,
+                                      (0, *subdriver_number)));
+                } else {
+                    return;
+                }
+            } else {
+                history_slot.set((self.batch_alarm.now().into_usize(),
+                                  (*driver_number, *subdriver_number)));
+            }
+
             kernel::debug!("history: {:?}", history_slot.extract().unwrap());
         } else {
             panic!();
@@ -462,6 +487,11 @@ impl BatchController for ResponsiveBatching {
             {
                 if *subdriver_number == batch::ALARM_COMMAND_SET_ALARM {
                     // kernel::debug!("alarm: {:?}", syscall);
+                    self.add_to_history(&Syscall::Command {
+                        driver_number: 0,
+                        subdriver_number: subdriver_number + 10 + pid.id(),
+                        arg0: *syscall_reference,
+                        arg1: *syscall_dt });
 
                     // Add the alarm to the active set.
                     let empty_slot = self.active_alarms.iter()
