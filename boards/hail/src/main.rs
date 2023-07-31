@@ -590,7 +590,7 @@ pub unsafe fn main() {
     });
 
     use kernel::hil::uart::Transmit as _;
-    let _result = peripherals.usart0.power_off();
+    // let _result = peripherals.usart0.power_off();
 
     // Time window batching.
     // let batching_strategy: &'static dyn BatchController = {
@@ -608,16 +608,26 @@ pub unsafe fn main() {
     //     bc
     // };
 
+    // let batching_strategy: &'static dyn BatchController = {
+    //     use kernel::hil::time::Alarm as _;
+
+    //     let bc = static_init!(
+    //         batching::ResponsiveBatching,
+    //         batching::ResponsiveBatching::new(
+    //             1_000,
+    //             &peripherals.ast,
+    //             alarm));
+    //     peripherals.ast.set_alarm_client(bc);
+    //     bc
+    // };
+
     let batching_strategy: &'static dyn BatchController = {
         use kernel::hil::time::Alarm as _;
 
         let bc = static_init!(
-            batching::ResponsiveBatching,
-            batching::ResponsiveBatching::new(
-                1_000,
-                &peripherals.ast,
-                alarm));
-        peripherals.ast.set_alarm_client(bc);
+            batching::ObservantBatching,
+            batching::ObservantBatching::new(&peripherals.ast));
+
         bc
     };
 

@@ -125,7 +125,7 @@ impl<'a, A: Alarm<'a>> AlarmDriver<'a, A> {
         self.next_alarm.set(earliest_alarm);
         match earliest_alarm {
             Expiration::Disabled => {
-                // let _ = self.alarm.disarm();
+                let _ = self.alarm.disarm();
             }
             Expiration::Enabled { reference, dt } => {
                 // This logic handles when the underlying Alarm is wider than
@@ -141,7 +141,7 @@ impl<'a, A: Alarm<'a>> AlarmDriver<'a, A> {
                     high_bits = high_bits.wrapping_sub(bit33);
                 }
                 let real_reference = high_bits.wrapping_add(A::Ticks::from(reference));
-                // self.alarm.set_alarm(real_reference, A::Ticks::from(dt));
+                self.alarm.set_alarm(real_reference, A::Ticks::from(dt));
             }
         }
     }
@@ -250,13 +250,13 @@ impl<'a, A: Alarm<'a>> time::AlarmClient for AlarmDriver<'a, A> {
             if let Expiration::Enabled { reference, dt } = alarm.expiration {
                 // Now is not within reference, reference + ticks; this timer
                 // as passed (since reference must be in the past)
-                // kernel::debug!("r: {}, dt: {}", reference, dt);
-                // kernel::debug!("now: {}", now.into_u32());
+                kernel::debug!("r: {}, dt: {}", reference, dt);
+                kernel::debug!("now: {}", now.into_u32());
                 if !now.within_range(
                     Ticks32::from(reference),
                     Ticks32::from(reference.wrapping_add(dt)),
                 ) {
-                    // kernel::debug!("timer passed");
+                    kernel::debug!("timer passed");
                     alarm.expiration = Expiration::Disabled;
                     self.num_armed.set(self.num_armed.get() - 1);
                     upcalls
@@ -279,7 +279,7 @@ impl<'a, A: Alarm<'a>> time::AlarmClient for AlarmDriver<'a, A> {
         // Otherwise, check all the alarms and find the next one, rescheduling
         // the underlying alarm.
         if self.num_armed.get() == 0 {
-            // let _ = self.alarm.disarm();
+            let _ = self.alarm.disarm();
         } else {
             self.reset_active_alarm();
         }

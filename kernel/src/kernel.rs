@@ -429,7 +429,12 @@ impl Kernel {
 
         // Check how to handle syscalls.
         match batch_controller.state(unsafe { scheduler.do_kernel_work_now(chip) }) {
-            BatchingState::Batch => scheduler.run_upcalls_only(false),
+            BatchingState::Batch => {
+                scheduler.run_upcalls_only(false);
+                if batch_controller.flush_upcalls() {
+                    self.process_each(|p| p.flush_pending_tasks());
+                }
+            },
 
             BatchingState::CollectUpcalls => {
                 // See if any process has upcalls to handle.

@@ -59,6 +59,14 @@ pub trait BatchController {
     /// Returns the current batching state.
     fn state(&self, k: bool) -> BatchingState;
 
+    /// Whether the kernel should allow upcalls to execute immediately.
+    ///
+    /// When the batch controller is in the `BatchingState::Batch` state,
+    /// the kernel will call this function to check whether upcalls are also candidates for queueing.
+    /// Returning `false` directs the kernel to not allow processes to run their upcalls immediately.
+    /// Returning `true` directs the kernel to allow processes to run upcalls immediately.
+    fn flush_upcalls(&self) -> bool { false }
+
     /// Notify the batch controller that upcall execution is complete.
     ///
     /// This allows a state change in the batching state machine.

@@ -349,6 +349,11 @@ impl ResponsiveBatching {
                     }
                 }
 
+                kernel::debug!("timeline:");
+                for slot in timeline.iter() {
+                    kernel::debug!("S: {}", slot);
+                }
+
                 // apply clustering to find if there is a tigher batching window that will make the system more responsive
                 let mut window = (self.max_window_size_ms * 8 / 10 * time::Freq16KHz::frequency() as usize) / 1000;
                 // best window found so far
@@ -402,7 +407,7 @@ impl ResponsiveBatching {
                 }
 
                 kernel::debug!("best window: {}", best_window);
-                self.current_window_size_ms.set(best_window * 1000 / time::Freq16KHz::frequency() as usize);
+                // self.current_window_size_ms.set(best_window * 1000 / time::Freq16KHz::frequency() as usize);
             }
 
             self.last_window_update.set(now);
@@ -577,6 +582,10 @@ impl BatchController for ResponsiveBatching {
     }
 }
 
+const fn ms_to_ticks(ms: usize) -> usize {
+    ms * 16_000 / 1000
+}
+
 impl AlarmClient for ResponsiveBatching {
     /// Batch window expiration handler.
     ///
@@ -608,5 +617,155 @@ impl AlarmClient for ResponsiveBatching {
 
         // The next step is to run upcalls (and possibly collect their syscalls).
         self.batching_state.set(BatchingState::CollectUpcalls);
+    }
+}
+
+/// Batch controller that passively observes activity and adapts the batching policy.
+pub struct ObservantBatching {
+    alarm: &'static BatchAlarm,
+    observations: [OptionalCell<(usize, Syscall)>; 10],
+    next_observation_slot: Cell<usize>,
+}
+
+impl ObservantBatching {
+    pub fn new(alarm: &'static BatchAlarm) -> ObservantBatching {
+        ObservantBatching {
+            alarm,
+            observations: [OptionalCell::empty(),
+                           OptionalCell::empty(),
+                           OptionalCell::empty(),
+                           OptionalCell::empty(),
+                           OptionalCell::empty(),
+                           OptionalCell::empty(),
+                           OptionalCell::empty(),
+                           OptionalCell::empty(),
+                           OptionalCell::empty(),
+                           OptionalCell::empty()],
+            next_observation_slot: Cell::new(0),
+        }
+    }
+
+    const MIN_WINDOW_TICKS: usize = ms_to_ticks(100);
+    const MAX_WINDOW_TICKS: usize = ms_to_ticks(2_000);
+
+    fn find_optimal_window(&self) -> usize {
+        let window_size_dec = Self::MAX_WINDOW_TICKS / 10;
+        let mut window_size = Self::MAX_WINDOW_TICKS - window_size_dec;
+        let mut best_batch_count = 0;
+        let mut best_window_size = Self::MAX_WINDOW_TICKS;
+
+        while window_size >= Self::MIN_WINDOW_TICKS {
+            let mut anchor = 0;
+            let mut in_window = false;
+            let mut batch_count = 0;
+
+            while anchor < self.observations.len()-1 { // Do not iterate to the last item.
+                let t_anchor = self.observations[anchor]
+                    .map(|obs| obs.0)
+                    .unwrap();
+
+                for pos in anchor+1..self.observations.len() {
+                    let t_pos = self.observations[pos]
+                        .map(|obs| obs.0)
+                        .unwrap();
+                    let dt = t_pos - t_anchor;
+
+                    // If dt exceeds the current window size, then the window is broken
+                    // and we start a new window with the current pos as the new anchor point.
+                    //
+                    // Otherwise, we are still in the batch window.
+                    if dt > window_size || pos == self.observations.len()-1 {
+                        in_window = false;
+                        anchor = pos;
+                        break;
+                    } else {
+                        // If we are currently in a batching window that already has 2+ events,
+                        // then there is no new batch to count. Only count a new batch if this
+                        // was a single-event window prior to this point.
+                        if !in_window {
+                            batch_count += 1;
+                            in_window = true;
+                        }
+                    }
+                }
+            }
+
+            // Update the winning window, if necessary.
+            // Go with the narrower window if possible to optimize response time.
+            kernel::debug!("{} ms window creates {} 2+-count batches.",
+                           window_size * 1_000 / 16_000,
+                           batch_count);
+            if batch_count >= best_batch_count {
+                best_batch_count = batch_count;
+                best_window_size = window_size;
+            }
+
+            // Decrease the window size.
+            window_size -= window_size_dec;
+        }
+
+        best_window_size
+    }
+}
+
+impl BatchController for ObservantBatching {
+    fn check_enqueue<'a>(
+        &self,
+        pid: ProcessId,
+        syscall: &'a Syscall,
+    ) -> QueueResult<'a> {
+        match syscall {
+            Syscall::Command { driver_number, .. } => {
+                if *driver_number != 0 {
+                    // Record the syscall observation.
+                    let slot = self.next_observation_slot.get();
+                    let observation = (self.alarm.now().into_usize(), *syscall);
+                    self.observations[slot].set(observation);
+                    self.next_observation_slot.set((slot + 1) % 10);
+
+                    if slot == 9 {
+                        kernel::debug!("Observations:");
+                        for slot in self.observations.iter() {
+                            if let Some((t, sc)) = slot.extract() {
+                                match sc {
+                                    Syscall::Command { driver_number, subdriver_number, .. } =>
+                                        kernel::debug!("@{} s {} ms: ({}, {})",
+                                                       t / 16_000,
+                                                       (t * 1_000 / 16_000) % 1_000,
+                                                       driver_number,
+                                                       subdriver_number),
+
+                                    _ => {  },
+                                }
+                            }
+                        }
+
+                        let best_window_size = self.find_optimal_window();
+                        kernel::debug!("Optimal window: {} ms",
+                                       best_window_size * 1000 / 16_000);
+                    }
+                }
+
+                QueueResult::Run(syscall)
+            },
+
+            _ => QueueResult::Run(syscall)
+        }
+    }
+
+    fn dequeue_syscall(&self) -> Option<(ProcessId, Syscall)> {
+        None
+    }
+
+    fn state(&self, _k: bool) -> BatchingState {
+        BatchingState::Batch
+    }
+
+    fn flush_upcalls(&self) -> bool { true }
+
+    fn notify_upcalls_completed(&self) {
+    }
+
+    fn notify_syscalls_completed(&self) {
     }
 }
