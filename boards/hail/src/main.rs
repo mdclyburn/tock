@@ -621,12 +621,22 @@ pub unsafe fn main() {
     //     bc
     // };
 
+    // let batching_strategy: &'static dyn BatchController = {
+    //     use kernel::hil::time::Alarm as _;
+
+    //     let bc = static_init!(
+    //         batching::ObservantBatching,
+    //         batching::ObservantBatching::new(&peripherals.ast));
+
+    //     bc
+    // };
+
     let batching_strategy: &'static dyn BatchController = {
         use kernel::hil::time::Alarm as _;
 
         let bc = static_init!(
-            batching::ObservantBatching,
-            batching::ObservantBatching::new(&peripherals.ast));
+            batching::DBSCANObserver,
+            batching::DBSCANObserver::new(&peripherals.ast));
 
         bc
     };

@@ -620,16 +620,16 @@ impl AlarmClient for ResponsiveBatching {
     }
 }
 
-/// Batch controller that passively observes activity and adapts the batching policy.
-pub struct ObservantBatching {
+/// Batch controller that passively observes activity and prints time-linear scanning information.
+pub struct LinearScanObserver {
     alarm: &'static BatchAlarm,
     observations: [OptionalCell<(usize, Syscall)>; 10],
     next_observation_slot: Cell<usize>,
 }
 
-impl ObservantBatching {
-    pub fn new(alarm: &'static BatchAlarm) -> ObservantBatching {
-        ObservantBatching {
+impl LinearScanObserver {
+    pub fn new(alarm: &'static BatchAlarm) -> LinearScanObserver {
+        LinearScanObserver {
             alarm,
             observations: [OptionalCell::empty(),
                            OptionalCell::empty(),
@@ -645,8 +645,9 @@ impl ObservantBatching {
         }
     }
 
-    const MIN_WINDOW_TICKS: usize = ms_to_ticks(100);
-    const MAX_WINDOW_TICKS: usize = ms_to_ticks(2_000);
+    const MIN_WINDOW_TICKS: usize = ms_to_ticks(50);
+    // const MIN_WINDOW_TICKS: usize  = ms_to_ticks(500);
+    const MAX_WINDOW_TICKS: usize = ms_to_ticks(1000);
 
     fn find_optimal_window(&self) -> usize {
         let window_size_dec = Self::MAX_WINDOW_TICKS / 10;
@@ -655,6 +656,7 @@ impl ObservantBatching {
         let mut best_window_size = Self::MAX_WINDOW_TICKS;
 
         while window_size >= Self::MIN_WINDOW_TICKS {
+            // kernel::debug!("Window size {}...", window_size);
             let mut anchor = 0;
             let mut in_window = false;
             let mut batch_count = 0;
@@ -675,6 +677,12 @@ impl ObservantBatching {
                     //
                     // Otherwise, we are still in the batch window.
                     if dt > window_size || pos == self.observations.len()-1 {
+                        // kernel::debug!("  - {} (event {}) to {} (event {})",
+                        //                self.observations[anchor].extract().unwrap().0,
+                        //                anchor,
+                        //                self.observations[pos-1].extract().unwrap().0,
+                        //                pos-1);
+
                         in_window = false;
                         anchor = pos;
                         break;
@@ -692,7 +700,7 @@ impl ObservantBatching {
 
             // Update the winning window, if necessary.
             // Go with the narrower window if possible to optimize response time.
-            kernel::debug!("{} ms window creates {} 2+-count batches.",
+            kernel::debug!("{} ms = {} batches",
                            window_size * 1_000 / 16_000,
                            batch_count);
             if batch_count >= best_batch_count {
@@ -708,18 +716,214 @@ impl ObservantBatching {
     }
 }
 
-impl BatchController for ObservantBatching {
+impl BatchController for LinearScanObserver {
     fn check_enqueue<'a>(
         &self,
         pid: ProcessId,
         syscall: &'a Syscall,
     ) -> QueueResult<'a> {
+        let now = self.alarm.now().into_usize();
+        // let t_previous_syscall = self.observations[previous_slot].map(|obs| now - obs.0);
+
         match syscall {
-            Syscall::Command { driver_number, .. } => {
+            Syscall::Command { driver_number, subdriver_number, .. } => {
                 if *driver_number != 0 {
                     // Record the syscall observation.
                     let slot = self.next_observation_slot.get();
-                    let observation = (self.alarm.now().into_usize(), *syscall);
+                    let previous_slot = if slot == 0 { 9 } else { slot - 1 };
+                    let observation = (now, *syscall);
+
+                    self.observations[slot].set(observation);
+                    self.next_observation_slot.set((slot + 1) % 10);
+
+                    if slot == 9 {
+                        kernel::debug!("Observations:");
+                        for slot in self.observations.iter() {
+                            if let Some((t, sc)) = slot.extract() {
+                                match sc {
+                                    Syscall::Command { driver_number, subdriver_number, .. } =>
+                                        kernel::debug!("@{} s {} ms: ({}, {})",
+                                                       t / 16_000,
+                                                       (t * 1_000 / 16_000) % 1_000,
+                                                       driver_number,
+                                                       subdriver_number),
+
+                                    _ => {  },
+                                }
+                            }
+                        }
+
+                        let best_window_size = self.find_optimal_window();
+                        kernel::debug!("Optimal window: {} ms",
+                                       best_window_size * 1000 / 16_000);
+                    }
+                }
+
+                QueueResult::Run(syscall)
+            },
+
+            _ => QueueResult::Run(syscall)
+        }
+    }
+
+    fn dequeue_syscall(&self) -> Option<(ProcessId, Syscall)> {
+        None
+    }
+
+    fn state(&self, _k: bool) -> BatchingState {
+        BatchingState::Batch
+    }
+
+    fn flush_upcalls(&self) -> bool { true }
+
+    fn notify_upcalls_completed(&self) {
+    }
+
+    fn notify_syscalls_completed(&self) {
+    }
+}
+
+/// Batch controller that passively observes activity and prints DBSCAN-based batching information.
+pub struct DBSCANObserver {
+    alarm: &'static BatchAlarm,
+    observations: [OptionalCell<(usize, Syscall)>; 10],
+    next_observation_slot: Cell<usize>,
+}
+
+impl DBSCANObserver {
+    pub fn new(alarm: &'static BatchAlarm) -> DBSCANObserver {
+        DBSCANObserver {
+            alarm,
+            observations: [OptionalCell::empty(),
+                           OptionalCell::empty(),
+                           OptionalCell::empty(),
+                           OptionalCell::empty(),
+                           OptionalCell::empty(),
+                           OptionalCell::empty(),
+                           OptionalCell::empty(),
+                           OptionalCell::empty(),
+                           OptionalCell::empty(),
+                           OptionalCell::empty()],
+            next_observation_slot: Cell::new(0),
+        }
+    }
+
+    const MIN_WINDOW_TICKS: usize = ms_to_ticks(50);
+    const MAX_WINDOW_TICKS: usize = ms_to_ticks(1000);
+
+    fn find_optimal_window(&self) -> usize {
+        let window_size_dec = Self::MAX_WINDOW_TICKS / 10;
+        let mut window_size = Self::MAX_WINDOW_TICKS - window_size_dec;
+        let mut best_batch_count = 0;
+        let mut best_window_size = Self::MAX_WINDOW_TICKS;
+
+        while window_size >= Self::MIN_WINDOW_TICKS {
+            // Label points on the timeline.
+            let mut labels_is_core: [bool; 10] = [false; 10];
+            let range = window_size / 2;
+            for i in 0..labels_is_core.len() {
+                let t_syscall = self.observations[i]
+                    .map(|obs| obs.0)
+                    .unwrap();
+
+                let left_in_range = if i > 0 {
+                    let dt = self.observations[i-1]
+                        .map(|obs| t_syscall - obs.0)
+                        .unwrap();
+                    dt < range
+                } else {
+                    false
+                };
+
+                let right_in_range = if i < self.observations.len()-1 {
+                    let dt = self.observations[i+1]
+                        .map(|obs| obs.0 - t_syscall)
+                        .unwrap();
+                    dt < range
+                } else {
+                    false
+                };
+
+                labels_is_core[i] = left_in_range || right_in_range;
+            }
+
+            let mut batch_count = 0;
+            let mut in_window = false;
+            let mut anchor_i = 0;
+            let it = (0..)
+                .zip(self.observations.iter()
+                     .zip(self.observations.iter().skip(1)));
+            for (i, (oa, ob)) in it {
+                let mut batch_broken = false;
+                if !labels_is_core[i] {
+                    // Just iterating over noise until we find a core point.
+                    continue;
+                } else {
+                    if !in_window {
+                        // Since oa is a core point, we start a batch window here.
+                        in_window = true;
+                        anchor_i = i;
+                        batch_count += 1;
+                    }
+
+                    // We are currently in a window.
+                    // If ob is noise, then it always breaks the batch.
+                    if !labels_is_core[i+1] {
+                        in_window = false;
+                        batch_broken = true;
+                    } else {
+                        // oa and ob are core points, and we must determine if oa to ob breaks the batch.
+                        let (t_oa, t_ob) = (
+                            oa.map(|obs| obs.0).unwrap(),
+                            ob.map(|obs| obs.0).unwrap());
+                        if t_ob - t_oa > range {
+                            // Batch broken.
+                            in_window = false;
+                            batch_broken = true;
+                        }
+                    }
+                }
+
+                if batch_broken {
+                    kernel::debug!("{}..{}", anchor_i, i);
+                }
+            }
+
+            // Update the winning window, if necessary.
+            // Go with the narrower window if possible to optimize response time.
+            kernel::debug!("{} ms = {} batches",
+                           window_size * 1_000 / 16_000,
+                           batch_count);
+            if batch_count >= best_batch_count {
+                best_batch_count = batch_count;
+                best_window_size = window_size;
+            }
+
+            // Decrease the window size.
+            window_size -= window_size_dec;
+        }
+
+        best_window_size
+    }
+}
+
+impl BatchController for DBSCANObserver {
+    fn check_enqueue<'a>(
+        &self,
+        pid: ProcessId,
+        syscall: &'a Syscall,
+    ) -> QueueResult<'a> {
+        let now = self.alarm.now().into_usize();
+        // let t_previous_syscall = self.observations[previous_slot].map(|obs| now - obs.0);
+
+        match syscall {
+            Syscall::Command { driver_number, subdriver_number, .. } => {
+                if *driver_number != 0 {
+                    // Record the syscall observation.
+                    let slot = self.next_observation_slot.get();
+                    let previous_slot = if slot == 0 { 9 } else { slot - 1 };
+                    let observation = (now, *syscall);
+
                     self.observations[slot].set(observation);
                     self.next_observation_slot.set((slot + 1) % 10);
 
