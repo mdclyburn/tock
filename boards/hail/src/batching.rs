@@ -288,6 +288,99 @@ impl ResponsiveBatching {
             .count()
     }
 
+    const MAX_WINDOW_TICKS: usize = 16_000;
+    const MIN_WINDOW_TICKS: usize = Self::MAX_WINDOW_TICKS - (Self::MAX_WINDOW_TICKS - Self::MAX_WINDOW_TICKS * 2 / 10);
+
+    fn find_optimal_window(&self, observations: &[usize]) -> usize {
+        let window_size_dec = Self::MAX_WINDOW_TICKS / 10;
+        let mut window_size = Self::MAX_WINDOW_TICKS - window_size_dec;
+        let mut best_batch_count = 0;
+        let mut best_window_size = Self::MAX_WINDOW_TICKS;
+
+        while window_size >= Self::MIN_WINDOW_TICKS {
+            // Label points on the timeline.
+            let mut labels_is_core_orig: [bool; 10] = [false; 10];
+            let labels_is_core: &mut [bool] = &mut labels_is_core_orig[0..observations.len()];
+            let range = window_size / 2;
+            for i in 0..labels_is_core.len() {
+                let t_syscall = observations[i];
+
+                let left_in_range = if i > 0 {
+                    let dt = observations[i-1] - observations[i];
+                    dt < range
+                } else {
+                    false
+                };
+
+                let right_in_range = if i < observations.len()-1 {
+                    let dt = observations[i] - observations[i+1];
+                    dt < range
+                } else {
+                    false
+                };
+
+                labels_is_core[i] = left_in_range || right_in_range;
+                if labels_is_core[i] {
+                    kernel::debug!("@{} is core", observations[i]);
+                }
+            }
+
+            let mut batch_count = 0;
+            let mut in_window = false;
+            let mut anchor_i = 0;
+            let it = (0..)
+                .zip(observations.iter()
+                     .zip(observations.iter().skip(1)));
+            for (i, (oa, ob)) in it {
+                let mut batch_broken = false;
+                if !labels_is_core[i] {
+                    // Just iterating over noise until we find a core point.
+                    continue;
+                } else {
+                    if !in_window {
+                        // Since oa is a core point, we start a batch window here.
+                        in_window = true;
+                        anchor_i = i;
+                        batch_count += 1;
+                    }
+
+                    // We are currently in a window.
+                    // If ob is noise, then it always breaks the batch.
+                    if !labels_is_core[i+1] {
+                        in_window = false;
+                        batch_broken = true;
+                    } else {
+                        // oa and ob are core points, and we must determine if oa to ob breaks the batch.
+                        if ob - oa > range {
+                            // Batch broken.
+                            in_window = false;
+                            batch_broken = true;
+                        }
+                    }
+                }
+
+                if batch_broken {
+                    kernel::debug!("{}..{}", anchor_i, i);
+                }
+            }
+
+            // Update the winning window, if necessary.
+            // Go with the narrower window if possible to optimize response time.
+            kernel::debug!("{} ms = {} batches",
+                           window_size * 1_000 / 16_000,
+                           batch_count);
+            if batch_count >= best_batch_count {
+                best_batch_count = batch_count;
+                best_window_size = window_size;
+            }
+
+            // Decrease the window size.
+            window_size -= window_size_dec;
+        }
+
+        best_window_size
+    }
+
     fn batch_window_duration(&self) -> usize {
         let now = self.batch_alarm.now().into_usize();
         let update_interval = self.max_window_size_ms * 2 / 1000 * time::Freq16KHz::frequency() as usize;
@@ -301,8 +394,8 @@ impl ResponsiveBatching {
             let mut syscall_history_it = self.syscall_history.iter()
                 .filter_map(|optc| optc.extract())
                 .map(|(t, _syscall)| t)
-                .chain(alarm_it)
-                .filter(|t| *t > now - update_interval);
+                .chain(alarm_it);
+                // .filter(|t| *t > now - update_interval);
             let timeline_it = timeline.iter_mut();
             let mut op_count = 0;
             for timeline_slot in timeline_it {
@@ -317,79 +410,17 @@ impl ResponsiveBatching {
             kernel::debug!("op count: {}", op_count);
 
             if op_count > 1 {
-                // sort timeline
-                let mut least_found = 0;
-                for current_slot in 0..(timeline.len()-1) {
-                    for maybe_slot in (current_slot+1)..(timeline.len()-1) {
-                        if timeline[maybe_slot] < timeline[current_slot] {
-                            let temp = timeline[maybe_slot];
-                            timeline[maybe_slot] = timeline[current_slot];
-                            timeline[current_slot] = temp;
-                        }
-                    }
-                }
-
                 // kernel::debug!("timeline:");
-                // for slot in timeline.iter() {
-                //     kernel::debug!("S: {}", slot);
+                // for entry in timeline.iter().copied() {
+                //     kernel::debug!("@ {}", entry);
                 // }
 
-                // apply clustering to find if there is a tigher batching window that will make the system more responsive
-                let mut window = (self.max_window_size_ms * 8 / 10 * time::Freq16KHz::frequency() as usize) / 1000;
-                // best window found so far
-                let mut best_clusters = 0;
-                let mut best_window = self.max_window_size_ms * time::Freq16KHz::frequency() as usize / 1000;
-                // clustering epsilon cutoff threshold
-                // let min_interval = timeline.iter()
-                //     .zip(timeline[1..].iter())
-                //     .filter(|(_ta, tb)| **tb > 0)
-                //     .map(|(ta, tb)| *tb - *ta)
-                //     .fold(self.max_window_size_ms, |acc, cur| if cur < acc { cur } else { acc });
-                let min_interval = time::Freq16KHz::frequency() as usize / 1000 * 20;
-                while window > min_interval {
-                    let mut clusters = 0;
-                    let mut in_cluster = false;
-
-                    let it = timeline.iter()
-                        .copied()
-                        .zip(timeline[1..].iter().copied())
-                        .filter(|(_ta, tb)| *tb > 0);
-                    for (ta, tb) in it {
-                        assert!(ta <= tb); // should be sorted...
-                        if tb - ta < window {
-                            if !in_cluster {
-                                in_cluster = true;
-                                clusters += 1;
-                            } else {
-                                // we're in a cluster and we do not care that we extended the cluster
-                            }
-                        } else {
-                            if in_cluster {
-                                // end of cluster
-                                in_cluster = false;
-                            } else {
-                                // we were not in a cluster, and we do not care that we are still not in one
-                            }
-                        }
-                    }
-
-                    if clusters > best_clusters {
-                        best_clusters = clusters;
-                        best_window = window;
-
-                        // kernel::debug!("window size {} tc; clusters: {}, min: {} tc",
-                        //                window,
-                        //                clusters,
-                        //                min_interval);
-                    }
-
-                    window = window * 8 / 10;
-                }
-
-                kernel::debug!("best window: {}", best_window);
-                // self.current_window_size_ms.set(best_window * 1000 / time::Freq16KHz::frequency() as usize);
+                let entry_count = timeline.iter()
+                    .filter(|t| **t > 0)
+                    .count();
+                let optimal_window_size = self.find_optimal_window(&timeline[..entry_count]);
+                kernel::debug!("optimal window size: {}", optimal_window_size);
             }
-
             self.last_window_update.set(now);
         }
 
