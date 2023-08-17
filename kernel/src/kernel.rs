@@ -695,12 +695,12 @@ impl Kernel {
                                 // The batch controller added it to the queue for later execution.
                                 // No further action is necessary on the kernel's part.
                                 batch::QueueResult::Queued => {
-                                    // debug!("Queue accept: {:?}", syscall);
+                                    // debug!("Queue ACCEPT: {:?}", syscall);
                                 },
 
                                 // The batch controller has rejected the syscall, it should run immediately.
                                 batch::QueueResult::Run(_ref_syscall) => {
-                                    // debug!("Queue reject: {:?}", syscall);
+                                    // debug!("Queue RUN: {:?}", syscall);
                                     self.handle_syscall(resources, process, syscall);
                                 },
                             };

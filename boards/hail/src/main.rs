@@ -608,18 +608,18 @@ pub unsafe fn main() {
     //     bc
     // };
 
-    // let batching_strategy: &'static dyn BatchController = {
-    //     use kernel::hil::time::Alarm as _;
+    let batching_strategy: &'static dyn BatchController = {
+        use kernel::hil::time::Alarm as _;
 
-    //     let bc = static_init!(
-    //         batching::ResponsiveBatching,
-    //         batching::ResponsiveBatching::new(
-    //             1_000,
-    //             &peripherals.ast,
-    //             alarm));
-    //     peripherals.ast.set_alarm_client(bc);
-    //     bc
-    // };
+        let bc = static_init!(
+            batching::ResponsiveBatching,
+            batching::ResponsiveBatching::new(
+                1_000,
+                &peripherals.ast,
+                alarm));
+        peripherals.ast.set_alarm_client(bc);
+        bc
+    };
 
     // let batching_strategy: &'static dyn BatchController = {
     //     use kernel::hil::time::Alarm as _;
@@ -631,15 +631,15 @@ pub unsafe fn main() {
     //     bc
     // };
 
-    let batching_strategy: &'static dyn BatchController = {
-        use kernel::hil::time::Alarm as _;
+    // let batching_strategy: &'static dyn BatchController = {
+    //     use kernel::hil::time::Alarm as _;
 
-        let bc = static_init!(
-            batching::DBSCANObserver,
-            batching::DBSCANObserver::new(&peripherals.ast));
+    //     let bc = static_init!(
+    //         batching::DBSCANObserver,
+    //         batching::DBSCANObserver::new(&peripherals.ast));
 
-        bc
-    };
+    //     bc
+    // };
 
     // No batching.
     // let batching_strategy = ();

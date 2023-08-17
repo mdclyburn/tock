@@ -119,7 +119,8 @@ impl<A: 'static + time::Alarm<'static>> Component for AlarmDriverComponent<A> {
             AlarmDriver<'static, VirtualMuxAlarm<'static, A>>,
             AlarmDriver::new(
                 virtual_alarm1,
-                self.board_kernel.create_grant(self.driver_num, &grant_cap)
+                self.board_kernel.create_grant(self.driver_num, &grant_cap),
+                false,
             )
         );
 

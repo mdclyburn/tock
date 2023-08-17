@@ -39,15 +39,17 @@ pub struct AlarmDriver<'a, A: Alarm<'a>> {
     num_armed: Cell<usize>,
     app_alarms: Grant<AlarmData, NUM_UPCALLS>,
     next_alarm: Cell<Expiration>,
+    operate_hw: bool,
 }
 
 impl<'a, A: Alarm<'a>> AlarmDriver<'a, A> {
-    pub const fn new(alarm: &'a A, grant: Grant<AlarmData, NUM_UPCALLS>) -> AlarmDriver<'a, A> {
+    pub const fn new(alarm: &'a A, grant: Grant<AlarmData, NUM_UPCALLS>, operate_hw: bool) -> AlarmDriver<'a, A> {
         AlarmDriver {
             alarm: alarm,
             num_armed: Cell::new(0),
             app_alarms: grant,
             next_alarm: Cell::new(Expiration::Disabled),
+            operate_hw,
         }
     }
 
@@ -125,7 +127,9 @@ impl<'a, A: Alarm<'a>> AlarmDriver<'a, A> {
         self.next_alarm.set(earliest_alarm);
         match earliest_alarm {
             Expiration::Disabled => {
-                let _ = self.alarm.disarm();
+                if self.operate_hw {
+                    let _ = self.alarm.disarm();
+                }
             }
             Expiration::Enabled { reference, dt } => {
                 // This logic handles when the underlying Alarm is wider than
@@ -141,7 +145,9 @@ impl<'a, A: Alarm<'a>> AlarmDriver<'a, A> {
                     high_bits = high_bits.wrapping_sub(bit33);
                 }
                 let real_reference = high_bits.wrapping_add(A::Ticks::from(reference));
-                self.alarm.set_alarm(real_reference, A::Ticks::from(dt));
+                if self.operate_hw {
+                    self.alarm.set_alarm(real_reference, A::Ticks::from(dt));
+                }
             }
         }
     }
@@ -279,7 +285,9 @@ impl<'a, A: Alarm<'a>> time::AlarmClient for AlarmDriver<'a, A> {
         // Otherwise, check all the alarms and find the next one, rescheduling
         // the underlying alarm.
         if self.num_armed.get() == 0 {
-            let _ = self.alarm.disarm();
+            if self.operate_hw {
+                let _ = self.alarm.disarm();
+            }
         } else {
             self.reset_active_alarm();
         }
