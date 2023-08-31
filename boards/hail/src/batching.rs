@@ -212,7 +212,6 @@ impl AlarmClient for TimeWindowBatching {
 
 /// Batching based on how we know the system will be active in the future.
 pub struct ResponsiveBatching {
-    max_window_size_ms: usize,
     current_window_size_ms: Cell<usize>,
     last_window_update: Cell<usize>,
     last_syscall: Cell<usize>,
@@ -231,18 +230,17 @@ pub struct ResponsiveBatching {
     /// Batched syscalls.
     pending_syscalls: [OptionalCell<PendingSyscall>; 10],
     /// Latest issuance of distinct syscalls that get batched.
-    syscall_history: [OptionalCell<(usize, (usize, usize))>; 10],
+    syscall_history: [OptionalCell<usize>; 10],
+    syscall_history_next: Cell<usize>,
 }
 
 impl ResponsiveBatching {
-    pub fn new(max_window_size_ms: usize,
-               batch_alarm: &'static BatchAlarm,
+    pub fn new(batch_alarm: &'static BatchAlarm,
                alarm_driver: &'static dyn AlarmClient)
                -> ResponsiveBatching
     {
         ResponsiveBatching {
-            max_window_size_ms,
-            current_window_size_ms: Cell::new(max_window_size_ms),
+            current_window_size_ms: Cell::new(Self::MAX_WINDOW_TICKS * 1_000 / 16_000),
             last_window_update: Cell::new(batch_alarm.now().into_usize()),
             last_syscall: Cell::new(batch_alarm.now().into_usize()),
             batching_state: Cell::new(BatchingState::Batch),
@@ -279,6 +277,7 @@ impl ResponsiveBatching {
                 OptionalCell::empty(),
                 OptionalCell::empty(),
             ],
+            syscall_history_next: Cell::new(0),
         }
     }
 
@@ -288,41 +287,60 @@ impl ResponsiveBatching {
             .count()
     }
 
-    const MAX_WINDOW_TICKS: usize = 16_000;
-    const MIN_WINDOW_TICKS: usize = Self::MAX_WINDOW_TICKS - (Self::MAX_WINDOW_TICKS - Self::MAX_WINDOW_TICKS * 2 / 10);
+    const MAX_WINDOW_TICKS: usize = 32_000;
+    // 3200 ticks, 200 ms.
+    // const MIN_WINDOW_TICKS: usize = Self::MAX_WINDOW_TICKS - (Self::MAX_WINDOW_TICKS - Self::MAX_WINDOW_TICKS * 2 / 10);
+    const MIN_WINDOW_TICKS: usize = 4_000;
 
     fn find_optimal_window(&self, observations: &[usize]) -> usize {
-        let window_size_dec = Self::MAX_WINDOW_TICKS / 10;
+        let window_size_dec = 2_000;
         let mut window_size = Self::MAX_WINDOW_TICKS - window_size_dec;
         let mut best_batch_count = 0;
         let mut best_window_size = Self::MAX_WINDOW_TICKS;
 
-        while window_size >= Self::MIN_WINDOW_TICKS {
+        // kernel::debug!("finding optimal window from {} obs.", observations.len());
+
+        'window: while window_size >= Self::MIN_WINDOW_TICKS {
             // Label points on the timeline.
             let mut labels_is_core_orig: [bool; 10] = [false; 10];
             let labels_is_core: &mut [bool] = &mut labels_is_core_orig[0..observations.len()];
             let range = window_size / 2;
-            for i in 0..labels_is_core.len() {
+            // kernel::debug!("window size: {}, range: {}", window_size, range);
+            'labelling: for i in 0..labels_is_core.len() {
                 let t_syscall = observations[i];
 
                 let left_in_range = if i > 0 {
-                    let dt = observations[i-1] - observations[i];
+                    let dt = observations[i] - observations[i-1];
+                    // kernel::debug!("ldt: {}", dt);
                     dt < range
                 } else {
                     false
                 };
 
                 let right_in_range = if i < observations.len()-1 {
-                    let dt = observations[i] - observations[i+1];
+                    let dt = observations[i+1] - observations[i];
+                    // kernel::debug!("rdt: {}", dt);
                     dt < range
                 } else {
                     false
                 };
 
                 labels_is_core[i] = left_in_range || right_in_range;
-                if labels_is_core[i] {
-                    kernel::debug!("@{} is core", observations[i]);
-                }
+                // if labels_is_core[i] {
+                //     kernel::debug!("@{} CORE", observations[i]);
+                // } else {
+                //     kernel::debug!("@{} -", observations[i]);
+                // }
+            }
+
+            // Optimization to speed up processing:
+            // if there are no core points in the timeline, we stop processing here.
+            // There is no need to try clustering if no point is close enough to another.
+            let exists_core_points: bool = labels_is_core.iter()
+                .find(|b| **b == true)
+                .is_some();
+            if !exists_core_points {
+                break 'window;
             }
 
             let mut batch_count = 0;
@@ -359,9 +377,9 @@ impl ResponsiveBatching {
                     }
                 }
 
-                if batch_broken {
-                    kernel::debug!("{}..{}", anchor_i, i);
-                }
+                // if batch_broken {
+                //     kernel::debug!("{}..{}", anchor_i, i);
+                // }
             }
 
             // Update the winning window, if necessary.
@@ -383,19 +401,14 @@ impl ResponsiveBatching {
 
     fn batch_window_duration(&self) -> usize {
         let now = self.batch_alarm.now().into_usize();
-        let update_interval = self.max_window_size_ms * 2 / 1000 * time::Freq16KHz::frequency() as usize;
+        let update_interval = Self::MAX_WINDOW_TICKS * 1_000 / 16_000 * 2 / 1000 * time::Freq16KHz::frequency() as usize;
         // let update_interval = time::Freq16KHz::frequency() as usize;
 
         if now - self.last_window_update.get() > update_interval {
             let mut timeline = [0usize; 10];
-            let alarm_it = self.active_alarms.iter()
-                .filter_map(|optc| optc.extract())
-                .map(|(r, dt)| r+dt);
             let mut syscall_history_it = self.syscall_history.iter()
-                .filter_map(|optc| optc.extract())
-                .map(|(t, _syscall)| t)
-                .chain(alarm_it);
-                // .filter(|t| *t > now - update_interval);
+                .filter_map(|optc| optc.extract());
+
             let timeline_it = timeline.iter_mut();
             let mut op_count = 0;
             for timeline_slot in timeline_it {
@@ -407,7 +420,26 @@ impl ResponsiveBatching {
                 }
             }
 
-            kernel::debug!("op count: {}", op_count);
+            // Sort the timeline, earliest to latest.
+            // Bubble sort...
+            for pos in 1..timeline.len() {
+                let pos = timeline.len() - pos;
+                let mut greatest_i = 0;
+                for i in 0..pos+1 {
+                    if timeline[i] > timeline[greatest_i] {
+                        greatest_i = i;
+                    }
+                }
+
+                let temp = timeline[pos];
+                timeline[pos] = timeline[greatest_i];
+                timeline[greatest_i] = temp;
+            }
+
+            kernel::debug!("timeline:");
+            for i in 0..timeline.len() {
+                kernel::debug!("{}", timeline[i]);
+            }
 
             if op_count > 1 {
                 // kernel::debug!("timeline:");
@@ -418,7 +450,7 @@ impl ResponsiveBatching {
                 let entry_count = timeline.iter()
                     .filter(|t| **t > 0)
                     .count();
-                let optimal_window_size = self.find_optimal_window(&timeline[..entry_count]);
+                let optimal_window_size = self.find_optimal_window(&timeline[timeline.len()-entry_count..]);
                 kernel::debug!("optimal window size: {}", optimal_window_size);
             }
             self.last_window_update.set(now);
@@ -443,42 +475,13 @@ impl ResponsiveBatching {
     const MIN_SYSCALL_DIFF: usize = 50 * 16000 / 1000;
 
     fn add_to_history(&self, syscall: &Syscall) {
-        let now = self.batch_alarm.now().into_usize();
-        // Do not record quick succession of syscalls.
-        // if now - self.last_syscall.get() < Self::MIN_SYSCALL_DIFF  {
-        //     if let Syscall::Command { driver_number: 0, .. } = syscall {
-        //     } else { return; }
-        // }
 
-        if let Syscall::Command { driver_number, subdriver_number, .. } = syscall {
-            let history_slot = self.syscall_history.iter()
-                .find(|optc| {
-                    optc.is_none()
-                        || optc.map(|s| s.1.0 == *driver_number && s.1.1 == *subdriver_number).unwrap()
-                })
-                .unwrap();
-
-            if let Syscall::Command { driver_number: 0, subdriver_number, arg0, arg1 } = syscall {
-                if *subdriver_number > 10 {
-                    history_slot.set((self.batch_alarm.now().into_usize() + arg1,
-                                      (0, *subdriver_number)));
-                } else {
-                    return;
-                }
-            } else {
-                history_slot.set((self.batch_alarm.now().into_usize(),
-                                  (*driver_number, *subdriver_number)));
-            }
-
-            // kernel::debug!("history: {:?}", history_slot.extract().unwrap());
-        } else {
-            panic!();
-        }
     }
 }
 
 impl BatchController for ResponsiveBatching {
     fn check_enqueue<'a>(&self, pid: ProcessId, syscall: &'a Syscall) -> QueueResult<'a> {
+        self.last_syscall.set(self.batch_alarm.now().into_usize());
         match syscall {
             // Driver checks do not need queueing.
             Syscall::Command { driver_number, subdriver_number: 0, .. } => {
@@ -503,20 +506,16 @@ impl BatchController for ResponsiveBatching {
             {
                 if *subdriver_number == batch::ALARM_COMMAND_SET_ALARM {
                     // kernel::debug!("alarm: {:?}", syscall);
-                    // self.add_to_history(&Syscall::Command {
-                    //     driver_number: 0,
-                    //     subdriver_number: subdriver_number + 10 + pid.id(),
-                    //     arg0: *syscall_reference,
-                    //     arg1: *syscall_dt });
+                    self.syscall_history[self.syscall_history_next.get()]
+                        .set(*syscall_reference + *syscall_dt);
+                    self.syscall_history_next.set(
+                        (self.syscall_history_next.get() + 1) % 10);
 
                     // Add the alarm to the active set.
                     let empty_slot = self.active_alarms.iter()
                         .find(|optc| optc.is_none())
                         .unwrap();
                     empty_slot.set((*syscall_reference, *syscall_dt));
-                    // for a in self.active_alarms.iter().filter_map(|o| o.extract()) {
-                    //     kernel::debug!("set alarm: {:?}", a);
-                    // }
                 }
 
                 // Make sure the batch window is open.
@@ -540,7 +539,7 @@ impl BatchController for ResponsiveBatching {
                     // Now that we have a pending syscall, we ensure that we have a batch window open.
                     self.open_batch_window();
                     self.add_to_history(syscall);
-                    kernel::debug!("queued: {:?}", pending_syscall.syscall);
+                    // kernel::debug!("queued: {:?}", pending_syscall.syscall);
 
                     QueueResult::Queued
                 }
@@ -611,19 +610,19 @@ impl AlarmClient for ResponsiveBatching {
     fn alarm(&self) {
         kernel::debug!("--- batch window expired!");
 
-        kernel::debug!("als:");
-        for oc in self.active_alarms.iter() {
-            if let Some((r, dt)) = oc.extract() {
-                kernel::debug!("{}, +{}", r, dt);
-            }
-        }
+        // kernel::debug!("als:");
+        // for oc in self.active_alarms.iter() {
+        //     if let Some((r, dt)) = oc.extract() {
+        //         kernel::debug!("{}, +{}", r, dt);
+        //     }
+        // }
 
-        kernel::debug!("hst:");
-        for oc in self.syscall_history.iter() {
-            if let Some((t, (dn, sdn))) = oc.extract() {
-                kernel::debug!("@{}: ({}, {})", t, dn, sdn);
-            }
-        }
+        // kernel::debug!("hst:");
+        // for oc in self.syscall_history.iter() {
+        //     if let Some(t) = oc.extract() {
+        //         kernel::debug!("@{}", t);
+        //     }
+        // }
 
         self.next_expiration.clear();
 
@@ -917,9 +916,9 @@ impl DBSCANObserver {
                     }
                 }
 
-                if batch_broken {
-                    kernel::debug!("{}..{}", anchor_i, i);
-                }
+                // if batch_broken {
+                //     kernel::debug!("{}..{}", anchor_i, i);
+                // }
             }
 
             // Update the winning window, if necessary.

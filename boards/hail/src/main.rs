@@ -614,7 +614,6 @@ pub unsafe fn main() {
         let bc = static_init!(
             batching::ResponsiveBatching,
             batching::ResponsiveBatching::new(
-                1_000,
                 &peripherals.ast,
                 alarm));
         peripherals.ast.set_alarm_client(bc);
