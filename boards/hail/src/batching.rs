@@ -441,6 +441,14 @@ impl ResponsiveBatching {
                 kernel::debug!("{}", timeline[i]);
             }
 
+            // kernel::debug!("intervals:");
+            // let it = timeline.iter()
+            //     .skip(1)
+            //     .zip(timeline.iter());
+            // for (a, b) in it {
+            //     kernel::debug!("{} ms", (a - b) * 1000 / 16000);
+            // }
+
             if op_count > 1 {
                 // kernel::debug!("timeline:");
                 // for entry in timeline.iter().copied() {
@@ -506,8 +514,15 @@ impl BatchController for ResponsiveBatching {
             {
                 if *subdriver_number == batch::ALARM_COMMAND_SET_ALARM {
                     // kernel::debug!("alarm: {:?}", syscall);
+                    // kernel::debug!("scheduled: {}", *syscall_reference + *syscall_dt);
+                    let now = self.batch_alarm.now().into_usize();
+                    kernel::debug!("scheduled: {}", now + *syscall_dt);
+                    // Set the history entry based on reference + dt.
+                    // self.syscall_history[self.syscall_history_next.get()]
+                    //     .set(*syscall_reference + *syscall_dt);
+                    // Set the history entry based on now + dt.
                     self.syscall_history[self.syscall_history_next.get()]
-                        .set(*syscall_reference + *syscall_dt);
+                        .set(now + *syscall_dt);
                     self.syscall_history_next.set(
                         (self.syscall_history_next.get() + 1) % 10);
 
@@ -608,7 +623,7 @@ impl AlarmClient for ResponsiveBatching {
     ///
     /// Run pending syscalls and also notify the alarm driver of expiration.
     fn alarm(&self) {
-        kernel::debug!("--- batch window expired!");
+        // kernel::debug!("--- batch window expired!");
 
         // kernel::debug!("als:");
         // for oc in self.active_alarms.iter() {
