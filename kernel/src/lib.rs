@@ -119,6 +119,7 @@ mod kernel;
 mod memop;
 mod process_policies;
 mod process_standard;
+mod process_thin;
 mod process_utilities;
 mod syscall_driver;
 
