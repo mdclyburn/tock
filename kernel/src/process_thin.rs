@@ -88,7 +88,7 @@ impl Process for ThinProcess {
         start_address: *mut u8,
         size: usize
     ) -> Result<ReadWriteProcessBuffer, ErrorCode> {
-        // TODO
+        unimplemented!();
         Err(ErrorCode::NOSUPPORT)
     }
 
@@ -98,6 +98,7 @@ impl Process for ThinProcess {
         size: usize
     ) -> Result<ReadOnlyProcessBuffer, ErrorCode> {
         // TODO
+        unimplemented!();
         Err(ErrorCode::NOSUPPORT)
     }
 
@@ -122,11 +123,13 @@ impl Process for ThinProcess {
         align: usize,
     ) -> Option<NonNull<u8>> {
         // TODO
+        unimplemented!();
         None
     }
 
     fn grant_is_allocated(&self, grant_no: usize) -> Option<bool> {
         // TODO
+        unimplemented!();
         None
     }
 
@@ -141,6 +144,7 @@ impl Process for ThinProcess {
         grant_num: usize
     ) -> Result<*mut u8, Error> {
         // TODO: create structures in the thin process struct to mimick this...
+        unimplemented!();
         Err(Error::NoSuchApp)
     }
 
@@ -155,11 +159,13 @@ impl Process for ThinProcess {
 
     fn grant_allocated_count(&self) -> Option<usize> {
         // TODO
+        unimplemented!();
         None
     }
 
     fn lookup_grant_from_driver_num(&self, driver_num: usize) -> Result<usize, Error> {
         // TODO
+        unimplemented!();
         Err(Error::NoSuchApp)
     }
 

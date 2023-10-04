@@ -109,6 +109,7 @@ pub mod ipc;
 pub mod platform;
 pub mod process;
 pub mod processbuffer;
+pub mod process_thin;
 pub mod scheduler;
 pub mod syscall;
 pub mod upcall;
@@ -119,7 +120,6 @@ mod kernel;
 mod memop;
 mod process_policies;
 mod process_standard;
-mod process_thin;
 mod process_utilities;
 mod syscall_driver;
 
