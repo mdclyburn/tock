@@ -109,7 +109,7 @@ impl TimeWindowBatching {
 }
 
 impl BatchController for TimeWindowBatching {
-    fn check_enqueue<'a>(&self, pid: ProcessId, syscall: &'a Syscall) -> QueueResult<'a> {
+    fn check_enqueue<'a>(&self, invoking_process: &dyn Process, syscall: &'a Syscall) -> QueueResult<'a> {
         match syscall {
             // Driver checks do not need queueing.
             Syscall::Command { driver_number: _, subdriver_number: 0, .. } =>
@@ -152,7 +152,7 @@ impl BatchController for TimeWindowBatching {
                 let empty_slot = self.pending_syscalls.iter()
                     .find(|oc| oc.is_none())
                     .expect("pending syscall overflow");
-                let pending_syscall = PendingSyscall::new(pid, *syscall);
+                let pending_syscall = PendingSyscall::new(invoking_process.processid(), *syscall);
                 empty_slot.set(pending_syscall);
                 // Now that we have a pending syscall, we ensure that we have a batch window open.
                 self.open_batch_window();
@@ -489,7 +489,7 @@ impl ResponsiveBatching {
 }
 
 impl BatchController for ResponsiveBatching {
-    fn check_enqueue<'a>(&self, pid: ProcessId, syscall: &'a Syscall) -> QueueResult<'a> {
+    fn check_enqueue<'a>(&self, invoking_process: &dyn Process, syscall: &'a Syscall) -> QueueResult<'a> {
         self.last_syscall.set(self.batch_alarm.now().into_usize());
         match syscall {
             // Driver checks do not need queueing.
@@ -550,7 +550,7 @@ impl BatchController for ResponsiveBatching {
                     let empty_slot = self.pending_syscalls.iter()
                         .find(|oc| oc.is_none())
                         .expect("pending syscall overflow");
-                    let pending_syscall = PendingSyscall::new(pid, *syscall);
+                    let pending_syscall = PendingSyscall::new(invoking_process.processid(), *syscall);
                     empty_slot.set(pending_syscall);
                     // Now that we have a pending syscall, we ensure that we have a batch window open.
                     self.open_batch_window();
@@ -767,7 +767,7 @@ impl LinearScanObserver {
 impl BatchController for LinearScanObserver {
     fn check_enqueue<'a>(
         &self,
-        pid: ProcessId,
+        invoking_process: &dyn Process,
         syscall: &'a Syscall,
     ) -> QueueResult<'a> {
         let now = self.alarm.now().into_usize();
@@ -958,7 +958,7 @@ impl DBSCANObserver {
 impl BatchController for DBSCANObserver {
     fn check_enqueue<'a>(
         &self,
-        pid: ProcessId,
+        invoking_process: &dyn Process,
         syscall: &'a Syscall,
     ) -> QueueResult<'a> {
         let now = self.alarm.now().into_usize();
@@ -1054,7 +1054,7 @@ impl PrefetchTester {
 }
 
 impl BatchController for PrefetchTester {
-    fn check_enqueue<'a>(&self, pid: ProcessId, syscall: &'a Syscall) -> QueueResult<'a> {
+    fn check_enqueue<'a>(&self, invoking_process: &dyn Process, syscall: &'a Syscall) -> QueueResult<'a> {
         match syscall {
             // Driver checks do not need queueing.
             Syscall::Command { driver_number,

@@ -55,7 +55,7 @@ pub enum BatchingState {
 /// A batching strategy.
 pub trait BatchController {
     /// Possibly check a syscall into the batch.
-    fn check_enqueue<'a>(&self, pid: ProcessId, syscall: &'a Syscall) -> QueueResult<'a>;
+    fn check_enqueue<'a>(&self, invoking_process: &dyn Process, syscall: &'a Syscall) -> QueueResult<'a>;
 
     /// Remove a syscall from the queue.
     fn dequeue_syscall(&self) -> Option<(ProcessId, Syscall)>;
@@ -88,7 +88,7 @@ pub trait BatchController {
 pub type NoBatching = ();
 
 impl BatchController for NoBatching {
-    fn check_enqueue<'a>(&self, _pid: ProcessId, syscall: &'a Syscall) -> QueueResult<'a> {
+    fn check_enqueue<'a>(&self, _p: &dyn Process, syscall: &'a Syscall) -> QueueResult<'a> {
         QueueResult::Run(syscall)
     }
 

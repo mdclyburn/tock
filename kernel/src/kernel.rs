@@ -681,7 +681,7 @@ impl Kernel {
                                 .extract()
                                 .unwrap();
 
-                            match batch_controller.check_enqueue(process.processid(), &syscall) {
+                            match batch_controller.check_enqueue(process, &syscall) {
                                 // The batch controller added it to the queue for later execution.
                                 // No further action is necessary on the kernel's part.
                                 batch::QueueResult::Queued => {  },
