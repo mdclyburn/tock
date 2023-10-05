@@ -14,7 +14,6 @@ use crate::capabilities;
 use crate::config;
 use crate::debug;
 use crate::dynamic_deferred_call::DynamicDeferredCall;
-use crate::energy;
 use crate::errorcode::ErrorCode;
 use crate::grant::Grant;
 use crate::ipc;
@@ -67,9 +66,6 @@ pub struct Kernel {
     /// established.
     grants_finalized: Cell<bool>,
 
-    /// Energy accounting.
-    energy_accounting: OptionalCell<&'static dyn energy::DriverEnergyAccounting>,
-
     /// Batching strategy implementation.
     batch_controller: OptionalCell<&'static dyn BatchController>,
 }
@@ -107,13 +103,8 @@ impl Kernel {
             process_identifier_max: Cell::new(0),
             grant_counter: Cell::new(0),
             grants_finalized: Cell::new(false),
-            energy_accounting: OptionalCell::empty(),
             batch_controller: OptionalCell::empty(),
         }
-    }
-
-    pub fn energy_accounting_service(&self) -> Option<&'static dyn energy::DriverEnergyAccounting> {
-        self.energy_accounting.extract()
     }
 
     pub fn set_batch_controller(&self, batch_controller: &'static dyn BatchController) {
@@ -548,7 +539,6 @@ impl Kernel {
         }
 
         resources.watchdog().setup();
-        self.energy_accounting.insert(resources.energy_accounting());
 
         loop {
             self.kernel_loop_operation(resources, chip, ipc, false, capability);
@@ -1112,11 +1102,6 @@ impl Kernel {
                         arg1,
                         res,
                     );
-                }
-
-                // Hook for energy accounting.
-                if let Some(eacc) = self.energy_accounting.extract() {
-                    eacc.on_command(&syscall, &res);
                 }
 
                 process.set_syscall_return_value(res);
