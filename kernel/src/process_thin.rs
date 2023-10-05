@@ -33,6 +33,12 @@ use crate::utilities::cells::OptionalCell;
 static mut GRANT_BUFFER_1: [u8; 128] = [0; 128];
 static mut ALLOW_BUFFER_1: [u8; 1024] = [0; 1024];
 
+/// A cache hit result describing how to pass data to the application.
+pub struct CacheReturn {
+    upcall_id: UpcallId,
+    args: (usize, usize, usize, usize),
+}
+
 pub struct ThinProcess {
     pid: ProcessId,
     kernel: &'static Kernel,

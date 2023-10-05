@@ -1065,6 +1065,13 @@ impl BatchController for PrefetchTester {
                                subdriver_number,
                                arg0,
                                arg1 } => {
+                // Check the syscall cache.
+                let cache_check_result =  self.shadow_process.check_syscall_cache(
+                    *driver_number, *subdriver_number, *arg0, *arg1);
+                if let Some(cached_return) = cache_check_result {
+                    // Get this result back to the process.
+                }
+
                 if self.enabled.get() {
                     self.enabled.set(false);
                     let (allow_address, allow_size) = self.shadow_process.reserve_buffer(1024)
