@@ -640,8 +640,14 @@ pub unsafe fn main() {
     //     bc
     // };
 
+    let batching_strategy: &'static dyn BatchController = {
+        static_init!(
+            batching::PrefetchTester,
+            batching::PrefetchTester::new(board_kernel, &mut PROCESSES))
+    };
+
     // No batching.
-    // let batching_strategy = ();
+    // let batching_strategy = &();
 
     board_kernel.set_batch_controller(batching_strategy);
     board_kernel.kernel_loop(&hail, chip, Some(&hail.ipc), &main_loop_capability);

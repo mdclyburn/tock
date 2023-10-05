@@ -1,6 +1,7 @@
 use core::fmt::Write;
 use core::ptr::NonNull;
 
+use crate::debug;
 use crate::kernel::Kernel;
 use crate::platform::mpu::Region;
 use crate::errorcode::ErrorCode;
@@ -23,13 +24,37 @@ use crate::syscall::{
     SyscallReturn,
 };
 use crate::upcall::UpcallId;
+use crate::utilities::cells::OptionalCell;
+
+static mut GRANT_BUFFER_1: [u8; 128] = [0; 128];
+static mut ALLOW_BUFFER_1: [u8; 1024] = [0; 1024];
 
 pub struct ThinProcess {
+    pid: ProcessId,
     kernel: &'static Kernel,
+    current_grant_no: OptionalCell<usize>,
+}
+
+impl ThinProcess {
+    pub fn new(kernel: &'static Kernel, array_idx: usize) -> ThinProcess {
+        ThinProcess {
+            pid: ProcessId::new(kernel, 99, array_idx),
+            kernel,
+            current_grant_no: OptionalCell::empty(),
+        }
+    }
+
+    /// Allocate a free buffer in the thin process memory space.
+    ///
+    /// Why does this function exist?
+    /// Make sure we have room to prefetch this incoming data anyway.
+    pub fn reserve_buffer(&self, byte_len: usize) -> Result<(*mut u8, usize), ()> {
+        Ok((unsafe { ALLOW_BUFFER_1.as_mut_ptr() }, byte_len))
+    }
 }
 
 impl Process for ThinProcess {
-    fn processid(&self) -> ProcessId { ProcessId::new(self.kernel, 99, 0) }
+    fn processid(&self) -> ProcessId { self.pid }
 
     fn enqueue_task(&self, task: Task) -> Result<(), ErrorCode> { Ok(()) }
 
@@ -88,8 +113,11 @@ impl Process for ThinProcess {
         start_address: *mut u8,
         size: usize
     ) -> Result<ReadWriteProcessBuffer, ErrorCode> {
-        unimplemented!();
-        Err(ErrorCode::NOSUPPORT)
+        let rw_buffer = unsafe {
+            ReadWriteProcessBuffer::new(start_address, size, self.processid())
+        };
+
+        Ok(rw_buffer)
     }
 
     fn build_readonly_process_buffer(
@@ -122,55 +150,69 @@ impl Process for ThinProcess {
         size: usize,
         align: usize,
     ) -> Option<NonNull<u8>> {
-        // TODO
-        unimplemented!();
-        None
+        // debug!("allocate_grant({}, {}, {}, {})",
+        //        grant_no,
+        //        driver_no,
+        //        size,
+        //        align);
+        self.current_grant_no.set(grant_no);
+        // For now, this will not fail.
+        Some(unsafe { NonNull::new_unchecked(GRANT_BUFFER_1.as_mut_ptr()) })
     }
 
     fn grant_is_allocated(&self, grant_no: usize) -> Option<bool> {
-        // TODO
-        unimplemented!();
-        None
+        // debug!("grant_is_allocated({})", grant_no);
+        if let Some(current_grant_no) = self.current_grant_no.extract() {
+            Some(current_grant_no == grant_no)
+        } else {
+            Some(false)
+        }
+        // self.current_grant_no.map(|current_grant_no| *current_grant_no == grant_no)
     }
 
     fn allocate_custom_grant(
         &self,
         size: usize,
         align: usize,
-    ) -> Option<(ProcessCustomGrantIdentifer, NonNull<u8>)> { None }
+    ) -> Option<(ProcessCustomGrantIdentifer, NonNull<u8>)> {
+        unimplemented!()
+    }
 
     fn enter_grant(
         &self,
-        grant_num: usize
+        grant_no: usize
     ) -> Result<*mut u8, Error> {
-        // TODO: create structures in the thin process struct to mimick this...
-        unimplemented!();
-        Err(Error::NoSuchApp)
+        // debug!("enter_grant({})", grant_no);
+        if let Some(current_grant_no) = self.current_grant_no.extract() {
+            if current_grant_no == grant_no {
+                Ok(unsafe { GRANT_BUFFER_1.as_mut_ptr() })
+            } else {
+                Err(Error::InactiveApp)
+            }
+        } else {
+            Err(Error::InactiveApp)
+        }
     }
 
     fn enter_custom_grant(
         &self,
         identifier: ProcessCustomGrantIdentifer,
     ) -> Result<*mut u8, Error> {
-        Err(Error::NoSuchApp)
+        unimplemented!()
     }
 
     fn leave_grant(&self, grant_no: usize) {  }
 
     fn grant_allocated_count(&self) -> Option<usize> {
-        // TODO
-        unimplemented!();
-        None
+        unimplemented!()
     }
 
     fn lookup_grant_from_driver_num(&self, driver_num: usize) -> Result<usize, Error> {
-        // TODO
-        unimplemented!();
-        Err(Error::NoSuchApp)
+        unimplemented!()
     }
 
     fn is_valid_upcall_function_pointer(&self, upcall_fn: NonNull<()>) -> bool {
-        true
+        unimplemented!()
     }
 
     fn set_syscall_return_value(&self, return_value: SyscallReturn) {  }

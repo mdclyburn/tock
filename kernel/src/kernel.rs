@@ -684,14 +684,20 @@ impl Kernel {
                             match batch_controller.check_enqueue(process.processid(), &syscall) {
                                 // The batch controller added it to the queue for later execution.
                                 // No further action is necessary on the kernel's part.
-                                batch::QueueResult::Queued => {
-                                    // debug!("Queue ACCEPT: {:?}", syscall);
-                                },
+                                batch::QueueResult::Queued => {  },
 
                                 // The batch controller has rejected the syscall, it should run immediately.
                                 batch::QueueResult::Run(_ref_syscall) => {
-                                    // debug!("Queue RUN: {:?}", syscall);
                                     self.handle_syscall(resources, process, syscall);
+                                },
+
+                                batch::QueueResult::RunAlso(_ref_syscall, fproc, other_syscalls) => {
+                                    self.handle_syscall(resources, process, syscall);
+                                    for opt_syscall in other_syscalls.iter() {
+                                        if let Some(other_syscall) = opt_syscall {
+                                            self.handle_syscall(resources, fproc, *other_syscall);
+                                        }
+                                    }
                                 },
                             };
                         }

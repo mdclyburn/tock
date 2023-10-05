@@ -30,6 +30,10 @@ pub enum QueueResult<'a> {
     Queued,
     /// Syscall was not added to the batch and should be executed on immediately.
     Run(&'a Syscall),
+    /// Run the syscall alongside one or more other syscalls.
+    RunAlso(&'a Syscall,
+            &'static dyn Process,
+            [Option<Syscall>; 2]),
 }
 
 /// States of the [`BatchController`].

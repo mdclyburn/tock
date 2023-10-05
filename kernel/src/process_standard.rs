@@ -2070,13 +2070,6 @@ impl<C: 'static + Chip> ProcessStandard<'_, C> {
             return Err(ErrorCode::NODEVICE);
         }
 
-        // Energy accounting hook.
-        if let Some(eacc) = self.kernel.energy_accounting_service() {
-            if let Task::FunctionCall(ref fc) = task {
-                eacc.on_upcall(fc);
-            }
-        }
-
         let ret = self.tasks.map_or(Err(ErrorCode::FAIL), |tasks| {
             match tasks.enqueue(task) {
                 true => {

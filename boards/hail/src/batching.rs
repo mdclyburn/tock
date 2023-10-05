@@ -18,6 +18,7 @@ use kernel::hil::time::{
     Frequency as _,
 };
 use kernel::process::{Process, ProcessId};
+use kernel::static_init;
 use kernel::syscall::Syscall;
 use kernel::utilities::cells::OptionalCell;
 
@@ -384,9 +385,9 @@ impl ResponsiveBatching {
 
             // Update the winning window, if necessary.
             // Go with the narrower window if possible to optimize response time.
-            kernel::debug!("{} ms = {} batches",
-                           window_size * 1_000 / 16_000,
-                           batch_count);
+            // kernel::debug!("{} ms = {} batches",
+            //                window_size * 1_000 / 16_000,
+            //                batch_count);
             if batch_count >= best_batch_count {
                 best_batch_count = batch_count;
                 best_window_size = window_size;
@@ -436,10 +437,10 @@ impl ResponsiveBatching {
                 timeline[greatest_i] = temp;
             }
 
-            kernel::debug!("timeline:");
-            for i in 0..timeline.len() {
-                kernel::debug!("{}", timeline[i]);
-            }
+            // kernel::debug!("timeline:");
+            // for i in 0..timeline.len() {
+            //     kernel::debug!("{}", timeline[i]);
+            // }
 
             // kernel::debug!("intervals:");
             // let it = timeline.iter()
@@ -459,7 +460,7 @@ impl ResponsiveBatching {
                     .filter(|t| **t > 0)
                     .count();
                 let optimal_window_size = self.find_optimal_window(&timeline[timeline.len()-entry_count..]);
-                kernel::debug!("optimal window size: {}", optimal_window_size);
+                // kernel::debug!("optimal window size: {}", optimal_window_size);
             }
             self.last_window_update.set(now);
         }
@@ -493,7 +494,7 @@ impl BatchController for ResponsiveBatching {
         match syscall {
             // Driver checks do not need queueing.
             Syscall::Command { driver_number, subdriver_number: 0, .. } => {
-                kernel::debug!("Run driver check: {}", driver_number);
+                // kernel::debug!("Run driver check: {}", driver_number);
                 QueueResult::Run(syscall)
             },
 
@@ -516,7 +517,7 @@ impl BatchController for ResponsiveBatching {
                     // kernel::debug!("alarm: {:?}", syscall);
                     // kernel::debug!("scheduled: {}", *syscall_reference + *syscall_dt);
                     let now = self.batch_alarm.now().into_usize();
-                    kernel::debug!("scheduled: {}", now + *syscall_dt);
+                    // kernel::debug!("scheduled: {}", now + *syscall_dt);
                     // Set the history entry based on reference + dt.
                     // self.syscall_history[self.syscall_history_next.get()]
                     //     .set(*syscall_reference + *syscall_dt);
@@ -747,9 +748,9 @@ impl LinearScanObserver {
 
             // Update the winning window, if necessary.
             // Go with the narrower window if possible to optimize response time.
-            kernel::debug!("{} ms = {} batches",
-                           window_size * 1_000 / 16_000,
-                           batch_count);
+            // kernel::debug!("{} ms = {} batches",
+            //                window_size * 1_000 / 16_000,
+            //                batch_count);
             if batch_count >= best_batch_count {
                 best_batch_count = batch_count;
                 best_window_size = window_size;
@@ -784,16 +785,16 @@ impl BatchController for LinearScanObserver {
                     self.next_observation_slot.set((slot + 1) % 10);
 
                     if slot == 9 {
-                        kernel::debug!("Observations:");
+                        // kernel::debug!("Observations:");
                         for slot in self.observations.iter() {
                             if let Some((t, sc)) = slot.extract() {
                                 match sc {
-                                    Syscall::Command { driver_number, subdriver_number, .. } =>
-                                        kernel::debug!("@{} s {} ms: ({}, {})",
-                                                       t / 16_000,
-                                                       (t * 1_000 / 16_000) % 1_000,
-                                                       driver_number,
-                                                       subdriver_number),
+                                    Syscall::Command { driver_number, subdriver_number, .. } => {  },
+                                        // kernel::debug!("@{} s {} ms: ({}, {})",
+                                        //                t / 16_000,
+                                        //                (t * 1_000 / 16_000) % 1_000,
+                                        //                driver_number,
+                                        //                subdriver_number),
 
                                     _ => {  },
                                 }
@@ -801,8 +802,8 @@ impl BatchController for LinearScanObserver {
                         }
 
                         let best_window_size = self.find_optimal_window();
-                        kernel::debug!("Optimal window: {} ms",
-                                       best_window_size * 1000 / 16_000);
+                        // kernel::debug!("Optimal window: {} ms",
+                        //                best_window_size * 1000 / 16_000);
                     }
                 }
 
@@ -938,9 +939,9 @@ impl DBSCANObserver {
 
             // Update the winning window, if necessary.
             // Go with the narrower window if possible to optimize response time.
-            kernel::debug!("{} ms = {} batches",
-                           window_size * 1_000 / 16_000,
-                           batch_count);
+            // kernel::debug!("{} ms = {} batches",
+            //                window_size * 1_000 / 16_000,
+            //                batch_count);
             if batch_count >= best_batch_count {
                 best_batch_count = batch_count;
                 best_window_size = window_size;
@@ -975,16 +976,16 @@ impl BatchController for DBSCANObserver {
                     self.next_observation_slot.set((slot + 1) % 10);
 
                     if slot == 9 {
-                        kernel::debug!("Observations:");
+                        // kernel::debug!("Observations:");
                         for slot in self.observations.iter() {
                             if let Some((t, sc)) = slot.extract() {
                                 match sc {
-                                    Syscall::Command { driver_number, subdriver_number, .. } =>
-                                        kernel::debug!("@{} s {} ms: ({}, {})",
-                                                       t / 16_000,
-                                                       (t * 1_000 / 16_000) % 1_000,
-                                                       driver_number,
-                                                       subdriver_number),
+                                    Syscall::Command { driver_number, subdriver_number, .. } => {  }
+                                        // kernel::debug!("@{} s {} ms: ({}, {})",
+                                        //                t / 16_000,
+                                        //                (t * 1_000 / 16_000) % 1_000,
+                                        //                driver_number,
+                                        //                subdriver_number),
 
                                     _ => {  },
                                 }
@@ -992,8 +993,8 @@ impl BatchController for DBSCANObserver {
                         }
 
                         let best_window_size = self.find_optimal_window();
-                        kernel::debug!("Optimal window: {} ms",
-                                       best_window_size * 1000 / 16_000);
+                        // kernel::debug!("Optimal window: {} ms",
+                        //                best_window_size * 1000 / 16_000);
                     }
                 }
 
@@ -1018,5 +1019,99 @@ impl BatchController for DBSCANObserver {
     }
 
     fn notify_syscalls_completed(&self) {
+    }
+}
+
+use kernel::Kernel;
+use kernel::process_thin::ThinProcess;
+
+pub struct PrefetchTester {
+    /// Current batching state.
+    batching_state: Cell<BatchingState>,
+    enabled: Cell<bool>,
+    shadow_process: &'static ThinProcess,
+}
+
+impl PrefetchTester {
+    pub unsafe fn new(
+        kernel: &'static Kernel,
+        processes: &'static mut [Option<&'static dyn Process>],
+    ) -> PrefetchTester
+    {
+        let (empty_entry, pidx) = processes.iter_mut()
+            .zip(0..)
+            .find(|(e, _idx)| e.is_none())
+            .unwrap();
+        let shadow_process = static_init!(ThinProcess, ThinProcess::new(kernel, pidx));
+        *empty_entry = Some(shadow_process);
+
+        PrefetchTester {
+            batching_state: Cell::new(BatchingState::Batch),
+            enabled: Cell::new(true),
+            shadow_process,
+        }
+    }
+}
+
+impl BatchController for PrefetchTester {
+    fn check_enqueue<'a>(&self, pid: ProcessId, syscall: &'a Syscall) -> QueueResult<'a> {
+        match syscall {
+            // Driver checks do not need queueing.
+            Syscall::Command { driver_number,
+                               subdriver_number: 0, .. } => QueueResult::Run(syscall),
+
+            // All other commands should go to the queue for later execution.
+            Syscall::Command { driver_number,
+                               subdriver_number,
+                               arg0,
+                               arg1 } => {
+                if self.enabled.get() {
+                    self.enabled.set(false);
+                    let (allow_address, allow_size) = self.shadow_process.reserve_buffer(1024)
+                        .unwrap();
+
+                    QueueResult::RunAlso(syscall,
+                                         self.shadow_process,
+                                         [
+                                             Some(Syscall::ReadWriteAllow {
+                                                 driver_number: 0x00005,
+                                                 subdriver_number: 0,
+                                                 allow_address,
+                                                 allow_size,
+                                             }),
+
+                                             Some(Syscall::Command {
+                                                 driver_number: 0x00005,
+                                                 subdriver_number: 3,
+                                                 arg0: 0,
+                                                 arg1: 5120,
+                                             })
+                                         ])
+                } else {
+                    QueueResult::Run(syscall)
+                }
+            },
+
+            // Any non-command syscalls should execute immediately.
+            _ => QueueResult::Run(syscall),
+        }
+    }
+
+    /// Remove a syscall from the queue.
+    fn dequeue_syscall(&self) -> Option<(ProcessId, Syscall)> {
+        None
+    }
+
+    /// Returns the current batching state.
+    fn state(&self, k: bool) -> BatchingState {
+        self.batching_state.get()
+    }
+
+    fn notify_upcalls_completed(&self) {
+        self.batching_state.set(BatchingState::RunSyscalls);
+    }
+
+    fn notify_syscalls_completed(&self) {
+        self.batching_state.set(BatchingState::Batch);
     }
 }
