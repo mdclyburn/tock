@@ -5,6 +5,7 @@ use crate::debug;
 use crate::kernel::Kernel;
 use crate::platform::mpu::Region;
 use crate::errorcode::ErrorCode;
+use crate::grant::SavedUpcall;
 use crate::process::{
     Error,
     FunctionCall,
@@ -23,7 +24,10 @@ use crate::syscall::{
     Syscall,
     SyscallReturn,
 };
-use crate::upcall::UpcallId;
+use crate::upcall::{
+    Upcall,
+    UpcallId,
+};
 use crate::utilities::cells::OptionalCell;
 
 static mut GRANT_BUFFER_1: [u8; 128] = [0; 128];
@@ -32,7 +36,7 @@ static mut ALLOW_BUFFER_1: [u8; 1024] = [0; 1024];
 pub struct ThinProcess {
     pid: ProcessId,
     kernel: &'static Kernel,
-    current_grant_no: OptionalCell<usize>,
+    current_allocation: OptionalCell<(usize, usize)>,
 }
 
 impl ThinProcess {
@@ -40,7 +44,7 @@ impl ThinProcess {
         ThinProcess {
             pid: ProcessId::new(kernel, 99, array_idx),
             kernel,
-            current_grant_no: OptionalCell::empty(),
+            current_allocation: OptionalCell::empty(),
         }
     }
 
@@ -51,12 +55,46 @@ impl ThinProcess {
     pub fn reserve_buffer(&self, byte_len: usize) -> Result<(*mut u8, usize), ()> {
         Ok((unsafe { ALLOW_BUFFER_1.as_mut_ptr() }, byte_len))
     }
+
+    /// Fill upcall table entries.
+    ///
+    /// Populate the upcall table with (invalid) non-null entries.
+    /// This must happen sometime after the capsule has entered the grant for the first time
+    /// but before an upcall actually happens.
+    pub fn populate_upcall_table(&self) {
+        let upcall_table: &mut [SavedUpcall] = unsafe {
+            let upcall_count: usize = *(GRANT_BUFFER_1.as_ptr() as *const usize);
+            core::slice::from_raw_parts_mut(
+                (GRANT_BUFFER_1.as_ptr() as usize + core::mem::size_of::<usize>()) as *mut SavedUpcall,
+                upcall_count)
+        };
+
+        for upcall_fn_addr in upcall_table.iter_mut() {
+            *upcall_fn_addr = SavedUpcall {
+                appdata: 0,
+                fn_ptr: Some(unsafe { NonNull::new_unchecked(0xABCD_FEFE as *mut ()) }),
+            };
+        }
+    }
+
+    /// Check cache for prefetched data.
+    pub fn check_syscall_cache(
+        &self,
+        driver_no: usize,
+        subdriver_no: usize,
+        arg0: usize,
+        arg1: usize) -> Option<CacheReturn>
+    {
+        None
+    }
 }
 
 impl Process for ThinProcess {
     fn processid(&self) -> ProcessId { self.pid }
 
-    fn enqueue_task(&self, task: Task) -> Result<(), ErrorCode> { Ok(()) }
+    fn enqueue_task(&self, task: Task) -> Result<(), ErrorCode> {
+        unimplemented!()
+    }
 
     fn ready(&self) -> bool { false }
 
@@ -155,19 +193,19 @@ impl Process for ThinProcess {
         //        driver_no,
         //        size,
         //        align);
-        self.current_grant_no.set(grant_no);
+
+        self.current_allocation.set((driver_no, grant_no));
         // For now, this will not fail.
         Some(unsafe { NonNull::new_unchecked(GRANT_BUFFER_1.as_mut_ptr()) })
     }
 
     fn grant_is_allocated(&self, grant_no: usize) -> Option<bool> {
         // debug!("grant_is_allocated({})", grant_no);
-        if let Some(current_grant_no) = self.current_grant_no.extract() {
+        if let Some((_current_driver_no, current_grant_no)) = self.current_allocation.extract() {
             Some(current_grant_no == grant_no)
         } else {
             Some(false)
         }
-        // self.current_grant_no.map(|current_grant_no| *current_grant_no == grant_no)
     }
 
     fn allocate_custom_grant(
@@ -183,8 +221,9 @@ impl Process for ThinProcess {
         grant_no: usize
     ) -> Result<*mut u8, Error> {
         // debug!("enter_grant({})", grant_no);
-        if let Some(current_grant_no) = self.current_grant_no.extract() {
+        if let Some((current_driver_no, current_grant_no)) = self.current_allocation.extract() {
             if current_grant_no == grant_no {
+                self.populate_upcall_table();
                 Ok(unsafe { GRANT_BUFFER_1.as_mut_ptr() })
             } else {
                 Err(Error::InactiveApp)
@@ -207,8 +246,16 @@ impl Process for ThinProcess {
         unimplemented!()
     }
 
-    fn lookup_grant_from_driver_num(&self, driver_num: usize) -> Result<usize, Error> {
-        unimplemented!()
+    fn lookup_grant_from_driver_num(&self, driver_no: usize) -> Result<usize, Error> {
+        if let Some((current_driver_no, current_grant_no)) = self.current_allocation.extract() {
+            if current_driver_no == driver_no {
+                Ok(current_grant_no)
+            } else {
+                Err(Error::AddressOutOfBounds)
+            }
+        } else {
+            Err(Error::AddressOutOfBounds)
+        }
     }
 
     fn is_valid_upcall_function_pointer(&self, upcall_fn: NonNull<()>) -> bool {

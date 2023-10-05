@@ -1047,7 +1047,6 @@ impl dma::DMAClient for Adc {
                     // pass the buffer up to the next layer. It will then either
                     // send down another buffer to continue sampling, or stop
                     // sampling
-                    kernel::debug!("done");
                     client.samples_ready(buf, length);
                 });
             });
