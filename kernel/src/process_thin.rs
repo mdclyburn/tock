@@ -39,6 +39,10 @@ pub struct CacheReturn {
     args: (usize, usize, usize, usize),
 }
 
+fn __do_not_call() -> ! {
+    loop {  }
+}
+
 pub struct ThinProcess {
     pid: ProcessId,
     kernel: &'static Kernel,
@@ -78,7 +82,8 @@ impl ThinProcess {
         for upcall_fn_addr in upcall_table.iter_mut() {
             *upcall_fn_addr = SavedUpcall {
                 appdata: 0,
-                fn_ptr: Some(unsafe { NonNull::new_unchecked(0xABCD_FEFE as *mut ()) }),
+                // fn_ptr: Some(unsafe { NonNull::new_unchecked(0xABCD_FEFE as *mut ()) }),
+                fn_ptr:Some(unsafe { NonNull::new_unchecked(__do_not_call as *mut()) })
             };
         }
     }
