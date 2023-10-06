@@ -43,6 +43,7 @@ fn __do_not_call() -> ! {
     loop {  }
 }
 
+/// A minimal, mimicry of a [`Process`].
 pub struct ThinProcess {
     pid: ProcessId,
     kernel: &'static Kernel,
@@ -50,6 +51,9 @@ pub struct ThinProcess {
 }
 
 impl ThinProcess {
+    /// Create a new `ThinProcess`.
+    ///
+    /// The `array_idx` is the index of the process in the `PROCESSES` array.
     pub fn new(kernel: &'static Kernel, array_idx: usize) -> ThinProcess {
         ThinProcess {
             pid: ProcessId::new(kernel, 99, array_idx),
