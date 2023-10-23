@@ -608,17 +608,17 @@ pub unsafe fn main() {
     //     bc
     // };
 
-    let batching_strategy: &'static dyn BatchController = {
-        use kernel::hil::time::Alarm as _;
+    // let batching_strategy: &'static dyn BatchController = {
+    //     use kernel::hil::time::Alarm as _;
 
-        let bc = static_init!(
-            batching::ResponsiveBatching,
-            batching::ResponsiveBatching::new(
-                &peripherals.ast,
-                alarm));
-        peripherals.ast.set_alarm_client(bc);
-        bc
-    };
+    //     let bc = static_init!(
+    //         batching::ResponsiveBatching,
+    //         batching::ResponsiveBatching::new(
+    //             &peripherals.ast,
+    //             alarm));
+    //     peripherals.ast.set_alarm_client(bc);
+    //     bc
+    // };
 
     // let batching_strategy: &'static dyn BatchController = {
     //     use kernel::hil::time::Alarm as _;
