@@ -31,6 +31,8 @@ pub enum QueueResult<'a> {
     /// Syscall was not added to the batch and should be executed on immediately.
     Run(&'a Syscall),
     /// Run the syscall alongside one or more other syscalls.
+    ///
+    /// Use this only for testing and debugging.
     RunAlso(&'a Syscall,
             &'static dyn Process,
             [Option<Syscall>; 2]),

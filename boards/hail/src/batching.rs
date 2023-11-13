@@ -1122,3 +1122,224 @@ impl BatchController for PrefetchTester {
         self.batching_state.set(BatchingState::Batch);
     }
 }
+
+pub struct PrefetchController {
+    batching_state: Cell<BatchingState>,
+    /// Batch window duration in milliseconds.
+    window_duration_ms: usize,
+    /// Alarm used for time window batching.
+    batch_alarm: &'static BatchAlarm,
+    /// Alarm driver applications interact with.
+    alarm_driver: &'static dyn AlarmClient,
+    /// Time that the batch window expires; (reference, dt).
+    next_expiration: OptionalCell<(usize, usize)>,
+    /// Withheld syscall.
+    pending_syscall: OptionalCell<PendingSyscall>,
+    extra_syscall: OptionalCell<Syscall>,
+    /// Kernel dummy process.
+    shadow_process: &'static ThinProcess,
+}
+
+impl PrefetchController {
+    pub unsafe fn new(window_duration_ms: usize,
+                      batch_alarm: &'static BatchAlarm,
+                      alarm_driver: &'static dyn AlarmClient,
+                      kernel: &'static Kernel,
+                      processes: &'static mut [Option<&'static dyn Process>])
+                      -> PrefetchController
+    {
+        let (empty_entry, pidx) = processes.iter_mut()
+            .zip(0..)
+            .find(|(e, _idx)| e.is_none())
+            .unwrap();
+        let shadow_process = static_init!(ThinProcess, ThinProcess::new(kernel, pidx));
+        *empty_entry = Some(shadow_process);
+
+        PrefetchController {
+            batching_state: Cell::new(BatchingState::Batch),
+            window_duration_ms,
+            batch_alarm,
+            alarm_driver,
+            next_expiration: OptionalCell::empty(),
+            pending_syscall: OptionalCell::empty(),
+            extra_syscall: OptionalCell::empty(),
+            shadow_process,
+        }
+    }
+
+    fn open_batch_window(&self) {
+        if self.next_expiration.is_none() {
+            let now = self.batch_alarm.now();
+            // Hard-coded for Hail using a 16kHz timer.
+            let window_duration_ticks = (time::Freq16KHz::frequency() as usize / 1000)
+                * self.window_duration_ms;
+
+            // Hard-coded for Hail which has a 32-bit timer.
+            // The batch window expiration must occur before the next app alarm.
+            // If it isn't, we will reconsider the set alarm once the current one expires.
+            let next_alarm_t = self.batch_alarm.get_alarm();
+            let batch_alarm_t = time::Ticks32::from(now.into_u32() + window_duration_ticks as u32);
+            let expiration = (now.into_usize(), window_duration_ticks as usize);
+            if !self.batch_alarm.is_armed() || batch_alarm_t < next_alarm_t {
+                self.batch_alarm.set_alarm(now, time::Ticks32::from(window_duration_ticks as u32));
+                kernel::debug!("Setting alarm.");
+            } else {
+                kernel::debug!("Not setting alarm; another sooner ({} vs. {}).",
+                               batch_alarm_t.into_usize(),
+                               next_alarm_t.into_usize());
+            }
+
+            self.next_expiration.set(expiration);
+            kernel::debug!("Batching; window: {:?}", expiration);
+        }
+    }
+}
+
+impl BatchController for PrefetchController {
+    fn check_enqueue<'a>(&self, invoking_process: &dyn Process, syscall: &'a Syscall) -> QueueResult<'a> {
+        // kernel::debug!("Now: {:?}, {:?}", self.batching_state.get(), syscall);
+        match syscall {
+            // Driver checks do not need queueing.
+            Syscall::Command { driver_number: _, subdriver_number: 0, .. } =>
+                QueueResult::Run(syscall),
+
+            // Alarm driver syscalls work differently...
+            // We modified the alarm capsule to not actually interact with the bottom-half.
+            // So, applications can register all the alarms they want.
+            // Since the kernel controls the timer, the kernel will call into the alarm capsule
+            // to make sure it eventually handles expired alarms set by applications.
+            //
+            // Instead of queueing the syscall, we let it through and make sure to open a batch window
+            // so that we will service this alarm eventually.
+            //
+            // Perhaps how applications use the alarms should determine the size of the batching window?
+            Syscall::Command { driver_number: 0,
+                               subdriver_number,
+                               arg0: syscall_reference,
+                               arg1: syscall_dt } =>
+            {
+                // if *subdriver_number == batch::ALARM_COMMAND_SET_ALARM {
+                //     kernel::debug!("alarm: {:?}", syscall);
+                // }
+
+                // Make sure the batch window is open.
+                // self.open_batch_window();
+
+                // Make the kernel handle the syscall into the alarm capsule now.
+                QueueResult::Run(syscall)
+            },
+
+            // All other commands may be batched or end up closing the batch if it is ready.
+            Syscall::Command { .. } => {
+                if self.pending_syscall.is_none() {
+                    // There is not currently a syscall waiting to execute.
+
+                    // Withhold the app-requested syscall.
+                    self.pending_syscall.set(PendingSyscall::new(invoking_process.processid(), *syscall));
+
+                    // Consider a command to execute ahead of time.
+                    // TODO
+
+                    // Open the batching window.
+                    // Set the alarm directly if it is sooner than the next application alarm.
+                    self.open_batch_window();
+
+                    QueueResult::Queued
+                } else {
+                    // There is currently a syscall waiting to execute.
+
+                    // Run this syscall and also close the batch, switching to run syscalls.
+                    self.batching_state.set(BatchingState::RunSyscalls);
+
+                    // The pending syscalls will also run.
+                    QueueResult::Run(syscall)
+                }
+            },
+
+            // Any non-command syscalls should execute immediately.
+            _ => QueueResult::Run(syscall),
+        }
+    }
+
+    /// Remove a syscall from the queue.
+    fn dequeue_syscall(&self) -> Option<(ProcessId, Syscall)> {
+        if self.pending_syscall.is_some() {
+            self.pending_syscall.take()
+                .map(|p| (p.pid, p.syscall))
+        } else if self.extra_syscall.is_some() {
+            self.extra_syscall.take()
+                .map(|s| (self.shadow_process.processid(), s))
+        } else {
+            None
+        }
+    }
+
+    /// Returns the current batching state.
+    fn state(&self, _k: bool) -> BatchingState {
+        self.batching_state.get()
+    }
+
+    fn notify_upcalls_completed(&self) {
+        self.batching_state.set(BatchingState::RunSyscalls);
+    }
+
+    fn notify_syscalls_completed(&self) {
+        self.batching_state.set(BatchingState::Batch);
+        self.open_batch_window();
+    }
+}
+
+impl AlarmClient for PrefetchController {
+    /// Batch window expiration handler.
+    ///
+    /// Run pending syscalls and also notify the alarm driver of expiration.
+    /// Works in tandem with the alarm capsule to get its own alarms while not interfering with application alarms.
+    /// The batch controller takes alarm notifications and always passes them on to the alarm capsule.
+    /// When an application alarm is set sooner than the expiration of the batch window,
+    /// the controller does not set the alarm.
+    /// It instead waits for the next alarm to fire before considering setting the alarm hardware for the batch window.
+    fn alarm(&self) {
+        // Received an alarm expiration notification, but it could be for the batch controller or an application.
+        kernel::debug!("Received alarm.");
+        if let Some((r, dt)) = self.next_expiration.extract() {
+            let current_alarm = self.batch_alarm.get_alarm();
+            if r + dt == current_alarm.into_usize() {
+                // The alarm was for the batch controller.
+                kernel::debug!("Batch expired.");
+                self.next_expiration.clear();
+
+                // Execute the batch.
+                // The next step is to run upcalls (and possibly collect their syscalls).
+                self.batching_state.set(BatchingState::CollectUpcalls);
+                // Let the alarm driver reset the alarm.
+                self.alarm_driver.alarm();
+            } else {
+                // The alarm was for the alarm driver.
+                // Call into it so it can handle it.
+                kernel::debug!("Alarm for driver.");
+                self.alarm_driver.alarm();
+
+                // Check if the batch window alarm is next.
+                // Set it if it is the soonest to happen.
+                if !self.batch_alarm.is_armed()
+                    || r + dt < self.batch_alarm.get_alarm().into_usize()
+                {
+                    self.batch_alarm.set_alarm(time::Ticks32::from(r as u32),
+                                               time::Ticks32::from(dt as u32));
+                    // kernel::debug!(
+                    //     "Batch alarm now set. {} vs. {}",
+                    //     r + dt,
+                    //     self.batch_alarm.get_alarm().into_usize());
+                    self.next_expiration.set((r, self.batch_alarm.get_alarm().into_usize() - r));
+                } else {
+                    // Do nothing at this stage, and wait for the sooner alarm to fire.
+                    // We will then check the alarm again.
+                }
+            }
+        } else {
+            // This alarm had to have been for the alarm driver.
+            // Call into it so it can handle it.
+            self.alarm_driver.alarm();
+        }
+    }
+}

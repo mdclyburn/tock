@@ -640,10 +640,28 @@ pub unsafe fn main() {
     //     bc
     // };
 
+    // let batching_strategy: &'static dyn BatchController = {
+    //     static_init!(
+    //         batching::PrefetchTester,
+    //         batching::PrefetchTester::new(board_kernel, &mut PROCESSES))
+    // };
+
     let batching_strategy: &'static dyn BatchController = {
-        static_init!(
-            batching::PrefetchTester,
-            batching::PrefetchTester::new(board_kernel, &mut PROCESSES))
+        const WINDOW_DURATION_MS: usize = 500;
+
+        let bc = static_init!(
+            batching::PrefetchController,
+            batching::PrefetchController::new(
+                WINDOW_DURATION_MS,
+                &peripherals.ast,
+                alarm,
+                board_kernel,
+                &mut PROCESSES));
+
+        use kernel::hil::time::Alarm;
+        peripherals.ast.set_alarm_client(bc);
+
+        bc
     };
 
     // No batching.
