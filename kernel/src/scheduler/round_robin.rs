@@ -79,7 +79,7 @@ impl<'a, C: Chip> Scheduler<C> for RoundRobinSched<'a> {
             for node in self.processes.iter(){
                 match node.proc {
                     Some(proc) => {
-                        if (!self.upcalls_only.get() && proc.ready()) || (self.upcalls_only.get() && proc.has_tasks()) {
+                        if proc.ready() {
                             next = Some(proc.processid());
                             break;
                         }

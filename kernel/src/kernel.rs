@@ -421,10 +421,10 @@ impl Kernel {
         // Check how to handle syscalls.
         match batch_controller.state(unsafe { scheduler.do_kernel_work_now(chip) }) {
             BatchingState::Batch => {
-                scheduler.run_upcalls_only(false);
-                if batch_controller.flush_upcalls() {
-                    self.process_each(|p| p.flush_pending_tasks());
-                }
+                // scheduler.run_upcalls_only(false);
+                // if batch_controller.flush_upcalls() {
+                //     self.process_each(|p| p.flush_pending_tasks());
+                // }
             },
 
             BatchingState::CollectUpcalls => {
@@ -453,7 +453,7 @@ impl Kernel {
                         .filter_map(|opt_p| *opt_p)
                         .find(|p| p.processid() == pid)
                         .expect("process does not exist anymore"); // Not expecting any crashes, so the PID must be valid.
-                    // debug!("executing syscall: {:?}", pnd_syscall.syscall);
+                    debug!("BX: {:?}", syscall);
                     self.handle_syscall(resources, process, syscall);
                 }
 
@@ -684,14 +684,24 @@ impl Kernel {
                             match batch_controller.check_enqueue(process, &syscall) {
                                 // The batch controller added it to the queue for later execution.
                                 // No further action is necessary on the kernel's part.
-                                batch::QueueResult::Queued => {  },
+                                batch::QueueResult::Queued => {
+                                    match syscall {
+                                        Syscall::Command { .. } => debug!("BH: queued {:?}", syscall),
+                                        _ => {  },
+                                    };
+                                },
 
                                 // The batch controller has rejected the syscall, it should run immediately.
                                 batch::QueueResult::Run(_ref_syscall) => {
+                                    match syscall {
+                                        Syscall::Command { .. } => debug!("BH: run {:?}", syscall),
+                                        _ => {  },
+                                    };
                                     self.handle_syscall(resources, process, syscall);
                                 },
 
                                 batch::QueueResult::RunAlso(_ref_syscall, fproc, other_syscalls) => {
+                                    debug!("BH: run also {:?}", syscall);
                                     self.handle_syscall(resources, process, syscall);
                                     for opt_syscall in other_syscalls.iter() {
                                         if let Some(other_syscall) = opt_syscall {
@@ -1096,6 +1106,7 @@ impl Kernel {
                         None => CommandReturn::failure(ErrorCode::NODEVICE),
                     });
 
+                // debug!("{:?}", &syscall);
                 let res = SyscallReturn::from_command_return(cres);
 
                 if config::CONFIG.trace_syscalls {

@@ -218,15 +218,37 @@ impl<C: Chip> Process for ProcessStandard<'_, C> {
     }
 
     fn enqueue_task(&self, task: Task) -> Result<(), ErrorCode> {
-        let opt_empty_slot = self.pending_tasks.iter()
-            .find(|optc| optc.is_none());
-
-        if let Some(empty_slot) = opt_empty_slot {
-            empty_slot.set(task);
-            Ok(())
-        } else {
-            Err(ErrorCode::NOMEM)
+        // If this app is in a `Fault` state then we shouldn't schedule
+        // any work for it.
+        if !self.is_active() {
+            return Err(ErrorCode::NODEVICE);
         }
+
+        let ret = self.tasks.map_or(Err(ErrorCode::FAIL), |tasks| {
+            match tasks.enqueue(task) {
+                true => {
+                    // The task has been successfully enqueued.
+                    Ok(())
+                }
+                false => {
+                    // The task could not be enqueued as there is
+                    // insufficient space in the ring buffer.
+                    Err(ErrorCode::NOMEM)
+                }
+            }
+        });
+
+        if ret.is_ok() {
+            self.kernel.increment_work();
+        } else {
+            // On any error we were unable to enqueue the task. Record the
+            // error, but importantly do _not_ increment kernel work.
+            self.debug.map(|debug| {
+                debug.dropped_upcall_count += 1;
+            });
+        }
+
+        ret
     }
 
     fn pending_task_count(&self) -> usize {

@@ -368,6 +368,7 @@ impl<'a> time::Alarm<'a> for Ast<'a> {
             .write(Value::VALUE.val(expire.into_u32()));
 
         while self.busy() {}
+
         self.enable_alarm_irq();
         self.enable();
     }

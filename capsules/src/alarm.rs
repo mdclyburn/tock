@@ -39,7 +39,7 @@ pub struct AlarmDriver<'a, A: Alarm<'a>> {
     num_armed: Cell<usize>,
     app_alarms: Grant<AlarmData, NUM_UPCALLS>,
     next_alarm: Cell<Expiration>,
-    operate_hw: bool,
+    operate_hw: Cell<bool>,
 }
 
 impl<'a, A: Alarm<'a>> AlarmDriver<'a, A> {
@@ -49,7 +49,7 @@ impl<'a, A: Alarm<'a>> AlarmDriver<'a, A> {
             num_armed: Cell::new(0),
             app_alarms: grant,
             next_alarm: Cell::new(Expiration::Disabled),
-            operate_hw,
+            operate_hw: Cell::new(operate_hw),
         }
     }
 
@@ -123,11 +123,12 @@ impl<'a, A: Alarm<'a>> AlarmDriver<'a, A> {
                 }
                 Expiration::Disabled => {}
             });
+            // kernel::debug!("earliest is now {:?}", earliest_alarm);
         }
         self.next_alarm.set(earliest_alarm);
         match earliest_alarm {
             Expiration::Disabled => {
-                if self.operate_hw {
+                if self.operate_hw.get() {
                     let _ = self.alarm.disarm();
                 }
             }
@@ -144,8 +145,10 @@ impl<'a, A: Alarm<'a>> AlarmDriver<'a, A> {
                     let bit33 = A::Ticks::from(0xffffffff).wrapping_add(A::Ticks::from(0x1));
                     high_bits = high_bits.wrapping_sub(bit33);
                 }
-                let real_reference = high_bits.wrapping_add(A::Ticks::from(reference));
-                if self.operate_hw {
+                // let real_reference = high_bits.wrapping_add(A::Ticks::from(reference));
+                let real_reference = self.alarm.now();
+                if self.operate_hw.get() {
+                    // kernel::debug!("Alarm setting to next earliest! ({}, {}) (now: {})", real_reference.into_u32(), dt, now.into_usize());
                     self.alarm.set_alarm(real_reference, A::Ticks::from(dt));
                 }
             }
@@ -262,7 +265,7 @@ impl<'a, A: Alarm<'a>> time::AlarmClient for AlarmDriver<'a, A> {
                     Ticks32::from(reference),
                     Ticks32::from(reference.wrapping_add(dt)),
                 ) {
-                    // kernel::debug!("timer passed");
+                    // kernel::debug!("timer ({}, {}) passed", reference, dt);
                     alarm.expiration = Expiration::Disabled;
                     self.num_armed.set(self.num_armed.get() - 1);
                     upcalls
@@ -276,7 +279,7 @@ impl<'a, A: Alarm<'a>> time::AlarmClient for AlarmDriver<'a, A> {
                         )
                         .ok();
                 } else {
-                    // kernel::debug!("timer active");
+                    // kernel::debug!("timer active: ({}, {})", reference, dt);
                 }
             }
         });
@@ -285,7 +288,7 @@ impl<'a, A: Alarm<'a>> time::AlarmClient for AlarmDriver<'a, A> {
         // Otherwise, check all the alarms and find the next one, rescheduling
         // the underlying alarm.
         if self.num_armed.get() == 0 {
-            if self.operate_hw {
+            if self.operate_hw.get() {
                 let _ = self.alarm.disarm();
             }
         } else {
