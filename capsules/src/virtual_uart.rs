@@ -441,8 +441,8 @@ impl<'a> uart::Transmit<'a> for UartDevice<'a> {
     }
 
     fn power_off(&self) -> Result<(), ErrorCode> {
-        // self.mux.uart.power_off()
-        Ok(())
+        self.mux.uart.power_off()
+        // Ok(())
     }
 }
 
