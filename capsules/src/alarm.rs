@@ -145,8 +145,7 @@ impl<'a, A: Alarm<'a>> AlarmDriver<'a, A> {
                     let bit33 = A::Ticks::from(0xffffffff).wrapping_add(A::Ticks::from(0x1));
                     high_bits = high_bits.wrapping_sub(bit33);
                 }
-                // let real_reference = high_bits.wrapping_add(A::Ticks::from(reference));
-                let real_reference = self.alarm.now();
+                let real_reference = high_bits.wrapping_add(A::Ticks::from(reference));
                 if self.operate_hw.get() {
                     // kernel::debug!("Alarm setting to next earliest! ({}, {}) (now: {})", real_reference.into_u32(), dt, now.into_usize());
                     self.alarm.set_alarm(real_reference, A::Ticks::from(dt));
@@ -231,6 +230,7 @@ impl<'a, A: Alarm<'a>> SyscallDriver for AlarmDriver<'a, A> {
                     6 /* Set absolute expiration with reference point */ => {
                         let reference = data;
                         let dt = data2;
+                        // kernel::debug!("Scheduled: +{} (now {})", dt, self.alarm.now().into_u32());
                         rearm(reference, dt)
                     }
                     _ => (CommandReturn::failure(ErrorCode::NOSUPPORT), false)
@@ -265,7 +265,7 @@ impl<'a, A: Alarm<'a>> time::AlarmClient for AlarmDriver<'a, A> {
                     Ticks32::from(reference),
                     Ticks32::from(reference.wrapping_add(dt)),
                 ) {
-                    // kernel::debug!("timer ({}, {}) passed", reference, dt);
+                    // kernel::debug!("Timer fired for +{} (now {})", dt, self.alarm.now().into_u32());
                     alarm.expiration = Expiration::Disabled;
                     self.num_armed.set(self.num_armed.get() - 1);
                     upcalls
