@@ -1222,6 +1222,10 @@ impl PrefetchController {
 
     /// Returns the soonest expiring application timer.
     fn next_expiring_task(&self) -> Option<&(Cell<usize>, Cell<usize>)> {
+        // Need an up-to-date schedule to find the next-expiring task.
+        self.update_schedule();
+
+        // Just iterate through and find the smallest dt.
         let mut best_idx = core::usize::MAX;
         for i in 0..self.schedule.len() {
             let (pid, dt) = &self.schedule[i];
@@ -1236,6 +1240,36 @@ impl PrefetchController {
             None
         } else {
             Some(&self.schedule[best_idx])
+        }
+    }
+
+    fn forward_batch(&self) {
+        // Find the closest task to expiration.
+        // That will be the task to forward-batch.
+        if let Some((pid, dt)) = self.next_expiring_task() {
+            // Check timing requirements here.
+            // - The task must be set to fire within batch duration divided by two to balance delay and staleness.
+            // There are other requirements that we do not consider here (see notes).
+            // ticks = ms * 16_000 / 1_000 = ms * 16
+            let window_duration_ticks = self.window_duration_ms * 16;
+            if dt.get() <= window_duration_ticks {
+                // The task meets requirements.
+                // Set it as the extra syscall to run.
+                //
+                // EXP: evaluation setup tells us which call to set, depending on the PID.
+                self.extra_syscall.set(Syscall::Command {
+                    driver_number: 0x00005,
+                    subdriver_number: 0x3,
+                    arg0: 0,
+                    arg1: 2560,
+                });
+
+                // Set the batch to close sooner than normal.
+                let t_midpoint = (core::cmp::max(window_duration_ticks, dt.get())
+                                  - core::cmp::min(window_duration_ticks, dt.get())) / 2;
+                self.batch_alarm.disarm();
+                self.batch_alarm.set_alarm(self.batch_alarm.now(), time::Ticks32::from(t_midpoint as u32));
+            }
         }
     }
 }
@@ -1288,14 +1322,17 @@ impl BatchController for PrefetchController {
                     // There is not currently a syscall waiting to execute.
 
                     // Withhold the app-requested syscall.
-                    self.pending_syscall.set(PendingSyscall::new(invoking_process.processid(), *syscall));
+                    self.pending_syscall.set((self.batch_alarm.now().into_usize(),
+                                              PendingSyscall::new(invoking_process.processid(), *syscall)));
 
                     // Consider a command to execute ahead of time.
-                    // TODO
-
-                    // Open the batching window.
-                    // Set the alarm directly if it is sooner than the next application alarm.
-                    self.open_batch_window();
+                    self.forward_batch();
+                    // If forward_batch() created an AoT batch, then it would have also opened the batch window
+                    // (based on the timing of the next task).
+                    // But if it did not, then we manually open it here.
+                    if self.extra_syscall.is_none() {
+                        self.open_batch_window();
+                    }
 
                     QueueResult::Queued
                 } else {
@@ -1317,6 +1354,7 @@ impl BatchController for PrefetchController {
             self.pending_syscall.take()
                 .map(|p| (p.pid, p.syscall))
         } else if self.extra_syscall.is_some() {
+            // TODO: do the setup for the ThinProcess here!
             self.extra_syscall.take()
                 .map(|s| (self.shadow_process.processid(), s))
         } else {
