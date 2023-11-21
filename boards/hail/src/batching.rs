@@ -1125,8 +1125,8 @@ impl BatchController for PrefetchTester {
 
 pub struct PrefetchController {
     batching_state: Cell<BatchingState>,
-    /// Batch window duration in milliseconds.
-    window_duration_ms: usize,
+    /// Batch window duration in ticks.
+    window_duration_ticks: usize,
     /// Alarm used for time window batching.
     batch_alarm: &'static BatchAlarm,
     /// Withheld syscalls.
@@ -1154,9 +1154,11 @@ impl PrefetchController {
         let shadow_process = static_init!(ThinProcess, ThinProcess::new(kernel, pidx));
         *empty_entry = Some(shadow_process);
 
+        let window_duration_ticks = window_duration_ms * 16_000 / 1_000;
+
         PrefetchController {
             batching_state: Cell::new(BatchingState::Batch),
-            window_duration_ms,
+            window_duration_ticks,
             batch_alarm,
             pending_syscall: OptionalCell::empty(),
             extra_syscall: OptionalCell::empty(),
@@ -1174,18 +1176,13 @@ impl PrefetchController {
         self.batch_alarm.set_alarm_client(self);
     }
 
-    fn open_batch_window(&self) {
+    fn open_batch_window(&self, window_ticks: usize) {
         // If the alarm is armed, a batch window is currently open;
         // there is no need to open it again.
         if !self.batch_alarm.is_armed() {
             let now = self.batch_alarm.now();
-            // Hard-coded for Hail using a 16kHz timer.
-            let window_duration_ticks = (time::Freq16KHz::frequency() as usize / 1000)
-                * self.window_duration_ms;
-            let batch_alarm_t = time::Ticks32::from(now.into_u32() + window_duration_ticks as u32);
-            let expiration = now.into_usize() + window_duration_ticks as usize;
-            self.batch_alarm.set_alarm(now, time::Ticks32::from(window_duration_ticks as u32));
-            kernel::debug!("--- Batch window open.");
+            self.batch_alarm.set_alarm(now, time::Ticks32::from(self.window_duration_ticks as u32));
+            // kernel::debug!("--- Batch window open.");
         }
     }
 
@@ -1250,13 +1247,16 @@ impl PrefetchController {
             // Check timing requirements here.
             // - The task must be set to fire within batch duration divided by two to balance delay and staleness.
             // There are other requirements that we do not consider here (see notes).
-            // ticks = ms * 16_000 / 1_000 = ms * 16
-            let window_duration_ticks = self.window_duration_ms * 16;
-            if dt.get() <= window_duration_ticks {
+            if dt.get() <= self.window_duration_ticks {
                 // The task meets requirements.
                 // Set it as the extra syscall to run.
                 //
+                // This strategy requires that we have some knowledge of the periodicity of tasks.
+                // We use this to perform "forward" batching.
+                //
                 // EXP: evaluation setup tells us which call to set, depending on the PID.
+                // In reality, we would build a schedule based on application activity and/or input
+                // and choose the syscall from that more sophisticated schedule.
                 self.extra_syscall.set(Syscall::Command {
                     driver_number: 0x00005,
                     subdriver_number: 0x3,
@@ -1265,10 +1265,11 @@ impl PrefetchController {
                 });
 
                 // Set the batch to close sooner than normal.
-                let t_midpoint = (core::cmp::max(window_duration_ticks, dt.get())
-                                  - core::cmp::min(window_duration_ticks, dt.get())) / 2;
-                self.batch_alarm.disarm();
-                self.batch_alarm.set_alarm(self.batch_alarm.now(), time::Ticks32::from(t_midpoint as u32));
+                let t_midpoint = (core::cmp::max(self.window_duration_ticks, dt.get())
+                                  - core::cmp::min(self.window_duration_ticks, dt.get())) / 2;
+                // Make sure we are sure about when batch windows are open.
+                assert!(self.batch_alarm.is_armed() == false);
+                self.open_batch_window(t_midpoint);
             }
         }
     }
@@ -1331,7 +1332,7 @@ impl BatchController for PrefetchController {
                     // (based on the timing of the next task).
                     // But if it did not, then we manually open it here.
                     if self.extra_syscall.is_none() {
-                        self.open_batch_window();
+                        self.open_batch_window(self.window_duration_ticks);
                     }
 
                     QueueResult::Queued
