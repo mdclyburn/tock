@@ -335,6 +335,35 @@ pub(crate) fn subscribe(
     rval
 }
 
+/// Return the upcall function pointer and app data that the process uses.
+pub(crate) fn subscription(
+    process: &dyn Process,
+    driver_num: usize,
+    subscribe_num: usize) -> Option<(Option<NonNull<()>>, usize)>
+{
+    let fake_upcall = Upcall {
+        process_id: process.processid(),
+        upcall_id: UpcallId {
+            driver_num,
+            subscribe_num,
+        },
+        appdata: 0,
+        fn_ptr: None,
+    };
+
+    let current_upcall = subscribe(process, fake_upcall)
+        .ok()
+        .unwrap();
+    let fn_ptr = current_upcall.fn_ptr;
+    let appdata = current_upcall.appdata;
+
+    let _ = subscribe(process, current_upcall)
+        .ok()
+        .unwrap();
+
+    Some((fn_ptr, appdata))
+}
+
 /// An instance of a grant allocated for a particular process.
 ///
 /// `ProcessGrant` is a handle to an instance of a grant that has been allocated

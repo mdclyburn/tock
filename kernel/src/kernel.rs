@@ -685,23 +685,27 @@ impl Kernel {
                                 // The batch controller added it to the queue for later execution.
                                 // No further action is necessary on the kernel's part.
                                 batch::QueueResult::Queued => {
-                                    match syscall {
-                                        Syscall::Command { .. } => debug!("BH: queued {:?}", syscall),
-                                        _ => {  },
-                                    };
+                                    // match syscall {
+                                    //     Syscall::Command { .. } => debug!("BH: queued {:?}", syscall),
+                                    //     _ => {  },
+                                    // };
                                 },
 
                                 // The batch controller has rejected the syscall, it should run immediately.
                                 batch::QueueResult::Run(_ref_syscall) => {
-                                    match syscall {
-                                        Syscall::Command { .. } => debug!("BH: run {:?}", syscall),
-                                        _ => {  },
-                                    };
+                                    // match syscall {
+                                    //     Syscall::Command { driver_number: 0, .. } => {  },
+                                    //     Syscall::Command { .. } => debug!("BH: run {:?}", syscall),
+                                    //     _ => {  },
+                                    // };
                                     self.handle_syscall(resources, process, syscall);
                                 },
 
+                                // There was a matching syscall executed AoT, and its result was used.
+                                // No action necessary here.
+                                batch::QueueResult::AoT => {  },
+
                                 batch::QueueResult::RunAlso(_ref_syscall, fproc, other_syscalls) => {
-                                    debug!("BH: run also {:?}", syscall);
                                     self.handle_syscall(resources, process, syscall);
                                     for opt_syscall in other_syscalls.iter() {
                                         if let Some(other_syscall) = opt_syscall {
@@ -823,7 +827,7 @@ impl Kernel {
     /// Handles `Yield` and `Exit`, dispatches `Memop` to `memop::memop`,
     /// and dispatches peripheral driver system calls to peripheral
     /// driver capsules through the platforms `with_driver` method.
-    #[inline]
+    // #[inline]
     fn handle_syscall<KR: KernelResources<C>, C: Chip>(
         &self,
         resources: &KR,
@@ -1106,7 +1110,12 @@ impl Kernel {
                         None => CommandReturn::failure(ErrorCode::NODEVICE),
                     });
 
-                // debug!("{:?}", &syscall);
+                if driver_number > 0 {
+                    // Output command syscalls (also with timestamp).
+                    // debug!("{:?}", &syscall);
+                    // debug!("@{} {:?}", unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) }, &syscall);
+                }
+
                 let res = SyscallReturn::from_command_return(cres);
 
                 if config::CONFIG.trace_syscalls {

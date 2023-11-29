@@ -20,6 +20,7 @@ use kernel::hil::time::{
 use kernel::process::{Process, ProcessId};
 use kernel::static_init;
 use kernel::syscall::Syscall;
+use kernel::process::Task;
 use kernel::utilities::cells::OptionalCell;
 
 type BatchAlarm = dyn Alarm<'static,
@@ -1130,12 +1131,14 @@ pub struct PrefetchController {
     /// Alarm used for time window batching.
     batch_alarm: &'static BatchAlarm,
     /// Withheld syscalls.
-    pending_syscall: OptionalCell<PendingSyscall>,
-    extra_syscall: OptionalCell<Syscall>,
+    pending_syscall: OptionalCell<(usize, PendingSyscall)>,
+    extra_syscalls: [OptionalCell<Syscall>; 2],
     /// Kernel dummy process.
     shadow_process: &'static ThinProcess,
     /// Ring schedule of processes' periodic tasks.
     schedule: [(Cell<usize>, Cell<usize>); 3],
+    /// Application buffers the controller is aware of.
+    rw_allow_buffers: [OptionalCell<((usize, usize), *mut u8)>; 2],
     /// Last time the schedule was updated.
     last_schedule_update: Cell<usize>,
 }
@@ -1161,13 +1164,15 @@ impl PrefetchController {
             window_duration_ticks,
             batch_alarm,
             pending_syscall: OptionalCell::empty(),
-            extra_syscall: OptionalCell::empty(),
+            extra_syscalls: [OptionalCell::empty(), OptionalCell::empty()],
             shadow_process,
             schedule: [
                 (Cell::new(core::usize::MAX), Cell::new(core::usize::MAX)),
                 (Cell::new(core::usize::MAX), Cell::new(core::usize::MAX)),
                 (Cell::new(core::usize::MAX), Cell::new(core::usize::MAX)),
             ],
+            rw_allow_buffers: [OptionalCell::empty(),
+                               OptionalCell::empty()],
             last_schedule_update: Cell::new(0),
         }
     }
@@ -1191,12 +1196,14 @@ impl PrefetchController {
         if self.batch_alarm.is_armed() {
             self.batch_alarm.disarm();
             self.batching_state.set(BatchingState::RunSyscalls);
-            kernel::debug!("--- Batch window closed.");
+            // kernel::debug!("--- Batch window closed.");
         }
     }
 
     /// Updates the schedule of periodic executions.
     fn update_schedule(&self) {
+        let now = self.batch_alarm.now();
+        let last_update_dt = now.into_usize() - self.last_schedule_update.get();
         // Pick up the first call to the schedule.
         // Just update the last update time since there is nothing useful to do otherwise.
         if self.last_schedule_update.get() != 0 {
@@ -1204,10 +1211,10 @@ impl PrefetchController {
                 // Make sure the entry is, in fact, valid.
                 if pid.get() != core::usize::MAX {
                     // Simple subtraction, but if the next execution time expired, clear it.
-                    if dt.get() < self.last_schedule_update.get() {
+                    if dt.get() < last_update_dt {
                         pid.set(core::usize::MAX);
                     } else {
-                        dt.set(dt.get() - self.last_schedule_update.get());
+                        dt.set(dt.get() - last_update_dt);
                     }
                 }
             }
@@ -1223,9 +1230,11 @@ impl PrefetchController {
         self.update_schedule();
 
         // Just iterate through and find the smallest dt.
+        kernel::debug!("Schedule:");
         let mut best_idx = core::usize::MAX;
         for i in 0..self.schedule.len() {
             let (pid, dt) = &self.schedule[i];
+            kernel::debug!("{} @{}", pid.get(), dt.get());
             if pid.get() != core::usize::MAX {
                 if best_idx == core::usize::MAX || self.schedule[best_idx].1.get() > dt.get() {
                     best_idx = i;
@@ -1244,25 +1253,60 @@ impl PrefetchController {
         // Find the closest task to expiration.
         // That will be the task to forward-batch.
         if let Some((pid, dt)) = self.next_expiring_task() {
+            // kernel::debug!("Next expiring: @{}", dt.get());
             // Check timing requirements here.
             // - The task must be set to fire within batch duration divided by two to balance delay and staleness.
-            // There are other requirements that we do not consider here (see notes).
+            // There are other possible requirements that we do not consider here (see notes).
             if dt.get() <= self.window_duration_ticks {
+                // kernel::debug!("...meets timing requirements.");
                 // The task meets requirements.
                 // Set it as the extra syscall to run.
                 //
                 // This strategy requires that we have some knowledge of the periodicity of tasks.
                 // We use this to perform "forward" batching.
+                // Here is the magical linking between periodic schedule and syscall that will run.
                 //
                 // EXP: evaluation setup tells us which call to set, depending on the PID.
                 // In reality, we would build a schedule based on application activity and/or input
-                // and choose the syscall from that more sophisticated schedule.
-                self.extra_syscall.set(Syscall::Command {
-                    driver_number: 0x00005,
-                    subdriver_number: 0x3,
-                    arg0: 0,
-                    arg1: 2560,
-                });
+                // and choose the syscall from that more sophisticated method.
+                match pid.get() {
+                    // Loudness.
+                    1 => {
+                        let (allow_address, allow_size) = self.shadow_process.reserve_buffer(1024)
+                            .unwrap();
+
+                        let syscall_buffer_allow = Syscall::ReadWriteAllow {
+                            driver_number: 0x00005,
+                            subdriver_number: 0,
+                            allow_address,
+                            allow_size,
+                        };
+
+                        let syscall_sample_command = Syscall::Command {
+                            driver_number: 0x00005,
+                            subdriver_number: 0x3,
+                            arg0: 0,
+                            arg1: 2560,
+                        };
+
+                        kernel::debug!("Executing ADC AoT.");
+                        self.extra_syscalls[0].set(syscall_buffer_allow);
+                        self.extra_syscalls[1].set(syscall_sample_command);
+                    },
+
+                    2 => {
+                        kernel::debug!("Executing I2C AoT.");
+
+                        self.extra_syscalls[0].set(Syscall::Command {
+                            driver_number: 0x60001,
+                            subdriver_number: 0x1,
+                            arg0: 0,
+                            arg1: 0,
+                        })
+                    },
+
+                    _ => { return; },
+                };
 
                 // Set the batch to close sooner than normal.
                 let t_midpoint = (core::cmp::max(self.window_duration_ticks, dt.get())
@@ -1270,6 +1314,7 @@ impl PrefetchController {
                 // Make sure we are sure about when batch windows are open.
                 assert!(self.batch_alarm.is_armed() == false);
                 self.open_batch_window(t_midpoint);
+                // kernel::debug!("Forward batch @ {}", t_midpoint);
             }
         }
     }
@@ -1291,7 +1336,7 @@ impl BatchController for PrefetchController {
                 if *subdriver_number == batch::ALARM_COMMAND_SET_ALARM {
                     let invoking_pid = invoking_process.processid().id();
                     // kernel::debug!("PID {} -> {} ref., {} ticks dt.",
-                    //                pid,
+                    //                invoking_pid,
                     //                syscall_reference,
                     //                syscall_dt);
 
@@ -1299,6 +1344,7 @@ impl BatchController for PrefetchController {
                     // If we find it, update the existing dt value with the new, reset value.
                     let matched_entry = self.schedule.iter()
                         .find(|(pid, _dt)| pid.get() == invoking_pid);
+                    self.update_schedule();
                     if let Some((_pid, dt)) = matched_entry {
                         // The application's schedule is currently tracked.
                         // Update the existing dt value with the new, reset value.
@@ -1310,6 +1356,13 @@ impl BatchController for PrefetchController {
                             .unwrap(); // If this does not work, then there are not enough entries in `schedule`.
                         empty_entry.0.set(invoking_pid);
                         empty_entry.1.set(*syscall_dt);
+                        kernel::debug!("Set empty entry.");
+                    }
+
+                    kernel::debug!("Schedule:");// schedule looks fine here; maybe some bad math clearing the schedule?
+                    for i in 0..self.schedule.len() {
+                        let (pid, dt) = &self.schedule[i];
+                        kernel::debug!("{} @{}", pid.get(), dt.get());
                     }
                 }
 
@@ -1318,7 +1371,19 @@ impl BatchController for PrefetchController {
             },
 
             // All other commands may be batched or end up closing the batch if it is ready.
-            Syscall::Command { .. } => {
+            Syscall::Command { driver_number, subdriver_number, arg0, arg1 } => {
+                // First, see if we executed this syscall ahead of time.
+                if let Some(aot_result) = self.shadow_process.check_syscall_cache(*driver_number, *subdriver_number, *arg0, *arg1) {
+                    kernel::debug!("Using AoT result.");
+                    invoking_process.enqueue_task(Task::FunctionCall(aot_result.upcall));
+
+                    // ENG/DSN: getting the buffer back to the process, if necessary.
+                    // ENG/DSN: setting the callback fn() pointer correctly to the process' pointer.
+                    //   It should be simpler, streamlined to know this information.
+
+                    return QueueResult::AoT;
+                }
+
                 if self.pending_syscall.is_none() {
                     // There is not currently a syscall waiting to execute.
 
@@ -1331,7 +1396,8 @@ impl BatchController for PrefetchController {
                     // If forward_batch() created an AoT batch, then it would have also opened the batch window
                     // (based on the timing of the next task).
                     // But if it did not, then we manually open it here.
-                    if self.extra_syscall.is_none() {
+                    if self.extra_syscalls[0].is_none() {
+                        kernel::debug!("Forward batch did not configure.");
                         self.open_batch_window(self.window_duration_ticks);
                     }
 
@@ -1344,6 +1410,26 @@ impl BatchController for PrefetchController {
                 }
             },
 
+            // Watch for any RW-allows to know where we can copy prefetched data.
+            Syscall::ReadWriteAllow { driver_number,
+                                      subdriver_number,
+                                      allow_address,
+                                      allow_size } => {
+                // Record the RW address and size.
+                let empty_slot = self.rw_allow_buffers.iter()
+                    .find(|s| s.is_none())
+                    .unwrap();
+                let rw_allow_buffer = unsafe {
+                    core::slice::from_raw_parts_mut(*allow_address as *mut u8,
+                                                    *allow_size)
+                        .as_mut_ptr()
+                };
+                empty_slot.set(((*driver_number, *subdriver_number), rw_allow_buffer));
+
+                // ...and then allow the RW-allow to run.
+                QueueResult::Run(syscall)
+            },
+
             // Any non-command syscalls should execute immediately.
             _ => QueueResult::Run(syscall),
         }
@@ -1353,12 +1439,25 @@ impl BatchController for PrefetchController {
     fn dequeue_syscall(&self) -> Option<(ProcessId, Syscall)> {
         if self.pending_syscall.is_some() {
             self.pending_syscall.take()
-                .map(|p| (p.pid, p.syscall))
-        } else if self.extra_syscall.is_some() {
-            // TODO: do the setup for the ThinProcess here!
-            self.extra_syscall.take()
-                .map(|s| (self.shadow_process.processid(), s))
+                .map(|(t_add, p)| {
+                    // let batch_delay_ms = (self.batch_alarm.now().into_usize() - t_add)
+                    //     * 1000 / 16_000;
+                    // kernel::debug!("Batch delay: {} ms", batch_delay_ms);
+
+                    (p.pid, p.syscall)
+                })
         } else {
+            // Check the extra_syscalls.
+            // Return one of these if there is something present in the cell.
+            for optc_syscall in self.extra_syscalls.iter() {
+                if optc_syscall.is_some() {
+                    return optc_syscall
+                        .take()
+                        .map(|s| (self.shadow_process.processid(), s));
+                }
+            }
+
+            // Or just return none if there is nothing left.
             None
         }
     }
@@ -1393,13 +1492,13 @@ impl AlarmClient for PrefetchController {
     /// the controller does not set the alarm.
     /// It instead waits for the next alarm to fire before considering setting the alarm hardware for the batch window.
     fn alarm(&self) {
-        kernel::debug!("--- Batch window expired.");
+        // kernel::debug!("--- Batch window expired.");
         // Execute the batch.
         // The next step is to run upcalls (and possibly collect their syscalls).
         self.batching_state.set(BatchingState::RunSyscalls);
 
         self.update_schedule();
-        self.next_expiring_task()
-            .map(|(pid, dt)| kernel::debug!("Next expiration? {}", pid.get()));
+        // self.next_expiring_task()
+        //     .map(|(pid, dt)| kernel::debug!("Next expiration? {}", pid.get()));
     }
 }

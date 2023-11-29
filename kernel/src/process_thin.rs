@@ -9,6 +9,7 @@ use crate::grant::SavedUpcall;
 use crate::process::{
     Error,
     FunctionCall,
+    FunctionCallSource,
     Process,
     ProcessCustomGrantIdentifer,
     ProcessId,
@@ -33,10 +34,11 @@ use crate::utilities::cells::OptionalCell;
 static mut GRANT_BUFFER_1: [u8; 128] = [0; 128];
 static mut ALLOW_BUFFER_1: [u8; 1024] = [0; 1024];
 
-/// A cache hit result describing how to pass data to the application.
+/// A cache query result describing how to pass data to the application.
+#[derive(Clone, Copy)]
 pub struct CacheReturn {
-    upcall_id: UpcallId,
-    args: (usize, usize, usize, usize),
+    pub upcall: FunctionCall,
+    pub buffer: Option<&'static [u8]>,
 }
 
 fn __do_not_call() -> ! {
@@ -47,7 +49,10 @@ fn __do_not_call() -> ! {
 pub struct ThinProcess {
     pid: ProcessId,
     kernel: &'static Kernel,
+    /// Driver no. and grant no. of the current allocation.
     current_allocation: OptionalCell<(usize, usize)>,
+    /// Cached result.
+    cached_result: OptionalCell<CacheReturn>,
 }
 
 impl ThinProcess {
@@ -59,6 +64,7 @@ impl ThinProcess {
             pid: ProcessId::new(kernel, 99, array_idx),
             kernel,
             current_allocation: OptionalCell::empty(),
+            cached_result: OptionalCell::empty(),
         }
     }
 
@@ -92,6 +98,9 @@ impl ThinProcess {
     }
 
     /// Check cache for prefetched data.
+    ///
+    /// The caller provides arguments for the results that they are looking for.
+    /// This function either returns the cached results or None.
     pub fn check_syscall_cache(
         &self,
         driver_no: usize,
@@ -99,15 +108,88 @@ impl ThinProcess {
         arg0: usize,
         arg1: usize) -> Option<CacheReturn>
     {
-        None
+        // And this is where we assume we can match (driver no., subdriver no.) and
+        // (driver no., subscribe no.) without issues. See comment in enqueue_task().
+        // We know that subscribe no. != subdriver no...
+        //
+        // This is not a complex process, but we show how this could likely scale in the future.
+        // Perhaps drivers' implementations could inform this.
+        let mapping = match (driver_no, subdriver_no) {
+            (0x00005, 3) => Some((0x00005, 3)),
+            _ => None,
+        };
+
+        // Check if there was a matching mapping from the above,
+        // if there was, then check if there is a result for it in the cache.
+        if let Some((req_driver_no, req_subscribe_no)) = mapping {
+            let matches_cached = self.cached_result.map_or(false, |cr| {
+                match cr.upcall.source {
+                    FunctionCallSource::Driver(UpcallId { driver_num: cache_driver_num, subscribe_num: cache_subscribe_num }) =>
+                        (cache_driver_num == req_driver_no) && (cache_subscribe_num == req_subscribe_no),
+                    _ => false,
+                }
+            });
+
+            if matches_cached {
+                self.cached_result.take()
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     }
 }
 
 impl Process for ThinProcess {
     fn processid(&self) -> ProcessId { self.pid }
 
+    /// Drivers' method of providing results of syscalls asynchronously.
     fn enqueue_task(&self, task: Task) -> Result<(), ErrorCode> {
-        unimplemented!()
+        // Figure out what driver result this is.
+        // For the most part, we leave much of FunctionCall the same.
+        // It will only be necessary to change FunctionCall.pc to the target application's function,
+        // and that will be done by another entity, (i.e., PrefetchController).
+        //
+        // We do have to be aware of which syscalls have RW-allowed buffers tied to them so we can
+        // let the other entity know.
+        match task {
+            Task::FunctionCall(ref fc) => match fc.source {
+                FunctionCallSource::Driver(UpcallId { driver_num, subscribe_num }) => {
+                    match (driver_num, subscribe_num) {
+                        // ADC, DMA-driven sampling.
+                        (0x00005, 3) => {
+                            self.cached_result.set(CacheReturn {
+                                upcall: *fc,
+                                buffer: Some(unsafe { &ALLOW_BUFFER_1 }),
+                            });
+
+                            Ok(())
+                        },
+
+                        // Temperature reading.
+                        (0x60000, 0)
+                            | (0x60001, 0) => {
+                                debug!("Got result: {:?}", fc);
+                                self.cached_result.set(CacheReturn {
+                                    upcall: *fc,
+                                    buffer: None,
+                                });
+
+                                Ok(())
+                            },
+
+                        _ => unimplemented!(),
+                    }
+                },
+
+                // We do not handle any other function call sources.
+                _ => panic!(),
+            },
+
+            // We do not handle other types of tasks.
+            _ => panic!(),
+        }
     }
 
     fn ready(&self) -> bool { false }
