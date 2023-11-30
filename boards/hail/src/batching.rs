@@ -17,7 +17,11 @@ use kernel::hil::time::{
     Ticks as _,
     Frequency as _,
 };
-use kernel::process::{Process, ProcessId};
+use kernel::process::{
+    FunctionCall,
+    Process,
+    ProcessId
+};
 use kernel::static_init;
 use kernel::syscall::Syscall;
 use kernel::process::Task;
@@ -1375,11 +1379,46 @@ impl BatchController for PrefetchController {
                 // First, see if we executed this syscall ahead of time.
                 if let Some(aot_result) = self.shadow_process.check_syscall_cache(*driver_number, *subdriver_number, *arg0, *arg1) {
                     kernel::debug!("Using AoT result.");
-                    invoking_process.enqueue_task(Task::FunctionCall(aot_result.upcall));
 
                     // ENG/DSN: getting the buffer back to the process, if necessary.
                     // ENG/DSN: setting the callback fn() pointer correctly to the process' pointer.
                     //   It should be simpler, streamlined to know this information.
+
+                    // Get the subscription no., allow no. for the callback.
+                    let (subscribe_no, opt_allow_no) = match (driver_number, subdriver_number) {
+                        (0x00005, 3) => (3, Some(0)),
+                        (0x60000, 1) => (0, None),
+                        (0x60001, 1) => (0, None),
+                        _ => unimplemented!(),
+                    };
+                    // And then use that subscription no. to discover what function the process currently uses.
+                    let (process_upcall_fn, app_data) = kernel::grant::subscription(invoking_process, *driver_number, subscribe_no)
+                        .unwrap(); // We assume that all applications set this to something non-null.
+
+                    // TODO: copy buffer if necessary.
+                    if let Some(rw_allow_no) = opt_allow_no {
+                        let dst_buffer_addr = self.rw_allow_buffers.iter()
+                            .find(|optc| optc.map_or(false, |rw_buffer| rw_buffer.0 == (*driver_number, rw_allow_no)))
+                            .unwrap() // Programming error, if this fails; means we did not track RW buffers properly.
+                            .extract()
+                            .unwrap() // Guaranteed to exist from previous find.
+                            .1;
+                        unsafe { // We could manipulate the size of the AoT buffer to match the destination.
+                            let src_buffer = aot_result.buffer.unwrap();
+                            core::ptr::copy(src_buffer.as_ptr(),
+                                            dst_buffer_addr,
+                                            src_buffer.len()); // Use the length of the AoT buffer, which was previously sized appropriately.
+                        }
+                    }
+
+                    // Place the call on the process' task queue to execute.
+                    invoking_process.enqueue_task(
+                        Task::FunctionCall(
+                            FunctionCall {
+                                pc: process_upcall_fn.unwrap().as_ptr() as usize,
+                                ..aot_result.upcall
+                            }));
+                    kernel::debug!("Delivered AoT result.");
 
                     return QueueResult::AoT;
                 }
