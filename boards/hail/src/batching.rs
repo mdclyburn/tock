@@ -1234,11 +1234,11 @@ impl PrefetchController {
         self.update_schedule();
 
         // Just iterate through and find the smallest dt.
-        kernel::debug!("Schedule:");
+        // kernel::debug!("Schedule:");
         let mut best_idx = core::usize::MAX;
         for i in 0..self.schedule.len() {
             let (pid, dt) = &self.schedule[i];
-            kernel::debug!("{} @{}", pid.get(), dt.get());
+            // kernel::debug!("{} @{}", pid.get(), dt.get());
             if pid.get() != core::usize::MAX {
                 if best_idx == core::usize::MAX || self.schedule[best_idx].1.get() > dt.get() {
                     best_idx = i;
@@ -1257,11 +1257,11 @@ impl PrefetchController {
         // Find the closest task to expiration.
         // That will be the task to forward-batch.
         if let Some((pid, dt)) = self.next_expiring_task() {
-            // kernel::debug!("Next expiring: @{}", dt.get());
+            kernel::debug!("Next expiring: {} in {} tcs.", pid.get(), dt.get());
             // Check timing requirements here.
             // - The task must be set to fire within batch duration divided by two to balance delay and staleness.
             // There are other possible requirements that we do not consider here (see notes).
-            if dt.get() <= self.window_duration_ticks {
+            if dt.get() <= self.window_duration_ticks * 3 / 2 {
                 // kernel::debug!("...meets timing requirements.");
                 // The task meets requirements.
                 // Set it as the extra syscall to run.
@@ -1276,6 +1276,8 @@ impl PrefetchController {
                 match pid.get() {
                     // Loudness.
                     1 => {
+                        kernel::debug!("Executing ADC AoT.");
+
                         let (allow_address, allow_size) = self.shadow_process.reserve_buffer(1024)
                             .unwrap();
 
@@ -1293,7 +1295,6 @@ impl PrefetchController {
                             arg1: 2560,
                         };
 
-                        kernel::debug!("Executing ADC AoT.");
                         self.extra_syscalls[0].set(syscall_buffer_allow);
                         self.extra_syscalls[1].set(syscall_sample_command);
                     },
@@ -1346,27 +1347,32 @@ impl BatchController for PrefetchController {
 
                     // See if the application's schedule is currently tracked.
                     // If we find it, update the existing dt value with the new, reset value.
-                    let matched_entry = self.schedule.iter()
-                        .find(|(pid, _dt)| pid.get() == invoking_pid);
-                    self.update_schedule();
-                    if let Some((_pid, dt)) = matched_entry {
-                        // The application's schedule is currently tracked.
-                        // Update the existing dt value with the new, reset value.
-                        dt.set(*syscall_dt);
-                    } else {
-                        // Find an empty slot.
-                        let empty_entry = self.schedule.iter()
-                            .find(|(pid, _dt)| pid.get() == core::usize::MAX)
-                            .unwrap(); // If this does not work, then there are not enough entries in `schedule`.
-                        empty_entry.0.set(invoking_pid);
-                        empty_entry.1.set(*syscall_dt);
-                        kernel::debug!("Set empty entry.");
-                    }
+                    // DES: how to determine if a syscall is forward batching eligble?
 
-                    kernel::debug!("Schedule:");// schedule looks fine here; maybe some bad math clearing the schedule?
-                    for i in 0..self.schedule.len() {
-                        let (pid, dt) = &self.schedule[i];
-                        kernel::debug!("{} @{}", pid.get(), dt.get());
+                    // Display application not eligible.
+                    if invoking_pid != 0 {
+                        let matched_entry = self.schedule.iter()
+                            .find(|(pid, _dt)| pid.get() == invoking_pid);
+                        self.update_schedule();
+                        if let Some((_pid, dt)) = matched_entry {
+                            // The application's schedule is currently tracked.
+                            // Update the existing dt value with the new, reset value.
+                            dt.set(*syscall_dt);
+                        } else {
+                            // Find an empty slot.
+                            let empty_entry = self.schedule.iter()
+                                .find(|(pid, _dt)| pid.get() == core::usize::MAX)
+                                .unwrap(); // If this does not work, then there are not enough entries in `schedule`.
+                            empty_entry.0.set(invoking_pid);
+                            empty_entry.1.set(*syscall_dt);
+                            // kernel::debug!("Set empty entry.");
+                        }
+
+                        // kernel::debug!("Schedule:");
+                        // for i in 0..self.schedule.len() {
+                        //     let (pid, dt) = &self.schedule[i];
+                        //     kernel::debug!("{} @{}", pid.get(), dt.get());
+                        // }
                     }
                 }
 
@@ -1386,7 +1392,7 @@ impl BatchController for PrefetchController {
 
                     // Get the subscription no., allow no. for the callback.
                     let (subscribe_no, opt_allow_no) = match (driver_number, subdriver_number) {
-                        (0x00005, 3) => (3, Some(0)),
+                        (0x00005, 3) => (0, Some(0)),
                         (0x60000, 1) => (0, None),
                         (0x60001, 1) => (0, None),
                         _ => unimplemented!(),
@@ -1436,8 +1442,10 @@ impl BatchController for PrefetchController {
                     // (based on the timing of the next task).
                     // But if it did not, then we manually open it here.
                     if self.extra_syscalls[0].is_none() {
-                        kernel::debug!("Forward batch did not configure.");
+                        // kernel::debug!("Forward batch did not configure.");
                         self.open_batch_window(self.window_duration_ticks);
+                    } else {
+                        kernel::debug!("Forward batch configured; execute.");
                     }
 
                     QueueResult::Queued
