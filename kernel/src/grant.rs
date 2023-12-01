@@ -336,7 +336,7 @@ pub(crate) fn subscribe(
 }
 
 /// Return the upcall function pointer and app data that the process uses.
-pub(crate) fn subscription(
+pub fn subscription(
     process: &dyn Process,
     driver_num: usize,
     subscribe_num: usize) -> Option<(Option<NonNull<()>>, usize)>

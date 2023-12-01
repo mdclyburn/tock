@@ -37,7 +37,9 @@ static mut ALLOW_BUFFER_1: [u8; 1024] = [0; 1024];
 /// A cache query result describing how to pass data to the application.
 #[derive(Clone, Copy)]
 pub struct CacheReturn {
+    /// The upcall that an application should execute.
     pub upcall: FunctionCall,
+    /// Buffer contents associated with the upcall.
     pub buffer: Option<&'static [u8]>,
 }
 
@@ -115,7 +117,7 @@ impl ThinProcess {
         // This is not a complex process, but we show how this could likely scale in the future.
         // Perhaps drivers' implementations could inform this.
         let mapping = match (driver_no, subdriver_no) {
-            (0x00005, 3) => Some((0x00005, 3)),
+            (0x00005, 3) => Some((0x00005, 0)),
             _ => None,
         };
 
@@ -156,9 +158,10 @@ impl Process for ThinProcess {
         match task {
             Task::FunctionCall(ref fc) => match fc.source {
                 FunctionCallSource::Driver(UpcallId { driver_num, subscribe_num }) => {
+                    // debug!("Got result: {:?}", fc);
                     match (driver_num, subscribe_num) {
                         // ADC, DMA-driven sampling.
-                        (0x00005, 3) => {
+                        (0x00005, 0) => {
                             self.cached_result.set(CacheReturn {
                                 upcall: *fc,
                                 buffer: Some(unsafe { &ALLOW_BUFFER_1 }),
@@ -170,7 +173,6 @@ impl Process for ThinProcess {
                         // Temperature reading.
                         (0x60000, 0)
                             | (0x60001, 0) => {
-                                debug!("Got result: {:?}", fc);
                                 self.cached_result.set(CacheReturn {
                                     upcall: *fc,
                                     buffer: None,
@@ -179,7 +181,7 @@ impl Process for ThinProcess {
                                 Ok(())
                             },
 
-                        _ => unimplemented!(),
+                        _ => panic!("Unhandled upcall: {}, {}", driver_num, subscribe_num),
                     }
                 },
 
