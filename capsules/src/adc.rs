@@ -324,11 +324,6 @@ impl<'a, A: hil::adc::Adc + hil::adc::AdcHighSpeed> AdcDedicated<'a, A> {
     /// - `channel` - index into `channels` array, which channel to sample
     /// - `frequency` - number of samples per second to collect
     fn sample_buffer(&self, channel: usize, frequency: u32) -> Result<(), ErrorCode> {
-        // only one sample at a time
-        if self.active.get() {
-            return Err(ErrorCode::BUSY);
-        }
-
         // convert channel index
         if channel >= self.channels.len() {
             return Err(ErrorCode::INVAL);
@@ -1101,46 +1096,13 @@ impl<A: hil::adc::Adc + hil::adc::AdcHighSpeed> SyscallDriver for AdcDedicated<'
         allow_num: usize,
         mut slice: ReadWriteProcessBuffer,
     ) -> Result<ReadWriteProcessBuffer, (ReadWriteProcessBuffer, ErrorCode)> {
-        // Return true if this app already owns the ADC capsule, if no app owns
-        // the ADC capsule, or if the app that is marked as owning the ADC
-        // capsule no longer exists.
-        let match_or_empty_or_nonexistant = self.appid.map_or(true, |owning_app| {
-            if self.active.get() {
-                owning_app == &appid
-            } else {
-                self.apps
-                    .enter(*owning_app, |_, _| owning_app == &appid)
-                    .unwrap_or(true)
-            }
-        });
-        if match_or_empty_or_nonexistant {
-            self.appid.set(appid);
-        } else {
-            return Err((slice, ErrorCode::NOMEM));
-        }
         match allow_num {
             // Pass buffer for samples to go into
             0 => {
-                // set first buffer
-                let res = self.appid.map_or(Err(ErrorCode::FAIL), |id| {
-                    self.apps
-                        .enter(*id, |app, _| {
-                            mem::swap(&mut app.app_buf1, &mut slice);
-                        })
-                        .map_err(|err| {
-                            if err == kernel::process::Error::NoSuchApp
-                                || err == kernel::process::Error::InactiveApp
-                            {
-                                self.appid.clear();
-                            }
-                            ErrorCode::from(err)
-                        })
-                });
-                if let Err(err) = res {
-                    Err((slice, err))
-                } else {
-                    Ok(slice)
-                }
+                let _res = self.apps.enter(appid, |app, _ut| mem::swap(&mut app.app_buf1, &mut slice))
+                    .unwrap();
+                // kernel::debug!("App {} set buffer", appid.id());
+                Ok(slice)
             }
 
             // Pass a second buffer to be used for double-buffered continuous sampling
@@ -1184,37 +1146,13 @@ impl<A: hil::adc::Adc + hil::adc::AdcHighSpeed> SyscallDriver for AdcDedicated<'
         frequency: usize,
         appid: ProcessId,
     ) -> CommandReturn {
-        // Return true if this app already owns the ADC capsule, if no app owns
-        // the ADC capsule, or if the app that is marked as owning the ADC
-        // capsule no longer exists.
-        let match_or_empty_or_nonexistant = self.appid.map_or(true, |owning_app| {
-            // We have recorded that an app has ownership of the ADC.
-
-            // If the ADC is still active, then we need to wait for the operation
-            // to finish and the app, whether it exists or not (it may have crashed),
-            // still owns this capsule. If the ADC is not active, then
-            // we need to verify that that application still exists, and remove
-            // it as owner if not.
-            if self.active.get() {
-                owning_app == &appid
-            } else {
-                // Check the app still exists.
-                //
-                // If the `.enter()` succeeds, then the app is still valid, and
-                // we can check if the owning app matches the one that called
-                // the command. If the `.enter()` fails, then the owning app no
-                // longer exists and we return `true` to signify the
-                // "or_nonexistant" case.
-                self.apps
-                    .enter(*owning_app, |_, _| owning_app == &appid)
-                    .unwrap_or(true)
-            }
-        });
-        if match_or_empty_or_nonexistant {
-            self.appid.set(appid);
+        if self.active.get() && command_num != 0 {
+            return CommandReturn::failure(ErrorCode::BUSY);
         } else {
-            return CommandReturn::failure(ErrorCode::NOMEM);
+            // kernel::debug!("ADC owner: {}", appid.id());
+            self.appid.set(appid);
         }
+
         match command_num {
             // check if present
             0 => CommandReturn::success_u32(self.channels.len() as u32),
