@@ -12,13 +12,13 @@ use kernel::utilities::cells::TakeCell;
 pub const DRIVER_NUM: usize = crate::driver::NUM::Aes as usize;
 
 pub struct DummyAES {
-    aes: &'static AES128<'static>,
+    aes: &'static dyn AES128<'static>,
     src_buffer: TakeCell<'static, [u8]>,
     dst_buffer: TakeCell<'static, [u8]>,
 }
 
 impl DummyAES {
-    pub fn new(aes: &'static AES128<'static>,
+    pub fn new(aes: &'static dyn AES128<'static>,
                src_buffer: &'static mut [u8],
                dst_buffer: &'static mut [u8]) -> DummyAES
     {
@@ -57,8 +57,8 @@ impl SyscallDriver for DummyAES {
                 if let Some(src_buffer) = self.src_buffer.take() {
                     if let Some(dst_buffer) = self.dst_buffer.take() {
                         self.aes.enable();
-                        self.aes.set_key(&[0xFE, 0xA8, 0x23, 0x4A]);
-                        self.aes.set_iv(&[0xFE, 0xEE, 0xEA, 0x1C]);
+                        let _ = self.aes.set_key(&[0xFE, 0xA8, 0x23, 0x4A]);
+                        let _ = self.aes.set_iv(&[0xFE, 0xEE, 0xEA, 0x1C]);
                         self.aes.start_message();
 
                         let buffer_len = dst_buffer.len();
