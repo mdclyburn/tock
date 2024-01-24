@@ -31,6 +31,108 @@ type BatchAlarm = dyn Alarm<'static,
                             Frequency = time::Freq16KHz,
                             Ticks = time::Ticks32>;
 
+/// Batching based on collecting a fixed number of operations (max 5).
+pub struct FixedCountBatching {
+    batch_size: usize,
+    batching_state: Cell<BatchingState>,
+    pending_syscalls: [OptionalCell<PendingSyscall>; 12],
+}
+
+impl FixedCountBatching {
+    pub fn new(batch_size: usize) -> FixedCountBatching {
+        FixedCountBatching {
+            batch_size,
+            batching_state: Cell::new(BatchingState::Batch),
+            pending_syscalls: [OptionalCell::empty(),
+                               OptionalCell::empty(),
+                               OptionalCell::empty(),
+                               OptionalCell::empty(),
+                               OptionalCell::empty(),
+                               OptionalCell::empty(),
+                               OptionalCell::empty(),
+                               OptionalCell::empty(),
+                               OptionalCell::empty(),
+                               OptionalCell::empty(),
+                               OptionalCell::empty(),
+                               OptionalCell::empty()],
+        }
+    }
+
+    fn pending_count(&self) -> usize {
+        self.pending_syscalls.iter()
+            .filter(|oc| oc.is_some())
+            .count()
+    }
+
+    fn enqueue(&self, invoking_process: &dyn Process, syscall: &Syscall) {
+        let pending_syscall = PendingSyscall::new(invoking_process.processid(), *syscall);
+        let empty_slot = self.pending_syscalls.iter()
+            .find(|oc| oc.is_none())
+            .expect("pending syscall overflow");
+        empty_slot.set(pending_syscall);
+    }
+}
+
+impl BatchController for FixedCountBatching {
+    fn check_enqueue<'a>(&self,
+                         invoking_process: &dyn Process,
+                         syscall: &'a Syscall) -> QueueResult<'a>
+    {
+        // Check if we have reached the threshold for executing operations.
+        if self.batching_state.get() == BatchingState::RunSyscalls {
+            QueueResult::Run(syscall)
+        } else if self.pending_count() >= self.batch_size {
+            // Put it on the queue; easiest way to handle this.
+            self.enqueue(invoking_process, syscall);
+            self.batching_state.set(BatchingState::CollectUpcalls);
+            // kernel::debug!("BC: collect upcalls");
+            QueueResult::Queued
+        } else {
+            match syscall {
+                Syscall::Command { driver_number: _, subdriver_number: 0, .. } =>
+                    QueueResult::Run(syscall),
+
+                Syscall::Command { driver_number: 0, .. } =>
+                    QueueResult::Run(syscall),
+
+                Syscall::Command { .. } => {
+                    self.enqueue(invoking_process, syscall);
+                    // kernel::debug!("queued: {:?}", syscall);
+                    QueueResult::Queued
+                },
+
+                _ => QueueResult::Run(syscall),
+            }
+        }
+    }
+
+    fn dequeue_syscall(&self) -> Option<(ProcessId, Syscall)> {
+        let opt_oc_pnd_syscall = self.pending_syscalls.iter()
+            .find(|oc| oc.is_some());
+
+        if let Some(oc_pnd_syscall) = opt_oc_pnd_syscall {
+            oc_pnd_syscall.take()
+                .map(|pnd_syscall| (pnd_syscall.pid, pnd_syscall.syscall))
+        } else {
+            None
+        }
+    }
+
+    fn state(&self, k: bool) -> BatchingState {
+        self.batching_state.get()
+    }
+
+    fn notify_upcalls_completed(&self) {
+        // kernel::debug!("Notified upcalls completed.");
+        self.batching_state.set(BatchingState::RunSyscalls);
+    }
+
+    fn notify_syscalls_completed(&self) {
+        // kernel::debug!("Notified syscalls completed.");
+        self.batching_state.set(BatchingState::Batch);
+    }
+}
+
 /// Batching based on a fixed amount of time passing since the first operation arrived.
 pub struct TimeWindowBatching {
     batching_state: Cell<BatchingState>,
