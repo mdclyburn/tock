@@ -36,11 +36,33 @@ static mut ALLOW_BUFFER_1: [u8; 1024] = [0; 1024];
 
 /// A cache query result describing how to pass data to the application.
 #[derive(Clone, Copy)]
-pub struct CacheReturn {
-    /// The upcall that an application should execute.
-    pub upcall: FunctionCall,
-    /// Buffer contents associated with the upcall.
-    pub buffer: Option<&'static [u8]>,
+pub enum CacheReturn {
+    /// The syscall is currently outstanding.
+    Pending,
+    /// The syscall is present in the cache and this is the result.
+    Present(FunctionCall, Option<&'static [u8]>),
+}
+
+/// An cache entry.
+#[derive(Copy, Clone)]
+enum CacheSlot {
+    /// A call is outstanding for a syscall with a given driver and subscribe no.
+    Pending(usize, usize),
+    /// A call is outstanding for a syscall with a given driver and subscribe no. and a process is waiting for it.
+    Requested(&'static dyn Process, usize, usize),
+    /// A completed, cached result.
+    Ready(FunctionCall, Option<&'static [u8]>),
+}
+
+impl CacheSlot {
+    fn take_ready_cache(&self) -> CacheReturn {
+        match self {
+            CacheSlot::Ready(fc, buffer) => CacheReturn::Present(*fc, *buffer),
+
+            // Called when the slot is not a ready slot.
+            _ => panic!()
+        }
+    }
 }
 
 fn __do_not_call() -> ! {
@@ -54,7 +76,7 @@ pub struct ThinProcess {
     /// Driver no. and grant no. of the current allocation.
     current_allocation: OptionalCell<(usize, usize)>,
     /// Cached result.
-    cached_result: OptionalCell<CacheReturn>,
+    cached_result: OptionalCell<CacheSlot>,
 }
 
 impl ThinProcess {
@@ -99,17 +121,23 @@ impl ThinProcess {
         }
     }
 
+    pub fn cache_space_ready(&self) -> bool {
+        self.cached_result.is_none()
+    }
+
     /// Check cache for prefetched data.
     ///
     /// The caller provides arguments for the results that they are looking for.
     /// This function either returns the cached results or None.
     pub fn check_syscall_cache(
         &self,
+        process: &'static dyn Process,
         driver_no: usize,
         subdriver_no: usize,
         arg0: usize,
         arg1: usize) -> Option<CacheReturn>
     {
+        // debug!("Cache check for call: {:?}", (driver_no, subdriver_no));
         // And this is where we assume we can match (driver no., subdriver no.) and
         // (driver no., subscribe no.) without issues. See comment in enqueue_task().
         // We know that subscribe no. != subdriver no...
@@ -118,28 +146,83 @@ impl ThinProcess {
         // Perhaps drivers' implementations could inform this.
         let mapping = match (driver_no, subdriver_no) {
             (0x00005, 3) => Some((0x00005, 0)),
+            (0x60001, 1) => Some((0x60001, 0)),
             _ => None,
         };
 
         // Check if there was a matching mapping from the above,
         // if there was, then check if there is a result for it in the cache.
         if let Some((req_driver_no, req_subscribe_no)) = mapping {
-            let matches_cached = self.cached_result.map_or(false, |cr| {
-                match cr.upcall.source {
-                    FunctionCallSource::Driver(UpcallId { driver_num: cache_driver_num, subscribe_num: cache_subscribe_num }) =>
-                        (cache_driver_num == req_driver_no) && (cache_subscribe_num == req_subscribe_no),
-                    _ => false,
+            let mapping = mapping.unwrap();
+            debug!("Checking cache for {:?}", mapping);
+            debug!("Cache {}", match self.cached_result.extract() {
+                None => "none",
+                Some(CacheSlot::Pending(_, _)) => "pending",
+                Some(CacheSlot::Requested(_, _, _)) => "requested",
+                Some(CacheSlot::Ready(_, _)) => "ready"
+            });
+            let (matches, ready) = self.cached_result.map_or((false, false), |cs| {
+                debug!("A result is currently cached...");
+                match cs {
+                    // A process has asked to execute an operation that the AoT system has already dispatched.
+                    // We take note of the process here by switching the slot's state to Requested.
+                    CacheSlot::Pending(cache_driver_no, cache_subscribe_no) => {
+                        if mapping == (*cache_driver_no, *cache_subscribe_no) {
+                            self.cached_result.set(CacheSlot::Requested(process, *cache_driver_no, *cache_subscribe_no));
+                            (true, false)
+                        } else {
+                            (false, false)
+                        }
+                    },
+
+                    // A process has asked to execute the operation that the AoT has already dispatched,
+                    // and the batch controller previously checked the cache for this result. We could
+                    // just give this result right back (reduce redundant syscalls). This would require
+                    // a more extensible way of tracking which processes are interested in this data.
+                    CacheSlot::Requested(_process, cache_driver_no, cache_subscribe_no) => {
+                        if mapping == (*cache_driver_no, *cache_subscribe_no) {
+                            (true, false)
+                        } else {
+                            (false, false)
+                        }
+                    },
+
+                    // A completed AoT request has been made and is sitting in the cache.
+                    CacheSlot::Ready(fc, _buffer) => {
+                        match fc.source {
+                            FunctionCallSource::Driver(UpcallId { driver_num: cache_driver_no, subscribe_num: cache_subscribe_no }) => {
+                                debug!("Cache: {:?}, Query: {:?}",
+                                       (cache_driver_no, cache_subscribe_no),
+                                       (req_driver_no, req_subscribe_no));
+                                if mapping == (cache_driver_no, cache_subscribe_no) {
+                                    (true, true)
+                                } else {
+                                    (false, false)
+                                }
+                            },
+
+                            _ => (false, false)
+                        }
+                    }
                 }
             });
+            debug!("Match = {}, ready = {}", matches, ready);
 
-            if matches_cached {
-                self.cached_result.take()
+            if matches && ready {
+                Some(self.cached_result
+                     .take()
+                     .unwrap()
+                     .take_ready_cache())
             } else {
                 None
             }
         } else {
             None
         }
+    }
+
+    pub fn indicate(&self, driver_no: usize, subscribe_no: usize) {
+        self.cached_result.set(CacheSlot::Pending(driver_no, subscribe_no));
     }
 }
 
@@ -155,33 +238,73 @@ impl Process for ThinProcess {
         //
         // We do have to be aware of which syscalls have RW-allowed buffers tied to them so we can
         // let the other entity know.
+        let current_cache_state = self.cached_result.extract();
         match task {
             Task::FunctionCall(ref fc) => match fc.source {
                 FunctionCallSource::Driver(UpcallId { driver_num, subscribe_num }) => {
-                    // debug!("Got result: {:?}", fc);
+                    // debug!("Got result: {:?} (currently {})", fc, match current_cache_state {
+                    //     None => "none",
+                    //     Some(CacheSlot::Pending(_, _)) => "pending",
+                    //     Some(CacheSlot::Requested(_, _, _)) => "requested",
+                    //     Some(CacheSlot::Ready(_, _)) => "ready"
+                    // });
                     match (driver_num, subscribe_num) {
                         // ADC, DMA-driven sampling.
                         (0x00005, 0) => {
-                            self.cached_result.set(CacheReturn {
-                                upcall: *fc,
-                                buffer: Some(unsafe { &ALLOW_BUFFER_1 }),
-                            });
+                            debug!("Successfully cached ADC result.");
+                            match current_cache_state {
+                                None => {
+                                    self.cached_result.set(CacheSlot::Ready(*fc,Some(unsafe { &ALLOW_BUFFER_1 })));
+                                    Ok(())
+                                },
 
-                            Ok(())
+                                Some(CacheSlot::Pending(_driver_no, _subscribe_no)) => {
+                                    self.cached_result.set(CacheSlot::Ready(*fc,Some(unsafe { &ALLOW_BUFFER_1 })));
+                                    Ok(())
+                                },
+
+                                // We can go ahead and hand the result to the process.
+                                Some(CacheSlot::Requested(requesting_process, _driver_no, subscribe_no)) => {
+                                    debug!("Handing result to eager process.");
+                                    requesting_process.enqueue_task(task);
+                                    self.cached_result.clear();
+                                    Ok(())
+                                },
+
+                                // For some reason, the cache slot is ready and we are overwriting it?
+                                _ => { Ok(()) }
+                            }
                         },
 
-                        // Temperature reading.
-                        (0x60000, 0)
-                            | (0x60001, 0) => {
-                                self.cached_result.set(CacheReturn {
-                                    upcall: *fc,
-                                    buffer: None,
-                                });
+                        // Temperature or humidity reading.
+                        (0x60000, 0) | (0x60001, 0) => {
+                            debug!("Successfully cached I2C result.");
+                            match current_cache_state {
+                                None => {
+                                    self.cached_result.set(CacheSlot::Ready(*fc, None));
+                                    Ok(())
+                                },
 
-                                Ok(())
-                            },
+                                Some(CacheSlot::Pending(_driver_no, _subscribe_no)) => {
+                                    self.cached_result.set(CacheSlot::Ready(*fc, None));
+                                    Ok(())
+                                },
 
-                        _ => panic!("Unhandled upcall: {}, {}", driver_num, subscribe_num),
+                                // We can go ahead and hand the result to the process.
+                                Some(CacheSlot::Requested(requesting_process, _driver_no, subscribe_no)) => {
+                                    debug!("Handing result to eager process.");
+                                    requesting_process.enqueue_task(task);
+                                    self.cached_result.clear();
+                                    Ok(())
+                                },
+
+                                // See previous case.
+                                _ => { Ok(()) },
+                            }
+                        }
+
+                        // We do not handle any other syscalls.
+                        _ => panic!(),
                     }
                 },
 

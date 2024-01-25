@@ -159,7 +159,7 @@ impl Kernel {
 
     /// Helper function that moves all non-generic portions of process_map_or
     /// into a non-generic function to reduce code bloat from monomorphization.
-    pub(crate) fn get_process(&self, processid: ProcessId) -> Option<&dyn process::Process> {
+    pub(crate) fn get_process(&self, processid: ProcessId) -> Option<&'static dyn process::Process> {
         // We use the index in the `appid` so we can do a direct lookup.
         // However, we are not guaranteed that the app still exists at that
         // index in the processes array. To avoid additional overhead, we do the
@@ -190,7 +190,7 @@ impl Kernel {
     /// but is in any "stopped" state.
     pub(crate) fn process_map_or<F, R>(&self, default: R, appid: ProcessId, closure: F) -> R
     where
-        F: FnOnce(&dyn process::Process) -> R,
+        F: FnOnce(&'static dyn process::Process) -> R,
     {
         match self.get_process(appid) {
             Some(process) => closure(process),
@@ -202,7 +202,7 @@ impl Kernel {
     /// processes and call the closure on every process that exists.
     pub(crate) fn process_each<F>(&self, mut closure: F)
     where
-        F: FnMut(&dyn process::Process),
+        F: FnMut(&'static dyn process::Process),
     {
         for process in self.processes.iter() {
             match process {
@@ -453,7 +453,7 @@ impl Kernel {
                         .filter_map(|opt_p| *opt_p)
                         .find(|p| p.processid() == pid)
                         .expect("process does not exist anymore"); // Not expecting any crashes, so the PID must be valid.
-                    debug!("BX: {:?}", syscall);
+                    // debug!("BX: {:?}", syscall);
                     self.handle_syscall(resources, process, syscall);
                 }
 
@@ -585,7 +585,7 @@ impl Kernel {
         &self,
         resources: &KR,
         chip: &C,
-        process: &dyn process::Process,
+        process: &'static dyn process::Process,
         ipc: Option<&crate::ipc::IPC<NUM_PROCS, NUM_UPCALLS_IPC>>,
         timeslice_us: Option<u32>,
     ) -> (StoppedExecutingReason, Option<u32>) {
@@ -615,9 +615,14 @@ impl Kernel {
         // it has no more work to do. We break out of this loop if the scheduler
         // no longer wants to execute this process or if it exceeds its
         // timeslice.
+        //
+        // When the batch controller indicates that it is ready to execute on
+        // withheld operations, stop running the process. Continuing to run it
+        // could possibly cause extra operation calls to arrive. Let the kernel
+        // move on to executing operations.
         loop {
             let stop_running = match scheduler_timer.get_remaining_us() {
-                Some(us) => us <= MIN_QUANTA_THRESHOLD_US,
+                Some(us) => us <= MIN_QUANTA_THRESHOLD_US || self.batch_controller.extract().unwrap().state(false) != BatchingState::Batch,
                 None => true,
             };
             if stop_running {
@@ -1110,13 +1115,13 @@ impl Kernel {
                         None => CommandReturn::failure(ErrorCode::NODEVICE),
                     });
 
+                let res = SyscallReturn::from_command_return(cres);
+
                 if driver_number > 0 {
                     // Output command syscalls (also with timestamp).
-                    // debug!("{:?}", &syscall);
+                    debug!("CALL: ({}, {})", driver_number, subdriver_number);
                     // debug!("@{} {:?}", unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) }, &syscall);
                 }
-
-                let res = SyscallReturn::from_command_return(cres);
 
                 if config::CONFIG.trace_syscalls {
                     debug!(

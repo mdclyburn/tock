@@ -22,6 +22,7 @@ use kernel::process::{
     Process,
     ProcessId
 };
+use kernel::process_thin::CacheReturn;
 use kernel::static_init;
 use kernel::syscall::Syscall;
 use kernel::process::Task;
@@ -1161,7 +1162,7 @@ impl PrefetchTester {
 }
 
 impl BatchController for PrefetchTester {
-    fn check_enqueue<'a>(&self, invoking_process: &dyn Process, syscall: &'a Syscall) -> QueueResult<'a> {
+    fn check_enqueue<'a>(&self, invoking_process: &'static dyn Process, syscall: &'a Syscall) -> QueueResult<'a> {
         match syscall {
             // Driver checks do not need queueing.
             Syscall::Command { driver_number,
@@ -1174,7 +1175,7 @@ impl BatchController for PrefetchTester {
                                arg1 } => {
                 // Check the syscall cache.
                 let cache_check_result =  self.shadow_process.check_syscall_cache(
-                    *driver_number, *subdriver_number, *arg0, *arg1);
+                    invoking_process, *driver_number, *subdriver_number, *arg0, *arg1);
                 if let Some(cached_return) = cache_check_result {
                     // Get this result back to the process.
                 }
@@ -1378,7 +1379,7 @@ impl PrefetchController {
                 match pid.get() {
                     // Loudness.
                     1 => {
-                        kernel::debug!("Executing ADC AoT.");
+                        // kernel::debug!("Executing ADC AoT.");
 
                         let (allow_address, allow_size) = self.shadow_process.reserve_buffer(1024)
                             .unwrap();
@@ -1399,21 +1400,26 @@ impl PrefetchController {
 
                         self.extra_syscalls[0].set(syscall_buffer_allow);
                         self.extra_syscalls[1].set(syscall_sample_command);
+
+                        self.shadow_process.indicate(0x00005, 0x0);
                     },
 
                     2 => {
-                        kernel::debug!("Executing I2C AoT.");
+                        // kernel::debug!("Executing I2C AoT.");
 
                         self.extra_syscalls[0].set(Syscall::Command {
                             driver_number: 0x60001,
                             subdriver_number: 0x1,
                             arg0: 0,
                             arg1: 0,
-                        })
+                        });
+
+                        self.shadow_process.indicate(0x60001, 0x0);
                     },
 
                     _ => { return; },
                 };
+                kernel::debug!("Executing AoT: {:?}", self.extra_syscalls[0].extract().unwrap());
 
                 // Set the batch to close sooner than normal.
                 let t_midpoint = (core::cmp::max(self.window_duration_ticks, dt.get())
@@ -1428,7 +1434,7 @@ impl PrefetchController {
 }
 
 impl BatchController for PrefetchController {
-    fn check_enqueue<'a>(&self, invoking_process: &dyn Process, syscall: &'a Syscall) -> QueueResult<'a> {
+    fn check_enqueue<'a>(&self, invoking_process: &'static dyn Process, syscall: &'a Syscall) -> QueueResult<'a> {
         match syscall {
             // Driver checks do not need queueing.
             Syscall::Command { driver_number: _, subdriver_number: 0, .. } =>
@@ -1485,50 +1491,59 @@ impl BatchController for PrefetchController {
             // All other commands may be batched or end up closing the batch if it is ready.
             Syscall::Command { driver_number, subdriver_number, arg0, arg1 } => {
                 // First, see if we executed this syscall ahead of time.
-                if let Some(aot_result) = self.shadow_process.check_syscall_cache(*driver_number, *subdriver_number, *arg0, *arg1) {
-                    kernel::debug!("Using AoT result.");
+                if let Some(cached_result) = self.shadow_process.check_syscall_cache(invoking_process, *driver_number, *subdriver_number, *arg0, *arg1) {
+                    match cached_result {
+                        CacheReturn::Pending => {
+                            kernel::debug!("Eager process, result in cache soon.");
+                            return QueueResult::Queued;
+                        },
 
-                    // ENG/DSN: getting the buffer back to the process, if necessary.
-                    // ENG/DSN: setting the callback fn() pointer correctly to the process' pointer.
-                    //   It should be simpler, streamlined to know this information.
+                        CacheReturn::Present(fc, buffer) => {
+                            kernel::debug!("Using AoT result.");
 
-                    // Get the subscription no., allow no. for the callback.
-                    let (subscribe_no, opt_allow_no) = match (driver_number, subdriver_number) {
-                        (0x00005, 3) => (0, Some(0)),
-                        (0x60000, 1) => (0, None),
-                        (0x60001, 1) => (0, None),
-                        _ => unimplemented!(),
-                    };
-                    // And then use that subscription no. to discover what function the process currently uses.
-                    let (process_upcall_fn, app_data) = kernel::grant::subscription(invoking_process, *driver_number, subscribe_no)
-                        .unwrap(); // We assume that all applications set this to something non-null.
+                            // ENG/DSN: getting the buffer back to the process, if necessary.
+                            // ENG/DSN: setting the callback fn() pointer correctly to the process' pointer.
+                            //   It should be simpler, streamlined to know this information.
 
-                    // TODO: copy buffer if necessary.
-                    if let Some(rw_allow_no) = opt_allow_no {
-                        let dst_buffer_addr = self.rw_allow_buffers.iter()
-                            .find(|optc| optc.map_or(false, |rw_buffer| rw_buffer.0 == (*driver_number, rw_allow_no)))
-                            .unwrap() // Programming error, if this fails; means we did not track RW buffers properly.
-                            .extract()
-                            .unwrap() // Guaranteed to exist from previous find.
-                            .1;
-                        unsafe { // We could manipulate the size of the AoT buffer to match the destination.
-                            let src_buffer = aot_result.buffer.unwrap();
-                            core::ptr::copy(src_buffer.as_ptr(),
-                                            dst_buffer_addr,
-                                            src_buffer.len()); // Use the length of the AoT buffer, which was previously sized appropriately.
+                            // Get the subscription no., allow no. for the callback.
+                            let (subscribe_no, opt_allow_no) = match (driver_number, subdriver_number) {
+                                (0x00005, 3) => (0, Some(0)),
+                                (0x60000, 1) => (0, None),
+                                (0x60001, 1) => (0, None),
+                                _ => unimplemented!(),
+                            };
+                            // And then use that subscription no. to discover what function the process currently uses.
+                            let (process_upcall_fn, app_data) = kernel::grant::subscription(invoking_process, *driver_number, subscribe_no)
+                                .unwrap(); // We assume that all applications set this to something non-null.
+
+                            // TODO: copy buffer if necessary.
+                            if let Some(rw_allow_no) = opt_allow_no {
+                                let dst_buffer_addr = self.rw_allow_buffers.iter()
+                                    .find(|optc| optc.map_or(false, |rw_buffer| rw_buffer.0 == (*driver_number, rw_allow_no)))
+                                    .unwrap() // Programming error, if this fails; means we did not track RW buffers properly.
+                                    .extract()
+                                    .unwrap() // Guaranteed to exist from previous find.
+                                    .1;
+                                unsafe { // We could manipulate the size of the AoT buffer to match the destination.
+                                    let src_buffer = buffer.unwrap();
+                                    core::ptr::copy(src_buffer.as_ptr(),
+                                                    dst_buffer_addr,
+                                                    src_buffer.len()); // Use the length of the AoT buffer, which was previously sized appropriately.
+                                }
+                            }
+
+                            // Place the call on the process' task queue to execute.
+                            invoking_process.enqueue_task(
+                                Task::FunctionCall(
+                                    FunctionCall {
+                                        pc: process_upcall_fn.unwrap().as_ptr() as usize,
+                                        ..fc
+                                    }));
+                            kernel::debug!("Delivered AoT result.");
+
+                            return QueueResult::AoT;
                         }
                     }
-
-                    // Place the call on the process' task queue to execute.
-                    invoking_process.enqueue_task(
-                        Task::FunctionCall(
-                            FunctionCall {
-                                pc: process_upcall_fn.unwrap().as_ptr() as usize,
-                                ..aot_result.upcall
-                            }));
-                    kernel::debug!("Delivered AoT result.");
-
-                    return QueueResult::AoT;
                 }
 
                 if self.pending_syscall.is_none() {
@@ -1539,21 +1554,26 @@ impl BatchController for PrefetchController {
                                               PendingSyscall::new(invoking_process.processid(), *syscall)));
 
                     // Consider a command to execute ahead of time.
-                    self.forward_batch();
-                    // If forward_batch() created an AoT batch, then it would have also opened the batch window
-                    // (based on the timing of the next task).
-                    // But if it did not, then we manually open it here.
-                    if self.extra_syscalls[0].is_none() {
-                        // kernel::debug!("Forward batch did not configure.");
-                        self.open_batch_window(self.window_duration_ticks);
+                    if self.shadow_process.cache_space_ready() {
+                        self.forward_batch();
+                        // If forward_batch() created an AoT batch, then it would have also opened the batch window
+                        // (based on the timing of the next task).
+                        // But if it did not, then we manually open it here.
+                        if self.extra_syscalls[0].is_none() {
+                            // kernel::debug!("Forward batch did not configure.");
+                            self.open_batch_window(self.window_duration_ticks);
+                        } else {
+                            kernel::debug!("Forward batch configured.");
+                        }
                     } else {
-                        kernel::debug!("Forward batch configured; execute.");
+                        self.open_batch_window(self.window_duration_ticks);
                     }
 
                     QueueResult::Queued
                 } else {
                     // Since there is a syscall already waiting to execute, run this and the pending syscall.
                     // Switch states to execute the pending syscall.
+                    kernel::debug!("--- Batch window expired (early).");
                     self.execute_on_batch();
                     QueueResult::Run(syscall)
                 }
@@ -1600,6 +1620,7 @@ impl BatchController for PrefetchController {
             // Return one of these if there is something present in the cell.
             for optc_syscall in self.extra_syscalls.iter() {
                 if optc_syscall.is_some() {
+                    kernel::debug!("Dequeueing extra: {:?}", optc_syscall.extract());
                     return optc_syscall
                         .take()
                         .map(|s| (self.shadow_process.processid(), s));
@@ -1641,7 +1662,7 @@ impl AlarmClient for PrefetchController {
     /// the controller does not set the alarm.
     /// It instead waits for the next alarm to fire before considering setting the alarm hardware for the batch window.
     fn alarm(&self) {
-        // kernel::debug!("--- Batch window expired.");
+        kernel::debug!("--- Batch window expired.");
         // Execute the batch.
         // The next step is to run upcalls (and possibly collect their syscalls).
         self.batching_state.set(BatchingState::RunSyscalls);

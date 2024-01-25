@@ -30,6 +30,8 @@ pub enum QueueResult<'a> {
     Queued,
     /// Syscall was not added to the batch and should be executed on immediately.
     Run(&'a Syscall),
+    /// Syscall was executed ahead of time, the result passed on to the invoking process.
+    AoT,
     /// Run the syscall alongside one or more other syscalls.
     ///
     /// Use this only for testing and debugging.
@@ -57,7 +59,7 @@ pub enum BatchingState {
 /// A batching strategy.
 pub trait BatchController {
     /// Possibly check a syscall into the batch.
-    fn check_enqueue<'a>(&self, invoking_process: &dyn Process, syscall: &'a Syscall) -> QueueResult<'a>;
+    fn check_enqueue<'a>(&self, invoking_process: &'static dyn Process, syscall: &'a Syscall) -> QueueResult<'a>;
 
     /// Remove a syscall from the queue.
     fn dequeue_syscall(&self) -> Option<(ProcessId, Syscall)>;
