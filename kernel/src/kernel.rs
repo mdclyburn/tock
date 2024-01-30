@@ -1119,7 +1119,11 @@ impl Kernel {
 
                 if driver_number > 0 {
                     // Output command syscalls (also with timestamp).
-                    debug!("CALL: ({}, {})", driver_number, subdriver_number);
+                    debug!("{}: CALL: ({}, {}) -> {:?}",
+                           unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) },
+                           driver_number,
+                           subdriver_number,
+                           res);
                     // debug!("@{} {:?}", unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) }, &syscall);
                 }
 

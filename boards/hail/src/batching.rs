@@ -1502,6 +1502,7 @@ impl BatchController for PrefetchController {
 
             // All other commands may be batched or end up closing the batch if it is ready.
             Syscall::Command { driver_number, subdriver_number, arg0, arg1 } => {
+                kernel::debug!("{}: CHECK: {:?}", unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) }, syscall);
                 // First, see if we executed this syscall ahead of time.
                 if let Some(cached_result) = self.shadow_process.check_syscall_cache(invoking_process, *driver_number, *subdriver_number, *arg0, *arg1) {
                     match cached_result {
@@ -1576,7 +1577,7 @@ impl BatchController for PrefetchController {
                             // kernel::debug!("Forward batch did not configure.");
                             self.open_batch_window(self.window_duration_ticks);
                         } else {
-                            kernel::debug!("Forward batch configured.");
+                            // kernel::debug!("Forward batch configured.");
                         }
                     } else {
                         self.open_batch_window(self.window_duration_ticks);

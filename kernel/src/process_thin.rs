@@ -154,15 +154,15 @@ impl ThinProcess {
         // if there was, then check if there is a result for it in the cache.
         if let Some((req_driver_no, req_subscribe_no)) = mapping {
             let mapping = mapping.unwrap();
-            debug!("Checking cache for {:?}", mapping);
-            debug!("Cache {}", match self.cached_result.extract() {
-                None => "none",
-                Some(CacheSlot::Pending(_, _)) => "pending",
-                Some(CacheSlot::Requested(_, _, _)) => "requested",
-                Some(CacheSlot::Ready(_, _)) => "ready"
-            });
+            // debug!("Checking cache for {:?}", mapping);
+            // debug!("Cache {}", match self.cached_result.extract() {
+            //     None => "none",
+            //     Some(CacheSlot::Pending(_, _)) => "pending",
+            //     Some(CacheSlot::Requested(_, _, _)) => "requested",
+            //     Some(CacheSlot::Ready(_, _)) => "ready"
+            // });
             let (matches, ready) = self.cached_result.map_or((false, false), |cs| {
-                debug!("A result is currently cached...");
+                // debug!("A result is currently cached...");
                 match cs {
                     // A process has asked to execute an operation that the AoT system has already dispatched.
                     // We take note of the process here by switching the slot's state to Requested.
