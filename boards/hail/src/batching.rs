@@ -1421,18 +1421,19 @@ impl PrefetchController {
                     _ => { return; },
                 };
 
-                kernel::debug!("Set AoT for PID {}", pid.get());
+                // kernel::debug!("Set AoT for PID {}", pid.get());
+                kernel::debug!("{}: CKFWD: {:?}",
+                               unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) },
+                               self.extra_syscalls[0].extract().unwrap());
 
                 // Set the batch to close sooner than normal.
-                // let t_midpoint = (core::cmp::max(self.window_duration_ticks, dt.get())
-                //                   - core::cmp::min(self.window_duration_ticks, dt.get())) / 2;
                 let t_midpoint = core::cmp::min(self.window_duration_ticks, dt.get()) / 2;
                 // Make sure we are sure about when batch windows are open.
                 assert!(self.batch_alarm.is_armed() == false);
                 self.open_batch_window(t_midpoint);
-                kernel::debug!("{}: Forward batch @ {}",
-                               unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) },
-                               t_midpoint);
+                // kernel::debug!("{}: Forward batch @ {}",
+                //                unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) },
+                //                t_midpoint);
             }
         }
     }
@@ -1502,17 +1503,24 @@ impl BatchController for PrefetchController {
 
             // All other commands may be batched or end up closing the batch if it is ready.
             Syscall::Command { driver_number, subdriver_number, arg0, arg1 } => {
-                kernel::debug!("{}: CHECK: {:?}", unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) }, syscall);
+                // kernel::debug!("{}: CHECK: {:?}", unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) }, syscall);
                 // First, see if we executed this syscall ahead of time.
                 if let Some(cached_result) = self.shadow_process.check_syscall_cache(invoking_process, *driver_number, *subdriver_number, *arg0, *arg1) {
                     match cached_result {
+                        // The shadow process is actually currently executing this very syscall,
+                        // so the result is not ready. The cache check registered invoking_process
+                        // as waiting for it, so it will get the result as soon as it is ready.
                         CacheReturn::Pending => {
-                            kernel::debug!("Eager process, result in cache soon.");
+                            kernel::debug!("{}: CKPND: {:?}", unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) }, syscall);
+                            // kernel::debug!("Eager process, result in cache soon.");
                             return QueueResult::Queued;
                         },
 
+                        // The shadow process previously and recently executed this very syscall,
+                        // and the result is ready and was handed back to us.
                         CacheReturn::Present(fc, buffer) => {
-                            kernel::debug!("Using AoT result.");
+                            // kernel::debug!("Using AoT result.");
+                            kernel::debug!("{}: CKPRE: {:?}", unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) }, syscall);
 
                             // ENG/DSN: getting the buffer back to the process, if necessary.
                             // ENG/DSN: setting the callback fn() pointer correctly to the process' pointer.
@@ -1552,7 +1560,7 @@ impl BatchController for PrefetchController {
                                         pc: process_upcall_fn.unwrap().as_ptr() as usize,
                                         ..fc
                                     }));
-                            kernel::debug!("Delivered AoT result.");
+                            // kernel::debug!("Delivered AoT result.");
 
                             return QueueResult::AoT;
                         }
@@ -1564,6 +1572,7 @@ impl BatchController for PrefetchController {
                     // Is it guaranteed that we are not in a batch window, then?
 
                     // Withhold the app-requested syscall.
+                    kernel::debug!("{}: CKQUE: {:?}", unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) }, syscall);
                     self.pending_syscall.set((self.batch_alarm.now().into_usize(),
                                               PendingSyscall::new(invoking_process.processid(), *syscall)));
 
@@ -1587,6 +1596,9 @@ impl BatchController for PrefetchController {
                 } else {
                     // Since there is a syscall already waiting to execute, run this and the pending syscall.
                     // Switch states to execute the pending syscall.
+                    kernel::debug!("{}: CHRUN: {:?}",
+                                   unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) },
+                                   syscall);
                     kernel::debug!("--- Batch window expired early (@{}).",
                                    unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) });
                     self.execute_on_batch();
@@ -1635,7 +1647,7 @@ impl BatchController for PrefetchController {
             // Return one of these if there is something present in the cell.
             for optc_syscall in self.extra_syscalls.iter() {
                 if optc_syscall.is_some() {
-                    kernel::debug!("Dequeueing AoT extra.");
+                    // kernel::debug!("Dequeueing AoT extra.");
                     return optc_syscall
                         .take()
                         .map(|s| (self.shadow_process.processid(), s));
@@ -1657,6 +1669,7 @@ impl BatchController for PrefetchController {
     }
 
     fn notify_syscalls_completed(&self) {
+        kernel::debug!("--- Batch execution complete.");
         self.batching_state.set(BatchingState::Batch);
     }
 

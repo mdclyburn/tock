@@ -383,6 +383,7 @@ impl<'a, A: hil::adc::Adc + hil::adc::AdcHighSpeed> AdcDedicated<'a, A> {
                                 app.using_app_buf1.set(true);
                                 app.samples_remaining.set(request_len - len1 - len2);
                                 app.samples_outstanding.set(len1 + len2);
+                                kernel::debug!("{} ADC: start", unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) });
                                 self.adc
                                     .sample_highspeed(chan, frequency, buf1, len1, buf2, len2)
                                     .map_or_else(
@@ -998,6 +999,7 @@ impl<A: hil::adc::Adc + hil::adc::AdcHighSpeed> hil::adc::HighSpeedClient for Ad
                         };
                         // if the app_buffer is filled, perform callback
                         if perform_callback {
+                            kernel::debug!("{} ADC: done", unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) });
                             // actually schedule the callback
                             let len_chan = ((buf_len / 2) << 8) | (self.channel.get() & 0xFF);
                             upcalls

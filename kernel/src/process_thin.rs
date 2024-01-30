@@ -203,7 +203,7 @@ impl ThinProcess {
                     }
                 }
             });
-            debug!("Match = {}, ready = {}", matches, ready);
+            // debug!("Match = {}, ready = {}", matches, ready);
 
             if matches && ready {
                 Some(self.cached_result
@@ -219,6 +219,7 @@ impl ThinProcess {
     }
 
     pub fn indicate(&self, driver_no: usize, subscribe_no: usize) {
+        debug!("{}: HPEND: ({}, {})", unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) }, driver_no, subscribe_no);
         self.cached_result.set(CacheSlot::Pending(driver_no, subscribe_no));
     }
 }
@@ -248,21 +249,23 @@ impl Process for ThinProcess {
                     match (driver_num, subscribe_num) {
                         // ADC, DMA-driven sampling.
                         (0x00005, 0) => {
-                            debug!("Successfully cached ADC result.");
+                            // debug!("Successfully cached ADC result.");
                             match current_cache_state {
                                 None => {
+                                    debug!("{}: HREDY: ({}, {})", unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) }, driver_num, subscribe_num);
                                     self.cached_result.set(CacheSlot::Ready(*fc,Some(unsafe { &ALLOW_BUFFER_1 })));
                                     Ok(())
                                 },
 
-                                Some(CacheSlot::Pending(_driver_no, _subscribe_no)) => {
+                                Some(CacheSlot::Pending(driver_no, subscribe_no)) => {
+                                    debug!("{}: HREDY: ({}, {})", unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) }, driver_no, subscribe_no);
                                     self.cached_result.set(CacheSlot::Ready(*fc,Some(unsafe { &ALLOW_BUFFER_1 })));
                                     Ok(())
                                 },
 
                                 // We can go ahead and hand the result to the process.
-                                Some(CacheSlot::Requested(requesting_process, _driver_no, subscribe_no)) => {
-                                    debug!("Handing result to eager process.");
+                                Some(CacheSlot::Requested(requesting_process, driver_no, subscribe_no)) => {
+                                    debug!("{}: HRDCB: ({}, {})", unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) }, driver_no, subscribe_no);
                                     requesting_process.enqueue_task(task);
                                     self.cached_result.clear();
                                     Ok(())
@@ -275,21 +278,23 @@ impl Process for ThinProcess {
 
                         // Temperature or humidity reading.
                         (0x60000, 0) | (0x60001, 0) => {
-                            debug!("Successfully cached I2C result.");
+                            // debug!("Successfully cached I2C result.");
                             match current_cache_state {
                                 None => {
+                                    debug!("{}: HREDY: ({}, {})", unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) }, driver_num, subscribe_num);
                                     self.cached_result.set(CacheSlot::Ready(*fc, None));
                                     Ok(())
                                 },
 
-                                Some(CacheSlot::Pending(_driver_no, _subscribe_no)) => {
+                                Some(CacheSlot::Pending(driver_no, subscribe_no)) => {
+                                    debug!("{}: HREDY: ({}, {})", unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) }, driver_no, subscribe_no);
                                     self.cached_result.set(CacheSlot::Ready(*fc, None));
                                     Ok(())
                                 },
 
                                 // We can go ahead and hand the result to the process.
-                                Some(CacheSlot::Requested(requesting_process, _driver_no, subscribe_no)) => {
-                                    debug!("Handing result to eager process.");
+                                Some(CacheSlot::Requested(requesting_process, driver_no, subscribe_no)) => {
+                                    debug!("{}: HRDCB: ({}, {})", unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) }, driver_no, subscribe_no);
                                     requesting_process.enqueue_task(task);
                                     self.cached_result.clear();
                                     Ok(())
