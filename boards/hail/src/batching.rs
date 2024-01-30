@@ -1293,8 +1293,8 @@ impl PrefetchController {
         // there is no need to open it again.
         if !self.batch_alarm.is_armed() {
             let now = self.batch_alarm.now();
-            self.batch_alarm.set_alarm(now, time::Ticks32::from(self.window_duration_ticks as u32));
-            // kernel::debug!("--- Batch window open.");
+            self.batch_alarm.set_alarm(now, time::Ticks32::from(window_ticks as u32));
+            kernel::debug!("--- Batch window open ({}, {}).", now.into_usize(), window_ticks);
         }
     }
 
@@ -1360,7 +1360,10 @@ impl PrefetchController {
         // Find the closest task to expiration.
         // That will be the task to forward-batch.
         if let Some((pid, dt)) = self.next_expiring_task() {
-            kernel::debug!("Next expiring: {} in {} tcs.", pid.get(), dt.get());
+            // kernel::debug!("{}: Next expiring: {} in {} tcs.",
+            //                unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) },
+            //                pid.get(),
+            //                dt.get());
             // Check timing requirements here.
             // - The task must be set to fire within batch duration divided by two to balance delay and staleness.
             // There are other possible requirements that we do not consider here (see notes).
@@ -1379,7 +1382,6 @@ impl PrefetchController {
                 match pid.get() {
                     // Loudness.
                     1 => {
-                        // kernel::debug!("Executing ADC AoT.");
 
                         let (allow_address, allow_size) = self.shadow_process.reserve_buffer(1024)
                             .unwrap();
@@ -1405,7 +1407,6 @@ impl PrefetchController {
                     },
 
                     2 => {
-                        // kernel::debug!("Executing I2C AoT.");
 
                         self.extra_syscalls[0].set(Syscall::Command {
                             driver_number: 0x60001,
@@ -1419,15 +1420,19 @@ impl PrefetchController {
 
                     _ => { return; },
                 };
-                kernel::debug!("Executing AoT: {:?}", self.extra_syscalls[0].extract().unwrap());
+
+                kernel::debug!("Set AoT for PID {}", pid.get());
 
                 // Set the batch to close sooner than normal.
-                let t_midpoint = (core::cmp::max(self.window_duration_ticks, dt.get())
-                                  - core::cmp::min(self.window_duration_ticks, dt.get())) / 2;
+                // let t_midpoint = (core::cmp::max(self.window_duration_ticks, dt.get())
+                //                   - core::cmp::min(self.window_duration_ticks, dt.get())) / 2;
+                let t_midpoint = core::cmp::min(self.window_duration_ticks, dt.get()) / 2;
                 // Make sure we are sure about when batch windows are open.
                 assert!(self.batch_alarm.is_armed() == false);
                 self.open_batch_window(t_midpoint);
-                // kernel::debug!("Forward batch @ {}", t_midpoint);
+                kernel::debug!("{}: Forward batch @ {}",
+                               unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) },
+                               t_midpoint);
             }
         }
     }
@@ -1459,13 +1464,17 @@ impl BatchController for PrefetchController {
 
                     // Display application not eligible.
                     if invoking_pid != 0 {
+                        self.update_schedule();
                         let matched_entry = self.schedule.iter()
                             .find(|(pid, _dt)| pid.get() == invoking_pid);
-                        self.update_schedule();
-                        if let Some((_pid, dt)) = matched_entry {
+                        if let Some((pid, dt)) = matched_entry {
                             // The application's schedule is currently tracked.
                             // Update the existing dt value with the new, reset value.
                             dt.set(*syscall_dt);
+                            // kernel::debug!("EU: ({}, {} [@{}])",
+                            //                pid.get(),
+                            //                dt.get(),
+                            //                self.batch_alarm.now().into_usize() + dt.get());
                         } else {
                             // Find an empty slot.
                             let empty_entry = self.schedule.iter()
@@ -1473,13 +1482,16 @@ impl BatchController for PrefetchController {
                                 .unwrap(); // If this does not work, then there are not enough entries in `schedule`.
                             empty_entry.0.set(invoking_pid);
                             empty_entry.1.set(*syscall_dt);
-                            // kernel::debug!("Set empty entry.");
+                            // kernel::debug!("EEU: ({}, {} [@{}])",
+                            //                empty_entry.0.get(),
+                            //                empty_entry.1.get(),
+                            //                self.batch_alarm.now().into_usize() + empty_entry.1.get());
                         }
 
                         // kernel::debug!("Schedule:");
                         // for i in 0..self.schedule.len() {
                         //     let (pid, dt) = &self.schedule[i];
-                        //     kernel::debug!("{} @{}", pid.get(), dt.get());
+                        //     kernel::debug!("{} @{}", pid.get(), self.batch_alarm.now().into_usize() + dt.get());
                         // }
                     }
                 }
@@ -1548,6 +1560,7 @@ impl BatchController for PrefetchController {
 
                 if self.pending_syscall.is_none() {
                     // There is not currently a syscall waiting to execute.
+                    // Is it guaranteed that we are not in a batch window, then?
 
                     // Withhold the app-requested syscall.
                     self.pending_syscall.set((self.batch_alarm.now().into_usize(),
@@ -1573,7 +1586,8 @@ impl BatchController for PrefetchController {
                 } else {
                     // Since there is a syscall already waiting to execute, run this and the pending syscall.
                     // Switch states to execute the pending syscall.
-                    kernel::debug!("--- Batch window expired (early).");
+                    kernel::debug!("--- Batch window expired early (@{}).",
+                                   unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) });
                     self.execute_on_batch();
                     QueueResult::Run(syscall)
                 }
@@ -1620,7 +1634,7 @@ impl BatchController for PrefetchController {
             // Return one of these if there is something present in the cell.
             for optc_syscall in self.extra_syscalls.iter() {
                 if optc_syscall.is_some() {
-                    kernel::debug!("Dequeueing extra: {:?}", optc_syscall.extract());
+                    kernel::debug!("Dequeueing AoT extra.");
                     return optc_syscall
                         .take()
                         .map(|s| (self.shadow_process.processid(), s));

@@ -191,9 +191,6 @@ impl ThinProcess {
                     CacheSlot::Ready(fc, _buffer) => {
                         match fc.source {
                             FunctionCallSource::Driver(UpcallId { driver_num: cache_driver_no, subscribe_num: cache_subscribe_no }) => {
-                                debug!("Cache: {:?}, Query: {:?}",
-                                       (cache_driver_no, cache_subscribe_no),
-                                       (req_driver_no, req_subscribe_no));
                                 if mapping == (cache_driver_no, cache_subscribe_no) {
                                     (true, true)
                                 } else {
