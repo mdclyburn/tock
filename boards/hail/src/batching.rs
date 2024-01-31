@@ -1534,8 +1534,7 @@ impl BatchController for PrefetchController {
                                 _ => unimplemented!(),
                             };
                             // And then use that subscription no. to discover what function the process currently uses.
-                            let (process_upcall_fn, app_data) = kernel::grant::subscription(invoking_process, *driver_number, subscribe_no)
-                                .unwrap(); // We assume that all applications set this to something non-null.
+                            let (process_upcall_fn, app_data) = kernel::grant::subscription(invoking_process, *driver_number, subscribe_no);
 
                             // TODO: copy buffer if necessary.
                             if let Some(rw_allow_no) = opt_allow_no {
@@ -1572,7 +1571,10 @@ impl BatchController for PrefetchController {
                     // Is it guaranteed that we are not in a batch window, then?
 
                     // Withhold the app-requested syscall.
-                    kernel::debug!("{}: CKQUE: {:?}", unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) }, syscall);
+                    kernel::debug!("{}: CKQUE: ({}, {})",
+                                   unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) },
+                                   driver_number,
+                                   subdriver_number);
                     self.pending_syscall.set((self.batch_alarm.now().into_usize(),
                                               PendingSyscall::new(invoking_process.processid(), *syscall)));
 

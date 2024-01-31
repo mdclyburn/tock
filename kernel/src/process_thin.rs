@@ -5,6 +5,7 @@ use crate::debug;
 use crate::kernel::Kernel;
 use crate::platform::mpu::Region;
 use crate::errorcode::ErrorCode;
+use crate::grant;
 use crate::grant::SavedUpcall;
 use crate::process::{
     Error,
@@ -266,8 +267,23 @@ impl Process for ThinProcess {
                                 // We can go ahead and hand the result to the process.
                                 Some(CacheSlot::Requested(requesting_process, driver_no, subscribe_no)) => {
                                     debug!("{}: HRDCB: ({}, {})", unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) }, driver_no, subscribe_no);
-                                    requesting_process.enqueue_task(task);
+                                    // Rewrite the PC so the upcall goes to the process's callback
+                                    // and not the dummy callback here. When the requesting process
+                                    // does not specify one, we use the __do_not_call() function,
+                                    // which will never return. The application will hang.
+                                    let (opt_fn_ptr, _data) = grant::subscription(requesting_process, driver_no, subscribe_no);
+                                    let fn_ptr = opt_fn_ptr.unwrap_or(unsafe { NonNull::new_unchecked(__do_not_call as *mut()) });
+                                    let _ = requesting_process.enqueue_task(match task {
+                                        Task::FunctionCall(fc) => Task::FunctionCall(FunctionCall {
+                                            pc: fn_ptr.as_ptr() as usize,
+                                            ..fc
+                                        }),
+
+                                        _ => panic!(), // There should always be a function call to pass.
+                                    }).unwrap();
+
                                     self.cached_result.clear();
+
                                     Ok(())
                                 },
 

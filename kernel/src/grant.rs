@@ -339,7 +339,7 @@ pub(crate) fn subscribe(
 pub fn subscription(
     process: &dyn Process,
     driver_num: usize,
-    subscribe_num: usize) -> Option<(Option<NonNull<()>>, usize)>
+    subscribe_num: usize) -> (Option<NonNull<()>>, usize)
 {
     let fake_upcall = Upcall {
         process_id: process.processid(),
@@ -361,7 +361,7 @@ pub fn subscription(
         .ok()
         .unwrap();
 
-    Some((fn_ptr, appdata))
+    (fn_ptr, appdata)
 }
 
 /// An instance of a grant allocated for a particular process.
