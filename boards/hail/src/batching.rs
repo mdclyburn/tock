@@ -1294,7 +1294,7 @@ impl PrefetchController {
         if !self.batch_alarm.is_armed() {
             let now = self.batch_alarm.now();
             self.batch_alarm.set_alarm(now, time::Ticks32::from(window_ticks as u32));
-            kernel::debug!("--- Batch window open ({}, {}).", now.into_usize(), window_ticks);
+            // kernel::debug!("--- Batch window open ({}, {}).", now.into_usize(), window_ticks);
         }
     }
 
@@ -1383,7 +1383,7 @@ impl PrefetchController {
                     // Loudness.
                     1 => {
 
-                        let (allow_address, allow_size) = self.shadow_process.reserve_buffer(1024)
+                        let (allow_address, allow_size) = self.shadow_process.reserve_buffer(128)
                             .unwrap();
 
                         let syscall_buffer_allow = Syscall::ReadWriteAllow {
@@ -1422,9 +1422,9 @@ impl PrefetchController {
                 };
 
                 // kernel::debug!("Set AoT for PID {}", pid.get());
-                kernel::debug!("{}: CKFWD: {:?}",
-                               unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) },
-                               self.extra_syscalls[0].extract().unwrap());
+                // kernel::debug!("{}: CKFWD: {:?}",
+                //                unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) },
+                //                self.extra_syscalls[0].extract().unwrap());
 
                 // Set the batch to close sooner than normal.
                 let t_midpoint = core::cmp::min(self.window_duration_ticks, dt.get()) / 2;
@@ -1511,7 +1511,7 @@ impl BatchController for PrefetchController {
                         // so the result is not ready. The cache check registered invoking_process
                         // as waiting for it, so it will get the result as soon as it is ready.
                         CacheReturn::Pending => {
-                            kernel::debug!("{}: CKPND: {:?}", unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) }, syscall);
+                            // kernel::debug!("{}: CKPND: {:?}", unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) }, syscall);
                             // kernel::debug!("Eager process, result in cache soon.");
                             return QueueResult::Queued;
                         },
@@ -1520,7 +1520,7 @@ impl BatchController for PrefetchController {
                         // and the result is ready and was handed back to us.
                         CacheReturn::Present(fc, buffer) => {
                             // kernel::debug!("Using AoT result.");
-                            kernel::debug!("{}: CKPRE: {:?}", unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) }, syscall);
+                            // kernel::debug!("{}: CKPRE: {:?}", unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) }, syscall);
 
                             // ENG/DSN: getting the buffer back to the process, if necessary.
                             // ENG/DSN: setting the callback fn() pointer correctly to the process' pointer.
@@ -1571,10 +1571,10 @@ impl BatchController for PrefetchController {
                     // Is it guaranteed that we are not in a batch window, then?
 
                     // Withhold the app-requested syscall.
-                    kernel::debug!("{}: CKQUE: ({}, {})",
-                                   unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) },
-                                   driver_number,
-                                   subdriver_number);
+                    // kernel::debug!("{}: CKQUE: ({}, {})",
+                    //                unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) },
+                    //                driver_number,
+                    //                subdriver_number);
                     self.pending_syscall.set((self.batch_alarm.now().into_usize(),
                                               PendingSyscall::new(invoking_process.processid(), *syscall)));
 
@@ -1598,11 +1598,11 @@ impl BatchController for PrefetchController {
                 } else {
                     // Since there is a syscall already waiting to execute, run this and the pending syscall.
                     // Switch states to execute the pending syscall.
-                    kernel::debug!("{}: CHRUN: {:?}",
-                                   unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) },
-                                   syscall);
-                    kernel::debug!("--- Batch window expired early (@{}).",
-                                   unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) });
+                    // kernel::debug!("{}: CHRUN: {:?}",
+                    //                unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) },
+                    //                syscall);
+                    // kernel::debug!("--- Batch window expired early (@{}).",
+                    //                unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) });
                     self.execute_on_batch();
                     QueueResult::Run(syscall)
                 }
@@ -1671,7 +1671,7 @@ impl BatchController for PrefetchController {
     }
 
     fn notify_syscalls_completed(&self) {
-        kernel::debug!("--- Batch execution complete.");
+        // kernel::debug!("--- Batch execution complete.");
         self.batching_state.set(BatchingState::Batch);
     }
 
@@ -1692,7 +1692,7 @@ impl AlarmClient for PrefetchController {
     /// the controller does not set the alarm.
     /// It instead waits for the next alarm to fire before considering setting the alarm hardware for the batch window.
     fn alarm(&self) {
-        kernel::debug!("--- Batch window expired.");
+        // kernel::debug!("--- Batch window expired.");
         // Execute the batch.
         // The next step is to run upcalls (and possibly collect their syscalls).
         self.batching_state.set(BatchingState::RunSyscalls);

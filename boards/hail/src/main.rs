@@ -277,6 +277,7 @@ pub unsafe fn main() {
     let uart_mux = components::console::UartMuxComponent::new(
         &peripherals.usart0,
         115200,
+        // 57600,
         dynamic_deferred_caller,
     )
     .finalize(());
@@ -590,7 +591,7 @@ pub unsafe fn main() {
     });
 
     use kernel::hil::uart::Transmit as _;
-    // let _result = peripherals.usart0.power_off();
+    let _result = peripherals.usart0.power_off();
 
     // Time window batching.
     // let batching_strategy: &'static dyn BatchController = {
@@ -646,8 +647,12 @@ pub unsafe fn main() {
     //         batching::PrefetchTester::new(board_kernel, &mut PROCESSES))
     // };
 
+    // let batching_strategy: &'static dyn BatchController =
+    //     static_init!(batching::FixedCountBatching,
+    //                  batching::FixedCountBatching::new(4));
+
     let batching_strategy: &'static dyn BatchController = {
-        const WINDOW_DURATION_MS: usize = 500;
+        const WINDOW_DURATION_MS: usize = 1000;
 
         let bc_alarm = static_init!(VirtualMuxAlarm<'static, sam4l::ast::Ast>,
                                     VirtualMuxAlarm::new(mux_alarm));
