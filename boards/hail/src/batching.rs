@@ -1422,9 +1422,9 @@ impl PrefetchController {
                 };
 
                 // kernel::debug!("Set AoT for PID {}", pid.get());
-                // kernel::debug!("{}: CKFWD: {:?}",
-                //                unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) },
-                //                self.extra_syscalls[0].extract().unwrap());
+                kernel::debug!("{}: CKFWD: {:?}",
+                               kernel::config::since_boot_ms(),
+                               self.extra_syscalls[0].extract().unwrap());
 
                 // Set the batch to close sooner than normal.
                 let t_midpoint = core::cmp::min(self.window_duration_ticks, dt.get()) / 2;
@@ -1511,7 +1511,9 @@ impl BatchController for PrefetchController {
                         // so the result is not ready. The cache check registered invoking_process
                         // as waiting for it, so it will get the result as soon as it is ready.
                         CacheReturn::Pending => {
-                            // kernel::debug!("{}: CKPND: {:?}", unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) }, syscall);
+                            kernel::debug!("{}: CKPND: {:?}",
+                                           kernel::config::since_boot_ms(),
+                                           syscall);
                             // kernel::debug!("Eager process, result in cache soon.");
                             return QueueResult::Queued;
                         },
@@ -1520,7 +1522,9 @@ impl BatchController for PrefetchController {
                         // and the result is ready and was handed back to us.
                         CacheReturn::Present(fc, buffer) => {
                             // kernel::debug!("Using AoT result.");
-                            // kernel::debug!("{}: CKPRE: {:?}", unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) }, syscall);
+                            kernel::debug!("{}: CKPRE: {:?}",
+                                           kernel::config::since_boot_ms(),
+                                           syscall);
 
                             // ENG/DSN: getting the buffer back to the process, if necessary.
                             // ENG/DSN: setting the callback fn() pointer correctly to the process' pointer.
@@ -1571,10 +1575,10 @@ impl BatchController for PrefetchController {
                     // Is it guaranteed that we are not in a batch window, then?
 
                     // Withhold the app-requested syscall.
-                    // kernel::debug!("{}: CKQUE: ({}, {})",
-                    //                unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) },
-                    //                driver_number,
-                    //                subdriver_number);
+                    kernel::debug!("{}: CKQUE: ({}, {})",
+                                   kernel::config::since_boot_ms(),
+                                   driver_number,
+                                   subdriver_number);
                     self.pending_syscall.set((self.batch_alarm.now().into_usize(),
                                               PendingSyscall::new(invoking_process.processid(), *syscall)));
 

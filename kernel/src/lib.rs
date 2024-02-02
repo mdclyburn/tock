@@ -97,6 +97,7 @@ pub mod batch;
 pub mod capabilities;
 pub mod collections;
 pub mod component;
+pub mod config;
 pub mod debug;
 pub mod deferred_call;
 pub mod dynamic_deferred_call;
@@ -114,7 +115,6 @@ pub mod syscall;
 pub mod upcall;
 pub mod utilities;
 
-mod config;
 mod kernel;
 mod memop;
 mod process_policies;

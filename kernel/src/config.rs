@@ -48,3 +48,22 @@ pub(crate) const CONFIG: Config = Config {
     trace_syscalls: false,
     debug_load_processes: false,
 };
+
+pub static mut T_BOOT: usize = 0;
+
+#[inline]
+pub unsafe fn mark_boot() {
+    T_BOOT = now();
+}
+
+pub fn now() -> usize {
+    unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut usize) }
+}
+
+pub fn since_boot() -> usize {
+    now() - unsafe { T_BOOT }
+}
+
+pub fn since_boot_ms() -> usize {
+    (now() - unsafe { T_BOOT }) / 16 + 300
+}
