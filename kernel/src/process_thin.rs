@@ -221,7 +221,7 @@ impl ThinProcess {
     }
 
     pub fn indicate(&self, driver_no: usize, subscribe_no: usize) {
-        debug!("{}: HPEND: ({}, {})", config::since_boot_ms(), driver_no, subscribe_no);
+        // debug!("{}: HPEND: ({}, {})", config::since_boot_ms(), driver_no, subscribe_no);
         self.cached_result.set(CacheSlot::Pending(driver_no, subscribe_no));
     }
 }
@@ -254,20 +254,20 @@ impl Process for ThinProcess {
                             // debug!("Successfully cached ADC result.");
                             match current_cache_state {
                                 None => {
-                                    debug!("{}: HREDY: ({}, {})", config::since_boot_ms(), driver_num, subscribe_num);
+                                    // debug!("{}: HREDY: ({}, {})", config::since_boot_ms(), driver_num, subscribe_num);
                                     self.cached_result.set(CacheSlot::Ready(*fc,Some(unsafe { &ALLOW_BUFFER_1 })));
                                     Ok(())
                                 },
 
                                 Some(CacheSlot::Pending(driver_no, subscribe_no)) => {
-                                    debug!("{}: HREDY: ({}, {})", config::since_boot_ms(), driver_no, subscribe_no);
+                                    // debug!("{}: HREDY: ({}, {})", config::since_boot_ms(), driver_no, subscribe_no);
                                     self.cached_result.set(CacheSlot::Ready(*fc,Some(unsafe { &ALLOW_BUFFER_1 })));
                                     Ok(())
                                 },
 
                                 // We can go ahead and hand the result to the process.
                                 Some(CacheSlot::Requested(requesting_process, driver_no, subscribe_no)) => {
-                                    debug!("{}: HRDCB: ({}, {})", config::since_boot_ms(), driver_no, subscribe_no);
+                                    // debug!("{}: HRDCB: ({}, {})", config::since_boot_ms(), driver_no, subscribe_no);
                                     // Rewrite the PC so the upcall goes to the process's callback
                                     // and not the dummy callback here. When the requesting process
                                     // does not specify one, we use the __do_not_call() function,
@@ -298,20 +298,20 @@ impl Process for ThinProcess {
                             // debug!("Successfully cached I2C result.");
                             match current_cache_state {
                                 None => {
-                                    debug!("{}: HREDY: ({}, {})", config::since_boot_ms(), driver_num, subscribe_num);
+                                    // debug!("{}: HREDY: ({}, {})", config::since_boot_ms(), driver_num, subscribe_num);
                                     self.cached_result.set(CacheSlot::Ready(*fc, None));
                                     Ok(())
                                 },
 
                                 Some(CacheSlot::Pending(driver_no, subscribe_no)) => {
-                                    debug!("{}: HREDY: ({}, {})", config::since_boot_ms(), driver_no, subscribe_no);
+                                    // debug!("{}: HREDY: ({}, {})", config::since_boot_ms(), driver_no, subscribe_no);
                                     self.cached_result.set(CacheSlot::Ready(*fc, None));
                                     Ok(())
                                 },
 
                                 // We can go ahead and hand the result to the process.
                                 Some(CacheSlot::Requested(requesting_process, driver_no, subscribe_no)) => {
-                                    debug!("{}: HRDCB: ({}, {})", config::since_boot_ms(), driver_no, subscribe_no);
+                                    // debug!("{}: HRDCB: ({}, {})", config::since_boot_ms(), driver_no, subscribe_no);
                                     requesting_process.enqueue_task(task);
                                     self.cached_result.clear();
                                     Ok(())
