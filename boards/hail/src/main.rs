@@ -600,7 +600,7 @@ pub unsafe fn main() {
     // let batching_strategy: &'static dyn BatchController = {
     //     use kernel::hil::time::Alarm as _;
 
-    //     const WINDOW_DURATION_MS: usize = 250;
+    //     const WINDOW_DURATION_MS: usize = 500;
 
     //     let bc = static_init!(
     //         batching::TimeWindowBatching,
@@ -654,25 +654,25 @@ pub unsafe fn main() {
     //     static_init!(batching::FixedCountBatching,
     //                  batching::FixedCountBatching::new(4));
 
-    // let batching_strategy: &'static dyn BatchController = {
-    //     const WINDOW_DURATION_MS: usize = 1000;
+    let batching_strategy: &'static dyn BatchController = {
+        const WINDOW_DURATION_MS: usize = 500;
 
-    //     let bc_alarm = static_init!(VirtualMuxAlarm<'static, sam4l::ast::Ast>,
-    //                                 VirtualMuxAlarm::new(mux_alarm));
-    //     let bc = static_init!(
-    //         batching::PrefetchController,
-    //         batching::PrefetchController::new(
-    //             WINDOW_DURATION_MS,
-    //             bc_alarm,
-    //             board_kernel,
-    //             &mut PROCESSES));
-    //     bc.configure();
+        let bc_alarm = static_init!(VirtualMuxAlarm<'static, sam4l::ast::Ast>,
+                                    VirtualMuxAlarm::new(mux_alarm));
+        let bc = static_init!(
+            batching::PrefetchController,
+            batching::PrefetchController::new(
+                WINDOW_DURATION_MS,
+                bc_alarm,
+                board_kernel,
+                &mut PROCESSES));
+        bc.configure();
 
-    //     bc
-    // };
+        bc
+    };
 
     // No batching.
-    let batching_strategy = &();
+    // let batching_strategy = &();
 
     board_kernel.set_batch_controller(batching_strategy);
     board_kernel.kernel_loop(&hail, chip, Some(&hail.ipc), &main_loop_capability);

@@ -264,7 +264,7 @@ impl BatchController for TimeWindowBatching {
                 empty_slot.set(pending_syscall);
                 // Now that we have a pending syscall, we ensure that we have a batch window open.
                 self.open_batch_window();
-                // debug!("queued: {:?}", pending_syscall.syscall);
+                // kernel::debug!("queued: {:?}", pending_syscall.syscall);
                 QueueResult::Queued
             },
 
