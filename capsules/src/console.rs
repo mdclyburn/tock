@@ -145,8 +145,8 @@ impl<'a> Console<'a> {
                     })
                     .unwrap_or(0);
                 app.write_remaining -= transaction_len;
-                let _ = self.uart.transmit_buffer(buffer, transaction_len);
-                // let _ = unsafe { self.uart.transmit_buffer(&mut DUMMY_BUFFER, DUMMY_BUFFER.len()) };
+                // let _ = self.uart.transmit_buffer(buffer, transaction_len);
+                let _ = unsafe { self.uart.transmit_buffer(&mut DUMMY_BUFFER, DUMMY_BUFFER.len()) };
             });
         } else {
             app.pending_write = true;

@@ -279,8 +279,8 @@ pub unsafe fn main() {
     // Create a shared UART channel for the console and for kernel debug.
     let uart_mux = components::console::UartMuxComponent::new(
         &peripherals.usart0,
-        115200,
-        // 57600,
+        // 115200,
+        57600,
         dynamic_deferred_caller,
     )
     .finalize(());
@@ -507,8 +507,8 @@ pub unsafe fn main() {
     // peripherals.pa[16].set_client(debug_process_restart);
 
     let aes = {
-        let src_buffer = static_init!([u8; 256], [0; 256]);
-        let dst_buffer = static_init!([u8; 256], [0; 256]);
+        let src_buffer = static_init!([u8; 1024], [0; 1024]);
+        let dst_buffer = static_init!([u8; 1024], [0; 1024]);
 
         static_init!(
             capsules::dummy_aes::DummyAES,
@@ -654,25 +654,25 @@ pub unsafe fn main() {
     //     static_init!(batching::FixedCountBatching,
     //                  batching::FixedCountBatching::new(4));
 
-    let batching_strategy: &'static dyn BatchController = {
-        const WINDOW_DURATION_MS: usize = 1000;
+    // let batching_strategy: &'static dyn BatchController = {
+    //     const WINDOW_DURATION_MS: usize = 1000;
 
-        let bc_alarm = static_init!(VirtualMuxAlarm<'static, sam4l::ast::Ast>,
-                                    VirtualMuxAlarm::new(mux_alarm));
-        let bc = static_init!(
-            batching::PrefetchController,
-            batching::PrefetchController::new(
-                WINDOW_DURATION_MS,
-                bc_alarm,
-                board_kernel,
-                &mut PROCESSES));
-        bc.configure();
+    //     let bc_alarm = static_init!(VirtualMuxAlarm<'static, sam4l::ast::Ast>,
+    //                                 VirtualMuxAlarm::new(mux_alarm));
+    //     let bc = static_init!(
+    //         batching::PrefetchController,
+    //         batching::PrefetchController::new(
+    //             WINDOW_DURATION_MS,
+    //             bc_alarm,
+    //             board_kernel,
+    //             &mut PROCESSES));
+    //     bc.configure();
 
-        bc
-    };
+    //     bc
+    // };
 
     // No batching.
-    // let batching_strategy = &();
+    let batching_strategy = &();
 
     board_kernel.set_batch_controller(batching_strategy);
     board_kernel.kernel_loop(&hail, chip, Some(&hail.ipc), &main_loop_capability);
