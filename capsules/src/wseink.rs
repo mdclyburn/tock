@@ -11,7 +11,7 @@ use kernel::hil::time::{
     ConvertTicks,
     Time
 };
-use kernel::hil::gpio::{Input, Output, Pin};
+use kernel::hil::gpio::Pin;
 use kernel::hil::spi::{
     self,
     SpiMasterClient,
@@ -144,6 +144,10 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
         }
     }
 
+    fn dequeue_discard(&self) {
+        let _operation = self.dequeue();
+    }
+
     fn peek_operation(&self) -> &OptionalCell<Operation> {
         let (h, _t) = self.operation_queue_bounds.get();
         &self.operation_queue[h]
@@ -151,6 +155,7 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
 
     fn process_queue(&self) {
         self.peek_operation().map(|next_op| {
+            kernel::debug!("Next operation: {:?}", next_op);
             match next_op {
                 Operation::Wait(duration_ms) => {
                     kernel::debug!("eink: waiting {} ms", duration_ms);
@@ -166,7 +171,7 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
                 },
 
                 Operation::Command(command, data_len) => {
-                    kernel::debug!("eink: writing command {:040X}", *command);
+                    kernel::debug!("eink: writing command {:02x}", *command);
 
                     // Set pin for writing command.
                     self.pin_dc.clear();
@@ -174,7 +179,7 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
                     let tx_buffer = self.tx_command_buffer.take().unwrap();
                     tx_buffer[0] = *command;
 
-                    self.spi.read_write_bytes(tx_buffer, None, 1);
+                    self.spi.read_write_bytes(tx_buffer, None, 1).unwrap();
                 },
 
                 Operation::Data(len) => {
@@ -199,6 +204,7 @@ impl<A: 'static + Alarm<'static>> SpiMasterClient for WS2C250<A> {
         len: usize,
         status: Result<(), ErrorCode>)
     {
+        kernel::debug!("eink: SPIRW done");
         if tx_buffer.len() == 1 {
             self.tx_command_buffer.put(Some(tx_buffer));
         } else {
@@ -210,8 +216,18 @@ impl<A: 'static + Alarm<'static>> SpiMasterClient for WS2C250<A> {
         //
         // The call to process_queue() will continue on to the data write.
         let current_op = self.peek_operation().extract().unwrap();
-        if let Operation::Command(_cmd, data_len) = current_op {
-            self.peek_operation().set(Operation::Data(data_len));
+        match current_op {
+            Operation::Command(_cmd, data_len) => {
+                kernel::debug!("eink: follow up with data write");
+                self.peek_operation().set(Operation::Data(data_len));
+            },
+
+            Operation::Data(data_len) => {
+                kernel::debug!("eink: data write complete");
+                self.dequeue_discard();
+            },
+
+            _ => panic!(),
         }
 
         self.process_queue();
