@@ -297,6 +297,10 @@ pub trait SpiMasterDevice {
 
     /// Get the current bus phase for the current chip select.
     fn get_phase(&self) -> ClockPhase;
+
+    fn hold_low(&self) { panic!() }
+
+    fn release_low(&self) { panic!() }
 }
 
 /// Trait for SPI peripherals (slaves) to receive callbacks when the

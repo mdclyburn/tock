@@ -5,13 +5,18 @@ use core::cell::Cell;
 
 use kernel::collections::ring_buffer::RingBuffer;
 use kernel::errorcode::ErrorCode;
+use kernel::hil::gpio::{
+    self,
+    Interrupt,
+    InterruptPin,
+    Pin,
+};
 use kernel::hil::time::{
     Alarm,
     AlarmClient,
     ConvertTicks,
     Time
 };
-use kernel::hil::gpio::Pin;
 use kernel::hil::spi::{
     self,
     SpiMasterClient,
@@ -27,12 +32,17 @@ use crate::virtual_alarm::VirtualMuxAlarm;
 #[allow(non_upper_case_globals, unused)]
 mod commands {
     pub const SoftwareReset: u8              = 0x12;
+    pub const MasterActivation: u8           = 0x20;
+    pub const DisplayUpdateControl2: u8      = 0x22;
+    pub const WriteRAM: u8                   = 0x24;
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Operation {
     /// Wait for a number of milliseconds.
     Wait(usize),
+    /// Wait for the busy pin to go low.
+    Await,
     /// Perform a hardware reset.
     HardwareReset,
     /// Send a command (and maybe a number of data bytes) over SPI.
@@ -48,16 +58,16 @@ pub struct WS2C250<A: 'static + Alarm<'static>> {
 
     pin_reset: &'static dyn Pin,
     pin_dc: &'static dyn Pin,
-    pin_busy: &'static dyn Pin,
+    pin_busy: &'static dyn InterruptPin<'static>,
 
     alarm: &'static VirtualMuxAlarm<'static, A>,
 
-    operation_queue: [OptionalCell<Operation>; 5],
+    operation_queue: [OptionalCell<Operation>; 10],
     operation_queue_bounds: Cell<(usize, usize)>,
 }
 
 impl<A: 'static + Alarm<'static>> WS2C250<A> {
-    const SPI_CLOCK_MAX: usize = 2_500_000;
+    const SPI_CLOCK_MAX: usize = 25_000;
 
     pub fn new(
         spi: &'static dyn SpiMasterDevice,
@@ -65,25 +75,10 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
         data_buffer: &'static mut [u8],
         pin_reset: &'static dyn Pin,
         pin_dc: &'static dyn Pin,
-        pin_busy: &'static dyn Pin,
+        pin_busy: &'static dyn InterruptPin<'static>,
         alarm: &'static VirtualMuxAlarm<'static, A>,
     ) -> WS2C250<A>
     {
-        let _ = pin_reset.make_output();
-        let _ = pin_dc.make_output();
-        let _ = pin_busy.make_input();
-
-        pin_reset.set();
-        pin_dc.clear();
-
-        let r = spi.configure(spi::ClockPolarity::IdleLow,
-                              spi::ClockPhase::SampleLeading,
-                              Self::SPI_CLOCK_MAX as u32);
-        if let Result::Err(e) = r {
-            kernel::debug!("eink: spi configure failed ({})",
-                           e as usize);
-        }
-
         WS2C250 {
             spi,
             tx_command_buffer: TakeCell::new(command_buffer),
@@ -98,6 +93,11 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
                 OptionalCell::empty(),
                 OptionalCell::empty(),
                 OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
             ],
             operation_queue_bounds: Cell::new((0, 0)),
         }
@@ -106,12 +106,57 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
     const RESET_HOLD_DURATION_MS: usize = 50;
 
     pub fn startup(&'static self) {
+        let _ = self.pin_reset.make_output();
+        self.pin_reset.set();
+
+        let _ = self.pin_dc.make_output();
+        self.pin_dc.clear();
+
+        let _ = self.pin_busy.make_input();
+
+        let r = self.spi.configure(spi::ClockPolarity::IdleLow,
+                              spi::ClockPhase::SampleLeading,
+                              Self::SPI_CLOCK_MAX as u32);
+        if let Result::Err(e) = r {
+            kernel::debug!("eink: spi configure failed ({})",
+                           e as usize);
+        }
         self.spi.set_client(self);
+
         self.alarm.set_alarm_client(self);
 
+        self.pin_busy.set_client(self);
+        self.pin_busy.enable_interrupts(gpio::InterruptEdge::EitherEdge);
+
+        // Initial configuration.
         self.enqueue(Operation::HardwareReset);
         self.enqueue(Operation::Command(commands::SoftwareReset, 0));
         self.enqueue(Operation::Wait(10));
+
+        self.enqueue(Operation::Command(commands::DisplayUpdateControl2, 1));
+        let _ = self.tx_data_buffer.map(|txb| {
+            txb[0] = 0xF7;
+        });
+        self.enqueue(Operation::Command(commands::MasterActivation, 0));
+        self.enqueue(Operation::Await);
+
+        // Initialization code (commands 0x01, 0x11, 0x44, 0x45, 0x3c)
+
+        // Load waveform LUT (commands 0x18, 0x22, 0x20).
+
+        // Wait for the busy pin to go low.
+        // self.enqueue(Operation::Await);
+
+        // TEST
+        // let _ = self.tx_data_buffer.map(|txb| {
+        //     let it = ([1, 1, 1, 1, 0, 0, 0, 0]).iter()
+        //         .cycle();
+        //     for (dst_b, src_b) in txb.iter_mut().zip(it) {
+        //         *dst_b = *src_b;
+        //     }
+        // }).unwrap();
+        // self.enqueue(Operation::Command(commands::WriteRAM, 64));
+        // self.enqueue(Operation::Await);
 
         self.process_queue();
     }
@@ -155,12 +200,22 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
 
     fn process_queue(&self) {
         self.peek_operation().map(|next_op| {
-            kernel::debug!("Next operation: {:?}", next_op);
+            // kernel::debug!("Next operation: {:?}", next_op);
             match next_op {
                 Operation::Wait(duration_ms) => {
                     kernel::debug!("eink: waiting {} ms", duration_ms);
                     self.alarm.set_alarm(self.alarm.now(),
                                          self.alarm.ticks_from_ms(*duration_ms as u32));
+                },
+
+                Operation::Await => {
+                    // No need to wait if the pin is already low.
+                    if self.pin_busy.read() == false {
+                        kernel::debug!("eink: no await, BUSY not set");
+                        self.dequeue_discard();
+                    } else {
+                        kernel::debug!("eink: awaiting low BUSY pin");
+                    }
                 },
 
                 Operation::HardwareReset => {
@@ -179,6 +234,12 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
                     let tx_buffer = self.tx_command_buffer.take().unwrap();
                     tx_buffer[0] = *command;
 
+                    if *data_len > 0 {
+                        self.spi.hold_low();
+                    } else {
+                        self.spi.release_low();
+                    }
+
                     self.spi.read_write_bytes(tx_buffer, None, 1).unwrap();
                 },
 
@@ -189,6 +250,7 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
                     self.pin_dc.set();
 
                     let tx_buffer = self.tx_data_buffer.take().unwrap();
+                    self.spi.release_low();
                     self.spi.read_write_bytes(tx_buffer, None, *len);
                 }
             }
@@ -201,8 +263,8 @@ impl<A: 'static + Alarm<'static>> SpiMasterClient for WS2C250<A> {
         &self,
         tx_buffer: &'static mut [u8],
         rx_buffer: Option<&'static mut [u8]>,
-        len: usize,
-        status: Result<(), ErrorCode>)
+        _len: usize,
+        _status: Result<(), ErrorCode>)
     {
         kernel::debug!("eink: SPIRW done");
         if tx_buffer.len() == 1 {
@@ -251,5 +313,31 @@ impl <A: 'static + Alarm<'static>> AlarmClient for WS2C250<A> {
         };
 
         self.process_queue();
+    }
+}
+
+impl <A: 'static + Alarm<'static>> gpio::Client for WS2C250<A> {
+    fn fired(&self) {
+        // BUSY pin changed state.
+        if self.pin_busy.read() == true {
+            kernel::debug!("eink: busy");
+        } else {
+            let peeked_op = self.peek_operation().extract();
+            match peeked_op {
+                // The display went busy when we supposedly were not waiting?
+                None => kernel::debug!("eink: idle; was busy while driver idle"),
+
+                // The display was busy, and we were waiting on it; the expected case.
+                Some(Operation::Await) => {
+                    kernel::debug!("eink: idle");
+                    self.dequeue_discard();
+                },
+
+                // The display was busy, but we were not waiting on it? Bad.
+                Some(op) => {
+                    kernel::debug!("eink: idle; was busy while driver active!");
+                }
+            }
+        }
     }
 }

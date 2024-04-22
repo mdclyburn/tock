@@ -75,6 +75,7 @@ struct Hail {
     ipc: kernel::ipc::IPC<NUM_PROCS, NUM_UPCALLS_IPC>,
     crc: &'static capsules::crc::CrcDriver<'static, sam4l::crccu::Crccu<'static>>,
     dac: &'static capsules::dac::Dac<'static>,
+    display: &'static capsules::wseink::WS2C250<sam4l::ast::Ast<'static>>,
     scheduler: &'static RoundRobinSched<'static>,
     systick: cortexm4::systick::SysTick,
 }
@@ -477,6 +478,32 @@ pub unsafe fn main() {
         capsules::dac::Dac::new(&peripherals.dac)
     );
 
+    // eInk display
+    let display = {
+        let spi = components::spi::SpiComponent::new(mux_spi, 0)
+            .finalize(components::spi_component_helper!(sam4l::spi::SpiHw));
+
+        let alarm: &'static VirtualMuxAlarm<'_, _> =
+            static_init!(VirtualMuxAlarm<'static, sam4l::ast::Ast>,
+                         VirtualMuxAlarm::new(mux_alarm));
+
+        let (reset_pin, dc_pin, busy_pin) = (&peripherals.pb[14],  // D0
+                                             &peripherals.pb[15],  // D1
+                                             &peripherals.pb[11]); // D6
+
+        static_init!(capsules::wseink::WS2C250<sam4l::ast::Ast>,
+                     capsules::wseink::WS2C250::new(
+                         spi,
+                         static_init!([u8; 1], [0; 1]),
+                         static_init!([u8; 64], [0; 64]),
+                         reset_pin,
+                         dc_pin,
+                         busy_pin,
+                         alarm))
+    };
+    peripherals.pb[11].set_client(display);
+    display.startup();
+
     // // DEBUG Restart All Apps
     // //
     // // Uncomment to enable a button press to restart all apps.
@@ -527,6 +554,7 @@ pub unsafe fn main() {
         ),
         crc,
         dac,
+        display,
         scheduler,
         systick: cortexm4::systick::SysTick::new(),
     };

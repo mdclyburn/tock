@@ -137,6 +137,14 @@ impl<'a, Spi: hil::spi::SpiMaster> MuxSpiMaster<'a, Spi> {
     fn do_next_op_async(&self) {
         self.handle.map(|handle| self.deferred_caller.set(*handle));
     }
+
+    fn hold_low(&self) {
+        self.spi.hold_low();
+    }
+
+    fn release_low(&self) {
+        self.spi.release_low();
+    }
 }
 
 impl<'a, Spi: hil::spi::SpiMaster> DynamicDeferredCallClient for MuxSpiMaster<'a, Spi> {
@@ -313,6 +321,14 @@ impl<'a, Spi: hil::spi::SpiMaster> hil::spi::SpiMasterDevice for VirtualSpiMaste
 
     fn get_rate(&self) -> u32 {
         self.configuration.get().rate
+    }
+
+    fn hold_low(&self) {
+        self.mux.hold_low();
+    }
+
+    fn release_low(&self) {
+        self.mux.release_low();
     }
 }
 
