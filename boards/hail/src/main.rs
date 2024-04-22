@@ -494,6 +494,7 @@ pub unsafe fn main() {
         static_init!(capsules::wseink::WS2C250<sam4l::ast::Ast>,
                      capsules::wseink::WS2C250::new(
                          spi,
+                         static_init!([u8; 954], [0; 954]),
                          static_init!([u8; 1], [0; 1]),
                          static_init!([u8; 64], [0; 64]),
                          reset_pin,

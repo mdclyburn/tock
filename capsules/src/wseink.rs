@@ -31,6 +31,7 @@ use crate::virtual_alarm::VirtualMuxAlarm;
 
 #[allow(non_upper_case_globals, unused)]
 mod commands {
+    pub const DeepSleepMode: u8              = 0x10;
     pub const SoftwareReset: u8              = 0x12;
     pub const MasterActivation: u8           = 0x20;
     pub const DisplayUpdateControl2: u8      = 0x22;
@@ -41,6 +42,7 @@ mod commands {
 enum Data {
     Copy(&'static [u8]),
     Buffer(usize),
+    RAM,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -59,6 +61,8 @@ enum Operation {
 
 pub struct WS2C250<A: 'static + Alarm<'static>> {
     spi: &'static dyn SpiMasterDevice,
+
+    display_buffer: TakeCell<'static, [u8]>,
     tx_command_buffer: TakeCell<'static, [u8]>,
     tx_data_buffer: TakeCell<'static, [u8]>,
 
@@ -77,6 +81,7 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
 
     pub fn new(
         spi: &'static dyn SpiMasterDevice,
+        display_buffer: &'static mut [u8; 954],
         command_buffer: &'static mut [u8],
         data_buffer: &'static mut [u8],
         pin_reset: &'static dyn Pin,
@@ -85,8 +90,20 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
         alarm: &'static VirtualMuxAlarm<'static, A>,
     ) -> WS2C250<A>
     {
+        for b in display_buffer.iter_mut() {
+            *b = 0xFF;
+        }
+
+        {
+        let it = (0..9).zip(display_buffer.iter_mut().skip(100));
+        for (_no, b) in it {
+            *b = 0x00
+        }
+        }
+
         WS2C250 {
             spi,
+            display_buffer: TakeCell::new(display_buffer),
             tx_command_buffer: TakeCell::new(command_buffer),
             tx_data_buffer: TakeCell::new(data_buffer),
             pin_reset,
@@ -139,27 +156,17 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
         self.enqueue(Operation::Command(commands::SoftwareReset, None));
         self.enqueue(Operation::Wait(10));
 
+        // TEST
+        self.enqueue(Operation::Command(commands::WriteRAM, Some(Data::RAM)));
+
         self.enqueue(Operation::Command(commands::DisplayUpdateControl2, Some(Data::Copy(&[0xF7]))));
         self.enqueue(Operation::Command(commands::MasterActivation, None));
         self.enqueue(Operation::Await);
+        self.enqueue(Operation::Command(commands::DeepSleepMode, Some(Data::Copy(&[0b01]))));
 
         // Initialization code (commands 0x01, 0x11, 0x44, 0x45, 0x3c)
 
         // Load waveform LUT (commands 0x18, 0x22, 0x20).
-
-        // Wait for the busy pin to go low.
-        // self.enqueue(Operation::Await);
-
-        // TEST
-        // let _ = self.tx_data_buffer.map(|txb| {
-        //     let it = ([1, 1, 1, 1, 0, 0, 0, 0]).iter()
-        //         .cycle();
-        //     for (dst_b, src_b) in txb.iter_mut().zip(it) {
-        //         *dst_b = *src_b;
-        //     }
-        // }).unwrap();
-        // self.enqueue(Operation::Command(commands::WriteRAM, 64));
-        // self.enqueue(Operation::Await);
 
         self.process_queue();
     }
@@ -253,21 +260,31 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
                     self.pin_dc.set();
 
                     let mut tx_len = 0;
-                    let tx_buffer = self.tx_data_buffer.take().unwrap();
-                    match data {
+                    let tx_buffer = match data {
                         // No work to do; the data is already in the buffer.
                         Data::Buffer(data_len) => {
                             tx_len = *data_len;
+                            self.tx_data_buffer.take().unwrap()
                         },
 
                         Data::Copy(buf)  => {
+                            let tx_buffer = self.tx_data_buffer.take().unwrap();
                             tx_len = buf.len();
                             let it = buf.iter().zip(tx_buffer.iter_mut());
                             for (srcb, dstb) in it {
                                 *dstb = *srcb;
                             }
+
+                            tx_buffer
                         },
-                    }
+
+                        Data::RAM => {
+                            let tx_buffer = self.display_buffer.take().unwrap();
+                            tx_len = tx_buffer.len();
+
+                            tx_buffer
+                        },
+                    };
 
                     self.spi.release_low();
                     self.spi.read_write_bytes(tx_buffer, None, tx_len);
@@ -286,17 +303,25 @@ impl<A: 'static + Alarm<'static>> SpiMasterClient for WS2C250<A> {
         _status: Result<(), ErrorCode>)
     {
         kernel::debug!("eink: SPIRW done");
-        if tx_buffer.len() == 1 {
-            self.tx_command_buffer.put(Some(tx_buffer));
-        } else {
-            self.tx_data_buffer.put(Some(tx_buffer));
-        }
+
+        let current_op = self.peek_operation().extract().unwrap();
+
+        match current_op {
+            Operation::Command(_command, _opt_data) => self.tx_command_buffer.put(Some(tx_buffer)),
+
+            Operation::Data(data) => match data {
+                Data::Buffer(_len) => self.tx_data_buffer.put(Some(tx_buffer)),
+                Data::Copy(_src) => self.tx_data_buffer.put(Some(tx_buffer)),
+                Data::RAM => self.display_buffer.put(Some(tx_buffer)),
+            },
+
+            _ => panic!(), // Cannot figure out how to put the buffer back.
+        };
 
         // If the current operation indicates that there is also data to write,
         // replace the current operation with a Data operation to also write the data.
         //
         // The call to process_queue() will continue on to the data write.
-        let current_op = self.peek_operation().extract().unwrap();
         match current_op {
             Operation::Command(_cmd, opt_data) => {
                 if let Some(data) = opt_data {
