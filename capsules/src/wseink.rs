@@ -37,7 +37,13 @@ mod commands {
     pub const WriteRAM: u8                   = 0x24;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug)]
+enum Data {
+    Copy(&'static [u8]),
+    Buffer(usize),
+}
+
+#[derive(Clone, Copy, Debug)]
 enum Operation {
     /// Wait for a number of milliseconds.
     Wait(usize),
@@ -46,9 +52,9 @@ enum Operation {
     /// Perform a hardware reset.
     HardwareReset,
     /// Send a command (and maybe a number of data bytes) over SPI.
-    Command(u8, usize),
+    Command(u8, Option<Data>),
     /// Send data over SPI.
-    Data(usize),
+    Data(Data),
 }
 
 pub struct WS2C250<A: 'static + Alarm<'static>> {
@@ -130,14 +136,11 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
 
         // Initial configuration.
         self.enqueue(Operation::HardwareReset);
-        self.enqueue(Operation::Command(commands::SoftwareReset, 0));
+        self.enqueue(Operation::Command(commands::SoftwareReset, None));
         self.enqueue(Operation::Wait(10));
 
-        self.enqueue(Operation::Command(commands::DisplayUpdateControl2, 1));
-        let _ = self.tx_data_buffer.map(|txb| {
-            txb[0] = 0xF7;
-        });
-        self.enqueue(Operation::Command(commands::MasterActivation, 0));
+        self.enqueue(Operation::Command(commands::DisplayUpdateControl2, Some(Data::Copy(&[0xF7]))));
+        self.enqueue(Operation::Command(commands::MasterActivation, None));
         self.enqueue(Operation::Await);
 
         // Initialization code (commands 0x01, 0x11, 0x44, 0x45, 0x3c)
@@ -225,7 +228,7 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
                                          self.alarm.ticks_from_ms(Self::RESET_HOLD_DURATION_MS as u32));
                 },
 
-                Operation::Command(command, data_len) => {
+                Operation::Command(command, opt_data) => {
                     kernel::debug!("eink: writing command {:02x}", *command);
 
                     // Set pin for writing command.
@@ -234,7 +237,7 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
                     let tx_buffer = self.tx_command_buffer.take().unwrap();
                     tx_buffer[0] = *command;
 
-                    if *data_len > 0 {
+                    if opt_data.is_some() {
                         self.spi.hold_low();
                     } else {
                         self.spi.release_low();
@@ -243,15 +246,31 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
                     self.spi.read_write_bytes(tx_buffer, None, 1).unwrap();
                 },
 
-                Operation::Data(len) => {
-                    kernel::debug!("eink: writing data ({} bytes)", len);
+                Operation::Data(data) => {
+                    kernel::debug!("eink: writing data");
 
                     // Set pin for writing data.
                     self.pin_dc.set();
 
+                    let mut tx_len = 0;
                     let tx_buffer = self.tx_data_buffer.take().unwrap();
+                    match data {
+                        // No work to do; the data is already in the buffer.
+                        Data::Buffer(data_len) => {
+                            tx_len = *data_len;
+                        },
+
+                        Data::Copy(buf)  => {
+                            tx_len = buf.len();
+                            let it = buf.iter().zip(tx_buffer.iter_mut());
+                            for (srcb, dstb) in it {
+                                *dstb = *srcb;
+                            }
+                        },
+                    }
+
                     self.spi.release_low();
-                    self.spi.read_write_bytes(tx_buffer, None, *len);
+                    self.spi.read_write_bytes(tx_buffer, None, tx_len);
                 }
             }
         });
@@ -279,12 +298,17 @@ impl<A: 'static + Alarm<'static>> SpiMasterClient for WS2C250<A> {
         // The call to process_queue() will continue on to the data write.
         let current_op = self.peek_operation().extract().unwrap();
         match current_op {
-            Operation::Command(_cmd, data_len) => {
-                kernel::debug!("eink: follow up with data write");
-                self.peek_operation().set(Operation::Data(data_len));
+            Operation::Command(_cmd, opt_data) => {
+                if let Some(data) = opt_data {
+                    kernel::debug!("eink: follow up with data write");
+                    self.peek_operation().set(Operation::Data(data));
+                } else {
+                    kernel::debug!("eink: command-only write complete");
+                    self.dequeue_discard();
+                }
             },
 
-            Operation::Data(data_len) => {
+            Operation::Data(_data) => {
                 kernel::debug!("eink: data write complete");
                 self.dequeue_discard();
             },
