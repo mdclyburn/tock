@@ -29,6 +29,8 @@ use kernel::utilities::cells::{
 
 use crate::virtual_alarm::VirtualMuxAlarm;
 
+type Result<T> = core::result::Result<T, ErrorCode>;
+
 #[allow(non_upper_case_globals, unused)]
 mod commands {
     pub const DeepSleepMode: u8              = 0x10;
@@ -59,6 +61,20 @@ enum Operation {
     Data(Data),
 }
 
+/// Display refresh method.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Refresh {
+    /// Full, slower refresh.
+    Full,
+    /// Full, fast refresh.
+    Fast,
+    /// Partial, fast refresh.
+    Partial,
+}
+
+/// Number of bytes necessary for the 250 x 122 display buffer.
+pub const DISPLAY_BUFFER_LEN: usize = 32 * 16;
+
 pub struct WS2C250<A: 'static + Alarm<'static>> {
     spi: &'static dyn SpiMasterDevice,
 
@@ -77,11 +93,12 @@ pub struct WS2C250<A: 'static + Alarm<'static>> {
 }
 
 impl<A: 'static + Alarm<'static>> WS2C250<A> {
+    const RESET_HOLD_DURATION_MS: usize = 1;
     const SPI_CLOCK_MAX: usize = 25_000;
 
     pub fn new(
         spi: &'static dyn SpiMasterDevice,
-        display_buffer: &'static mut [u8; 954],
+        display_buffer: &'static mut [u8],
         command_buffer: &'static mut [u8],
         data_buffer: &'static mut [u8],
         pin_reset: &'static dyn Pin,
@@ -126,8 +143,6 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
         }
     }
 
-    const RESET_HOLD_DURATION_MS: usize = 50;
-
     pub fn startup(&'static self) {
         let _ = self.pin_reset.make_output();
         self.pin_reset.set();
@@ -152,34 +167,40 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
         self.pin_busy.enable_interrupts(gpio::InterruptEdge::EitherEdge);
 
         // Initial configuration.
-        self.enqueue(Operation::HardwareReset);
-        self.enqueue(Operation::Command(commands::SoftwareReset, None));
-        self.enqueue(Operation::Wait(10));
-
-        // TEST
-        self.enqueue(Operation::Command(commands::WriteRAM, Some(Data::RAM)));
-
-        self.enqueue(Operation::Command(commands::DisplayUpdateControl2, Some(Data::Copy(&[0xF7]))));
-        self.enqueue(Operation::Command(commands::MasterActivation, None));
-        self.enqueue(Operation::Await);
-        self.enqueue(Operation::Command(commands::DeepSleepMode, Some(Data::Copy(&[0b01]))));
+        self.hardware_reset();
 
         // Initialization code (commands 0x01, 0x11, 0x44, 0x45, 0x3c)
 
         // Load waveform LUT (commands 0x18, 0x22, 0x20).
-
-        self.process_queue();
     }
 
-    fn enqueue(&self, operation: Operation) {
+    fn enqueue(&self, operations: &[Operation]) -> Result<()> {
         let (h, t) = self.operation_queue_bounds.get();
-        if (t + 1) % self.operation_queue.len() == h {
-            panic!();
+        let free_slots = if h == t {
+            self.operation_queue.len()
+        } else if h <= t {
+            h + (self.operation_queue.len() - t - 1)
         } else {
-            self.operation_queue[t].set(operation);
+            h - t - 1
+        };
 
-            let next_t = (t + 1) % self.operation_queue.len();
+        if free_slots < operations.len() {
+            Err(ErrorCode::NOMEM)
+        } else {
+            let it = self.operation_queue.iter().zip(operations.iter());
+            for (dst_optc_op, src_op) in it {
+                dst_optc_op.set(*src_op);
+            }
+
+            let next_t = (t + operations.len()) % self.operation_queue.len();
             self.operation_queue_bounds.set((h, next_t));
+
+            // Start the queue if the queue was otherwise empty.
+            if free_slots == self.operation_queue.len() {
+                self.process_queue();
+            }
+
+            Ok(())
         }
     }
 
@@ -292,6 +313,26 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
             }
         });
     }
+
+    pub fn hardware_reset(&self) -> Result<()> {
+        self.enqueue(&[Operation::HardwareReset,
+                       Operation::Await])
+    }
+
+    pub fn refresh(&self, refresh_type: Refresh) -> Result<()> {
+        let update_sequence_option = match refresh_type {
+            Refresh::Full => 0xF7,
+            Refresh::Fast => 0xC7,
+            Refresh::Partial => 0xFF,
+        };
+
+        self.enqueue(&[Operation::HardwareReset,
+                       Operation::Await,
+
+                       Operation::Command(commands::DisplayUpdateControl2, Some(Data::Copy(&[0xF7]))),
+                       Operation::Command(commands::MasterActivation, None),
+                       Operation::Await])
+    }
 }
 
 impl<A: 'static + Alarm<'static>> SpiMasterClient for WS2C250<A> {
@@ -300,7 +341,7 @@ impl<A: 'static + Alarm<'static>> SpiMasterClient for WS2C250<A> {
         tx_buffer: &'static mut [u8],
         rx_buffer: Option<&'static mut [u8]>,
         _len: usize,
-        _status: Result<(), ErrorCode>)
+        _status: Result<()>)
     {
         kernel::debug!("eink: SPIRW done");
 
