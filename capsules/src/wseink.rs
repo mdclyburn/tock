@@ -44,7 +44,7 @@ mod commands {
 enum Data {
     Copy(&'static [u8]),
     Buffer(usize),
-    RAM,
+    DisplayBuffer,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -299,7 +299,7 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
                             tx_buffer
                         },
 
-                        Data::RAM => {
+                        Data::DisplayBuffer => {
                             let tx_buffer = self.display_buffer.take().unwrap();
                             tx_len = tx_buffer.len();
 
@@ -353,7 +353,7 @@ impl<A: 'static + Alarm<'static>> SpiMasterClient for WS2C250<A> {
             Operation::Data(data) => match data {
                 Data::Buffer(_len) => self.tx_data_buffer.put(Some(tx_buffer)),
                 Data::Copy(_src) => self.tx_data_buffer.put(Some(tx_buffer)),
-                Data::RAM => self.display_buffer.put(Some(tx_buffer)),
+                Data::DisplayBuffer => self.display_buffer.put(Some(tx_buffer)),
             },
 
             _ => panic!(), // Cannot figure out how to put the buffer back.
