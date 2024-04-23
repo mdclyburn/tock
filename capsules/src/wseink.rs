@@ -111,13 +111,6 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
             *b = 0xFF;
         }
 
-        {
-        let it = (0..9).zip(display_buffer.iter_mut().skip(100));
-        for (_no, b) in it {
-            *b = 0x00
-        }
-        }
-
         WS2C250 {
             spi,
             display_buffer: TakeCell::new(display_buffer),
@@ -167,7 +160,10 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
         self.pin_busy.enable_interrupts(gpio::InterruptEdge::EitherEdge);
 
         // Initial configuration.
-        self.hardware_reset();
+        self.hardware_reset().unwrap();
+
+        // Blank the screen.
+        self.refresh(Refresh::Full).unwrap();
 
         // Initialization code (commands 0x01, 0x11, 0x44, 0x45, 0x3c)
 
@@ -319,6 +315,10 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
                        Operation::Await])
     }
 
+    pub fn turn_off(&self) -> Result<()> {
+        self.enqueue(&[Operation::Command(commands::DeepSleepMode, Some(Data::Copy(&[0b0000_0001])))])
+    }
+
     pub fn refresh(&self, refresh_type: Refresh) -> Result<()> {
         let update_sequence_option = match refresh_type {
             Refresh::Full => 0xF7,
@@ -332,6 +332,22 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
                        Operation::Command(commands::DisplayUpdateControl2, Some(Data::Copy(&[0xF7]))),
                        Operation::Command(commands::MasterActivation, None),
                        Operation::Await])
+    }
+
+    /// Draw something to the display.
+    pub fn bah(&self) -> Result<()> {
+        self.display_buffer.map_or(Err(ErrorCode::BUSY), |dbuf| {
+            let opt_bw_p8 = dbuf.iter_mut()
+                .skip(500)
+                .skip_while(|p8| **p8 != 0)
+                .next();
+
+            if let Some(bw_p8) = opt_bw_p8 {
+                *bw_p8 = 0;
+            }
+
+            Ok(())
+        })
     }
 }
 
