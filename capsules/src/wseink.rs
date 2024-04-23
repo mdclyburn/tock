@@ -22,6 +22,8 @@ use kernel::hil::spi::{
     SpiMasterClient,
     SpiMasterDevice
 };
+use kernel::process::ProcessId;
+use kernel::syscall::{CommandReturn, SyscallDriver};
 use kernel::utilities::cells::{
     OptionalCell,
     TakeCell,
@@ -30,6 +32,8 @@ use kernel::utilities::cells::{
 use crate::virtual_alarm::VirtualMuxAlarm;
 
 type Result<T> = core::result::Result<T, ErrorCode>;
+
+pub const DRIVER_NUM: usize = crate::driver::NUM::Screen as usize;
 
 #[allow(non_upper_case_globals, unused)]
 mod commands {
@@ -444,6 +448,59 @@ impl <A: 'static + Alarm<'static>> gpio::Client for WS2C250<A> {
                     kernel::debug!("eink: idle; was busy while driver active!");
                 }
             }
+        }
+    }
+}
+
+impl <A: 'static + Alarm<'static>> SyscallDriver for WS2C250<A> {
+    fn allocate_grant(&self, pid: ProcessId) -> core::result::Result<(), kernel::process::Error> { Ok(()) }
+
+    fn command(&self,
+               command_no: usize,
+               arg2: usize,
+               arg3: usize,
+               pid: ProcessId) -> CommandReturn
+    {
+        match (command_no, arg2, arg3) {
+            // Driver check
+            (0, _r2, _r3) => CommandReturn::success(),
+
+            // Hardware reset
+            (1, _r2, _r3) => {
+                match self.hardware_reset() {
+                    Ok(()) => CommandReturn::success(),
+                    Err(e) => CommandReturn::failure(e),
+                }
+            },
+
+            // Refresh
+            (2, refresh_type, _r3) => {
+                let refresh_type: Option<Refresh> = match refresh_type {
+                    0 => Some(Refresh::Full),
+                    1 => Some(Refresh::Fast),
+                    2 => Some(Refresh::Partial),
+                    _ => None,
+                };
+
+                if let Some(refresh_type) = refresh_type {
+                    match self.refresh(refresh_type) {
+                        Ok(()) => CommandReturn::success(),
+                        Err(e) => CommandReturn::failure(e),
+                    }
+                } else {
+                    return CommandReturn::failure(ErrorCode::INVAL);
+                }
+            },
+
+            // Bah
+            (3, _r2, _r3) => {
+                match self.bah() {
+                    Ok(()) => CommandReturn::success(),
+                    Err(e) => CommandReturn::failure(e),
+                }
+            },
+
+            (_command_no, _r2, _r3) => CommandReturn::failure(ErrorCode::INVAL),
         }
     }
 }

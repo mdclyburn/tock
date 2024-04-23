@@ -101,6 +101,8 @@ impl SyscallDriverLookup for Hail {
             capsules::temperature::DRIVER_NUM => f(Some(self.temp)),
             capsules::ninedof::DRIVER_NUM => f(Some(self.ninedof)),
 
+            capsules::wseink::DRIVER_NUM => f(Some(self.display)),
+
             capsules::rng::DRIVER_NUM => f(Some(self.rng)),
 
             capsules::crc::DRIVER_NUM => f(Some(self.crc)),
