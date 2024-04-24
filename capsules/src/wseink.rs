@@ -42,6 +42,8 @@ mod commands {
     pub const MasterActivation: u8           = 0x20;
     pub const DisplayUpdateControl2: u8      = 0x22;
     pub const WriteRAM: u8                   = 0x24;
+    pub const SetRAMXAddress: u8             = 0x4E;
+    pub const SetRAMYAddress: u8             = 0x4F;
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -164,6 +166,8 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
         self.pin_busy.enable_interrupts(gpio::InterruptEdge::EitherEdge);
 
         // Blank the screen.
+        self.hardware_reset().unwrap();
+        self.update().unwrap();
         self.refresh(Refresh::Full).unwrap();
         self.turn_off().unwrap();
     }
@@ -331,11 +335,17 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
             Refresh::Partial => 0xFF,
         };
 
-        self.enqueue(&[Operation::HardwareReset,
-
-                       Operation::Command(commands::DisplayUpdateControl2, Some(Data::Copy(&[0xF7]))),
+        self.enqueue(&[Operation::Command(commands::DisplayUpdateControl2, Some(Data::Copy(&[0xF7]))),
                        Operation::Command(commands::MasterActivation, None),
                        Operation::Await])
+    }
+
+    /// Send display buffer to RAM.
+    pub fn update(&self) -> Result<()> {
+        self.enqueue(&[Operation::Command(commands::SetRAMXAddress, Some(Data::Copy(&[0x00]))),
+                       Operation::Command(commands::SetRAMYAddress, Some(Data::Copy(&[0x00]))),
+
+                       Operation::Command(commands::WriteRAM, Some(Data::DisplayBuffer))])
     }
 
     /// Draw something to the display.
@@ -431,6 +441,7 @@ impl <A: 'static + Alarm<'static>> gpio::Client for WS2C250<A> {
     fn fired(&self) {
         let peeked_op = self.peek_operation().extract();
         let is_busy = self.pin_busy.read();
+        kernel::debug!("eink: {}", if is_busy { "busy" } else { "idle" });
         match peeked_op {
             // The display went busy when we supposedly were not waiting?
             None => {
@@ -458,7 +469,7 @@ impl <A: 'static + Alarm<'static>> gpio::Client for WS2C250<A> {
 
             // The display was busy, but we were not waiting on it? Bad.
             Some(op) => {
-                kernel::debug!("eink: idle; was busy while driver active!");
+                kernel::debug!("eink: idle; was busy while driver {:?}!", op);
             }
         }
     }
