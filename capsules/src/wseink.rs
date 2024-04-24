@@ -519,8 +519,24 @@ impl <A: 'static + Alarm<'static>> SyscallDriver for WS2C250<A> {
                 }
             },
 
-            // Bah
+            // Update display RAM
             (3, _r2, _r3) => {
+                match self.update() {
+                    Ok(()) => CommandReturn::success(),
+                    Err(e) => CommandReturn::failure(e),
+                }
+            },
+
+            // Sleep
+            (100, _r2, _r3) => {
+                match self.turn_off() {
+                    Ok(()) => CommandReturn::success(),
+                    Err(e) => CommandReturn::failure(e),
+                }
+            },
+
+            // Bah
+            (999, _r2, _r3) => {
                 match self.bah() {
                     Ok(()) => CommandReturn::success(),
                     Err(e) => CommandReturn::failure(e),
