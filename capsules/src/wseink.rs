@@ -163,15 +163,9 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
         self.pin_busy.set_client(self);
         self.pin_busy.enable_interrupts(gpio::InterruptEdge::EitherEdge);
 
-        // Initial configuration.
-        self.hardware_reset().unwrap();
-
         // Blank the screen.
         self.refresh(Refresh::Full).unwrap();
-
-        // Initialization code (commands 0x01, 0x11, 0x44, 0x45, 0x3c)
-
-        // Load waveform LUT (commands 0x18, 0x22, 0x20).
+        self.turn_off().unwrap();
     }
 
     fn enqueue(&self, operations: &[Operation]) -> Result<()> {
