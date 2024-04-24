@@ -338,12 +338,13 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
 
     pub fn refresh(&self, refresh_type: Refresh) -> Result<()> {
         let update_sequence_option = match refresh_type {
-            Refresh::Full => 0xF7,
-            Refresh::Fast => 0xC7,
-            Refresh::Partial => 0xFF,
+            Refresh::Full => &[0xF7],
+            Refresh::Fast => &[0xC7],
+            Refresh::Partial => &[0xFF],
         };
 
-        self.enqueue(&[Operation::Command(commands::DisplayUpdateControl2, Some(Data::Copy(&[0xF7]))),
+        self.enqueue(&[Operation::Command(commands::DisplayUpdateControl2,
+                                          Some(Data::Copy(update_sequence_option))),
                        Operation::Command(commands::MasterActivation, None),
                        Operation::Await])
     }
@@ -361,7 +362,7 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
         self.display_buffer.map_or(Err(ErrorCode::BUSY), |dbuf| {
             let opt_bw_p8 = dbuf.iter_mut()
                 .skip(500)
-                .skip_while(|p8| **p8 != 0)
+                .skip_while(|p8| **p8 == 0)
                 .next();
 
             if let Some(bw_p8) = opt_bw_p8 {
