@@ -170,18 +170,23 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
 
     fn enqueue(&self, operations: &[Operation]) -> Result<()> {
         let (h, t) = self.operation_queue_bounds.get();
-        let free_slots = if h == t {
-            self.operation_queue.len()
-        } else if h <= t {
-            h + (self.operation_queue.len() - t - 1)
-        } else {
-            h - t - 1
-        };
 
-        if free_slots < operations.len() {
+        if self.operation_queue[t].is_some() {
             Err(ErrorCode::NOMEM)
         } else {
-            let it = self.operation_queue.iter().zip(operations.iter());
+            let free_slots = if h == t {
+                self.operation_queue.len()
+            } else if h < t {
+                self.operation_queue.len() - (t - h)
+            } else {
+                h - t
+            };
+            // kernel::debug!("eink: {} free command slots", free_slots);
+
+            let it = self.operation_queue.iter()
+                .cycle()
+                .skip(self.operation_queue.len() - free_slots)
+                .zip(operations.iter());
             for (dst_optc_op, src_op) in it {
                 dst_optc_op.set(*src_op);
             }
@@ -193,6 +198,8 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
             if free_slots == self.operation_queue.len() {
                 self.process_queue();
             }
+
+            // kernel::debug!("eink: queue now {:?}", self.operation_queue_bounds.get());
 
             Ok(())
         }
@@ -209,6 +216,8 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
 
             let next_h = (h + 1) % self.operation_queue.len();
             self.operation_queue_bounds.set((next_h, t));
+
+            kernel::debug!("dqueue: {:?}", self.operation_queue_bounds.get());
 
             op
         }
@@ -236,8 +245,7 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
                 Operation::Await => {
                     // No need to wait if the pin is already low.
                     if self.pin_busy.read() == false {
-                        kernel::debug!("eink: no await, BUSY not set");
-                        self.dequeue_discard();
+                        kernel::debug!("eink: BUSY not high yet...");
                     } else {
                         kernel::debug!("eink: awaiting low BUSY pin");
                     }
@@ -309,8 +317,7 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
     }
 
     pub fn hardware_reset(&self) -> Result<()> {
-        self.enqueue(&[Operation::HardwareReset,
-                       Operation::Await])
+        self.enqueue(&[Operation::HardwareReset])
     }
 
     pub fn turn_off(&self) -> Result<()> {
@@ -325,7 +332,6 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
         };
 
         self.enqueue(&[Operation::HardwareReset,
-                       Operation::Await,
 
                        Operation::Command(commands::DisplayUpdateControl2, Some(Data::Copy(&[0xF7]))),
                        Operation::Command(commands::MasterActivation, None),
@@ -405,6 +411,7 @@ impl <A: 'static + Alarm<'static>> AlarmClient for WS2C250<A> {
         // If this panics, it means that the alarm fired for us,
         // but we didn't have a respective queue item for it.
         let current_op = self.dequeue().unwrap();
+        kernel::debug!("eink: alarm when {:?}", current_op);
         match current_op {
             Operation::HardwareReset => {
                 self.pin_reset.set();
@@ -422,25 +429,36 @@ impl <A: 'static + Alarm<'static>> AlarmClient for WS2C250<A> {
 
 impl <A: 'static + Alarm<'static>> gpio::Client for WS2C250<A> {
     fn fired(&self) {
-        // BUSY pin changed state.
-        if self.pin_busy.read() == true {
-            kernel::debug!("eink: busy");
-        } else {
-            let peeked_op = self.peek_operation().extract();
-            match peeked_op {
-                // The display went busy when we supposedly were not waiting?
-                None => kernel::debug!("eink: idle; was busy while driver idle"),
-
-                // The display was busy, and we were waiting on it; the expected case.
-                Some(Operation::Await) => {
-                    kernel::debug!("eink: idle");
-                    self.dequeue_discard();
-                },
-
-                // The display was busy, but we were not waiting on it? Bad.
-                Some(op) => {
-                    kernel::debug!("eink: idle; was busy while driver active!");
+        let peeked_op = self.peek_operation().extract();
+        let is_busy = self.pin_busy.read();
+        match peeked_op {
+            // The display went busy when we supposedly were not waiting?
+            None => {
+                if is_busy {
+                    kernel::debug!("eink: busy; was idle while driver idle");
+                } else {
+                    kernel::debug!("eink: idle; was busy while driver idle");
                 }
+            },
+
+            // The display was busy, and we were waiting on it; the expected case.
+            // If the busy pin goes high, then do nothing; this is necessary but does not signal readiness.
+            Some(Operation::Await) => {
+                if is_busy {
+                    kernel::debug!("eink: now busy; awaiting idle");
+                } else {
+                    kernel::debug!("eink: now idle; await complete");
+                    self.dequeue_discard();
+                }
+            },
+
+            // Ignore the hardware reset busy state change.
+            // This driver should always follow up HardwareReset with an Await.
+            Some(Operation::HardwareReset) => {  },
+
+            // The display was busy, but we were not waiting on it? Bad.
+            Some(op) => {
+                kernel::debug!("eink: idle; was busy while driver active!");
             }
         }
     }
