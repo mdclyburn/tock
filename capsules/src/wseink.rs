@@ -94,7 +94,7 @@ pub struct WS2C250<A: 'static + Alarm<'static>> {
 
     alarm: &'static VirtualMuxAlarm<'static, A>,
 
-    operation_queue: [OptionalCell<Operation>; 10],
+    operation_queue: [OptionalCell<Operation>; 15],
     operation_queue_bounds: Cell<(usize, usize)>,
 }
 
@@ -127,6 +127,11 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
             pin_busy,
             alarm,
             operation_queue: [
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
                 OptionalCell::empty(),
                 OptionalCell::empty(),
                 OptionalCell::empty(),
