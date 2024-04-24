@@ -463,6 +463,7 @@ impl <A: 'static + Alarm<'static>> gpio::Client for WS2C250<A> {
                 } else {
                     kernel::debug!("eink: now idle; await complete");
                     self.dequeue_discard();
+                    self.process_queue();
                 }
             },
 
