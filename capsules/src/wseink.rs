@@ -174,6 +174,7 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
 
     fn enqueue(&self, operations: &[Operation]) -> Result<()> {
         let (h, t) = self.operation_queue_bounds.get();
+        kernel::debug!("eink: enqueue before {:?}", (h, t));
 
         if self.operation_queue[t].is_some() {
             Err(ErrorCode::NOMEM)
@@ -189,7 +190,7 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
 
             let it = self.operation_queue.iter()
                 .cycle()
-                .skip(self.operation_queue.len() - free_slots)
+                .skip(t)
                 .zip(operations.iter());
             for (dst_optc_op, src_op) in it {
                 dst_optc_op.set(*src_op);
@@ -203,7 +204,7 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
                 self.process_queue();
             }
 
-            // kernel::debug!("eink: queue now {:?}", self.operation_queue_bounds.get());
+            kernel::debug!("eink: queue now {:?}", self.operation_queue_bounds.get());
 
             Ok(())
         }
@@ -211,7 +212,7 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
 
     fn dequeue(&self) -> Option<Operation> {
         let (h, t) = self.operation_queue_bounds.get();
-        if h == t {
+        if h == t && self.operation_queue[t].is_none() {
             None
         } else {
             // This should never result in a None.
@@ -219,6 +220,8 @@ impl<A: 'static + Alarm<'static>> WS2C250<A> {
             let op = self.operation_queue[h].take();
 
             let next_h = (h + 1) % self.operation_queue.len();
+            let next_t = if h == t { t + 1 } else { t };
+
             self.operation_queue_bounds.set((next_h, t));
 
             kernel::debug!("dqueue: {:?}", self.operation_queue_bounds.get());
