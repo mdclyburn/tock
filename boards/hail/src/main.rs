@@ -309,13 +309,6 @@ pub unsafe fn main() {
         .finalize(components::alarm_mux_component_helper!(sam4l::ast::Ast));
     peripherals.ast.configure(mux_alarm);
 
-    use kernel::hil::time::Alarm as _;
-    let kernel_alarm: &'static VirtualMuxAlarm<'_, _> =
-        static_init!(VirtualMuxAlarm<'static, sam4l::ast::Ast>,
-                     VirtualMuxAlarm::new(mux_alarm));
-    board_kernel.set_alarm(kernel_alarm);
-    kernel_alarm.set_alarm_client(board_kernel);
-
     let sensors_i2c = static_init!(
         MuxI2C<'static>,
         MuxI2C::new(&peripherals.i2c1, None, dynamic_deferred_caller)
