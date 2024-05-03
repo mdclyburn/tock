@@ -19,7 +19,6 @@ use crate::hil::time::{
     Alarm,
     AlarmClient,
     ConvertTicks,
-    Time,
 };
 use crate::ipc;
 use crate::memop;
