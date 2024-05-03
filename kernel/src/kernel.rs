@@ -14,6 +14,13 @@ use crate::debug;
 use crate::dynamic_deferred_call::DynamicDeferredCall;
 use crate::errorcode::ErrorCode;
 use crate::grant::Grant;
+use crate::hil::time;
+use crate::hil::time::{
+    Alarm,
+    AlarmClient,
+    ConvertTicks,
+    Time,
+};
 use crate::ipc;
 use crate::memop;
 use crate::platform::chip::Chip;
@@ -30,11 +37,18 @@ use crate::syscall::{Syscall, YieldCall};
 use crate::syscall_driver::CommandReturn;
 use crate::upcall::{Upcall, UpcallId};
 use crate::utilities::cells::NumericCellExt;
+use crate::utilities::cells::OptionalCell;
 
 /// Threshold in microseconds to consider a process's timeslice to be exhausted.
 /// That is, Tock will skip re-scheduling a process if its remaining timeslice
 /// is less than this threshold.
 pub(crate) const MIN_QUANTA_THRESHOLD_US: u32 = 500;
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+enum RunState {
+    Waiting,
+    Running,
+}
 
 /// Main object for the kernel. Each board will need to create one.
 pub struct Kernel {
@@ -59,6 +73,9 @@ pub struct Kernel {
     /// created and the data structures for grants have already been
     /// established.
     grants_finalized: Cell<bool>,
+
+    alarm: OptionalCell<&'static dyn Alarm<'static, Frequency = time::Freq16KHz, Ticks = time::Ticks32>>,
+    batching_state: Cell<RunState>,
 }
 
 /// Enum used to inform scheduler why a process stopped executing (aka why
@@ -94,7 +111,13 @@ impl Kernel {
             process_identifier_max: Cell::new(0),
             grant_counter: Cell::new(0),
             grants_finalized: Cell::new(false),
+            alarm: OptionalCell::empty(),
+            batching_state: Cell::new(RunState::Running),
         }
+    }
+
+    pub fn set_alarm(&self, alarm: &'static dyn Alarm<'static, Frequency = time::Freq16KHz, Ticks = time::Ticks32>) {
+        self.alarm.set(alarm)
     }
 
     /// Something was scheduled for a process, so there is more work to do.
@@ -369,6 +392,23 @@ impl Kernel {
         }
     }
 
+    pub fn update_batching_state(&self) {
+        let alarm = self.alarm.extract().unwrap();
+        // Check if any applications have work to do.
+        let work_available = self.processes.iter()
+            .filter(|op| op.is_some())
+            .map(|op|op.unwrap().ready())
+            .fold(false, |a, c| a || c);
+
+        // Time-based. If there is now something waiting to run,
+        // set the alarm if it has not been set already.
+        // We do not change the batching state here.
+        // The timeout will.
+        if work_available && !alarm.is_armed() {
+            alarm.set_alarm(alarm.now(), alarm.ticks_from_ms(1_000));
+        }
+    }
+
     /// Perform one iteration of the core Tock kernel loop.
     ///
     /// This function is responsible for three main operations:
@@ -414,42 +454,70 @@ impl Kernel {
                     scheduler.execute_kernel_work(chip);
                 }
                 false => {
-                    // No kernel work ready, so ask scheduler for a process.
-                    match scheduler.next(self) {
-                        SchedulingDecision::RunProcess((appid, timeslice_us)) => {
-                            self.process_map_or((), appid, |process| {
-                                let (reason, time_executed) =
-                                    self.do_process(resources, chip, process, ipc, timeslice_us);
-                                scheduler.result(reason, time_executed);
-                            });
-                        }
-                        SchedulingDecision::TrySleep => {
-                            // For testing, it may be helpful to
-                            // disable sleeping the chip in case
-                            // the running test does not generate
-                            // any interrupts.
+                    // Check to see if we are allowing processes to run.
+                    // We first update the state we are tracking (if necessary) to see if the batching state changes.
+                    // Otherwise, we could get stuck in the very same state.
+                    self.update_batching_state();
+
+                    match self.batching_state.get() {
+                        RunState::Running => {
+                            // No kernel work ready, so ask scheduler for a process.
+                            match scheduler.next(self) {
+                                SchedulingDecision::RunProcess((appid, timeslice_us)) => {
+                                    self.process_map_or((), appid, |process| {
+                                        let (reason, time_executed) =
+                                            self.do_process(resources, chip, process, ipc, timeslice_us);
+                                        scheduler.result(reason, time_executed);
+                                    });
+                                }
+                                SchedulingDecision::TrySleep => {
+                                    // For testing, it may be helpful to
+                                    // disable sleeping the chip in case
+                                    // the running test does not generate
+                                    // any interrupts.
+                                    if !no_sleep {
+                                        chip.atomic(|| {
+                                            // Cannot sleep if interrupts are pending,
+                                            // as on most platforms unhandled interrupts
+                                            // will wake the device. Also, if the only
+                                            // pending interrupt occurred after the
+                                            // scheduler decided to put the chip to
+                                            // sleep, but before this atomic section
+                                            // starts, the interrupt will not be
+                                            // serviced and the chip will never wake
+                                            // from sleep.
+                                            if !chip.has_pending_interrupts()
+                                                && !DynamicDeferredCall::global_instance_calls_pending()
+                                                .unwrap_or(false)
+                                            {
+                                                resources.watchdog().suspend();
+                                                // Go back to the waiting state if we are now out of work to do.
+                                                self.batching_state.set(RunState::Waiting);
+                                                chip.sleep();
+                                                resources.watchdog().resume();
+                                            }
+                                        });
+                                    }
+                                }
+                            }
+                        },
+
+                        // Just go back to sleep if we are still waiting.
+                        RunState::Waiting => {
                             if !no_sleep {
                                 chip.atomic(|| {
-                                    // Cannot sleep if interrupts are pending,
-                                    // as on most platforms unhandled interrupts
-                                    // will wake the device. Also, if the only
-                                    // pending interrupt occurred after the
-                                    // scheduler decided to put the chip to
-                                    // sleep, but before this atomic section
-                                    // starts, the interrupt will not be
-                                    // serviced and the chip will never wake
-                                    // from sleep.
                                     if !chip.has_pending_interrupts()
                                         && !DynamicDeferredCall::global_instance_calls_pending()
-                                            .unwrap_or(false)
+                                        .unwrap_or(false)
                                     {
                                         resources.watchdog().suspend();
+                                        self.batching_state.set(RunState::Waiting);
                                         chip.sleep();
                                         resources.watchdog().resume();
                                     }
                                 });
                             }
-                        }
+                        },
                     }
                 }
             }
@@ -1176,5 +1244,13 @@ impl Kernel {
                 _ => process.set_syscall_return_value(SyscallReturn::Failure(ErrorCode::NOSUPPORT)),
             },
         }
+    }
+}
+
+impl AlarmClient for Kernel {
+    fn alarm(&self) {
+        // Timer alarm went off.
+        // Time to transition to running things.
+        self.batching_state.set(RunState::Running);
     }
 }
