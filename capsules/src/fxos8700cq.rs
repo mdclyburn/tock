@@ -271,7 +271,7 @@ impl<'a> Fxos8700cq<'a> {
     }
 
     fn clear_avecm(&self) {
-        kernel::debug!("Clearing AVM interrupt.");
+        // kernel::debug!("Clearing AVM interrupt.");
         let buffer = self.buffer.take().unwrap();
         buffer[0] = Registers::IntSource as u8;
 
@@ -438,7 +438,7 @@ impl I2CClient for Fxos8700cq<'_> {
             }
 
             State::StartupCheck => {
-                kernel::debug!("Startup check result: {:X}", buffer[0]);
+                // kernel::debug!("Startup check result: {:X}", buffer[0]);
 
                 self.state.set(State::EnableFFMT);
 
@@ -457,7 +457,7 @@ impl I2CClient for Fxos8700cq<'_> {
             State::EnableFFMT => {
                 // Done enabling FFMT.
                 // Now set the thresholds.
-                kernel::debug!("Did initial setup of AVecM.");
+                // kernel::debug!("Did initial setup of AVecM.");
 
                 buffer[0] = Registers::CtrlReg1 as u8;
                 buffer[1] = 0;
@@ -474,7 +474,7 @@ impl I2CClient for Fxos8700cq<'_> {
             State::ConfigureFFMTThresholds => {
                 // Done setting FFMT thresholds.
                 // Now enable the interrupt.
-                kernel::debug!("Did interrupt setup.");
+                // kernel::debug!("Did interrupt setup.");
 
                 buffer[0] = Registers::CtrlReg1 as u8;
                 buffer[1] = 0x17;
@@ -486,19 +486,19 @@ impl I2CClient for Fxos8700cq<'_> {
             }
 
             State::IdleAVecM => {
-                kernel::debug!("Done configuring AVM detection.");
+                // kernel::debug!("Done configuring AVM detection.");
                 self.buffer.replace(buffer);
                 self.state.set(State::Disabled);
             }
 
             State::ClearingAVecM => {
-                kernel::debug!("Cleared AVecM: {:X}, IP: {}", buffer[0], self.interrupt_pin1.read());
+                // kernel::debug!("Cleared AVecM: {:X}, IP: {}", buffer[0], self.interrupt_pin1.read());
                 self.buffer.replace(buffer);
                 self.state.set(State::Disabled);
             }
 
             _ => {
-                kernel::debug!("buffer: {:X}, {:X}, IP: {}", buffer[0], buffer[1], self.interrupt_pin1.read());
+                // kernel::debug!("buffer: {:X}, {:X}, IP: {}", buffer[0], buffer[1], self.interrupt_pin1.read());
                 self.buffer.replace(buffer);
             }
         }
