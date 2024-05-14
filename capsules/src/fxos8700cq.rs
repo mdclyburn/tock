@@ -284,14 +284,30 @@ impl<'a> Fxos8700cq<'a> {
 impl gpio::Client for Fxos8700cq<'_> {
     fn fired(&self) {
         let current_state = self.state.get();
-        let ip_state = self.interrupt_pin1.read();
-        if !ip_state {
-            kernel::debug!("Interrupt; state: {:?}", current_state);
-            if current_state == State::Disabled {
-                self.clear_avecm();
-            }
+
+        if current_state == State::Disabled || current_state == State::IdleAVecM {
+            // Notify client of AVM event.
+            self.callback.map(|cb| {
+                cb.callback(1, 1, 9);
+            });
         } else {
-            kernel::debug!("Interrupt deasserted.");
+            // Explicit reading ready.
+            self.buffer.take().map(|buffer| {
+                // When we get this interrupt we can read the sample.
+                self.i2c.enable();
+                buffer[0] = Registers::OutXMsb as u8;
+
+                // Upon success, this will trigger an upcall.
+                // As this particular upcall does not have any field
+                // for the status, we can ignore the error, as this
+                // yields to not scheduling the upcall.
+                if let Err((_error, buffer)) = self.i2c.write_read(buffer, 1, 6) {
+                    self.buffer.replace(buffer);
+                    self.i2c.disable();
+                } else {
+                    self.state.set(State::ReadAccelReading);
+                }
+            });
         }
     }
 }
@@ -315,7 +331,7 @@ impl I2CClient for Fxos8700cq<'_> {
             State::ReadAccelSetup => {
                 // Setup the interrupt so we know when the sample is ready
                 self.interrupt_pin1
-                    .enable_interrupts(gpio::InterruptEdge::EitherEdge);
+                    .enable_interrupts(gpio::InterruptEdge::FallingEdge);
 
                 // Enable the accelerometer.
                 buffer[0] = Registers::CtrlReg1 as u8;
@@ -464,7 +480,7 @@ impl I2CClient for Fxos8700cq<'_> {
                 buffer[1] = 0x17;
 
                 self.state.set(State::IdleAVecM);
-                self.interrupt_pin1.enable_interrupts(gpio::InterruptEdge::EitherEdge);
+                self.interrupt_pin1.enable_interrupts(gpio::InterruptEdge::FallingEdge);
                 self.i2c.enable();
                 self.i2c.write(buffer, 2).unwrap();
             }

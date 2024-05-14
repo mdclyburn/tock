@@ -38,6 +38,7 @@ pub enum NineDofCommand {
 
 pub struct App {
     pending_command: bool,
+    avm_events: bool,
     command: NineDofCommand,
     arg1: usize,
 }
@@ -46,6 +47,7 @@ impl Default for App {
     fn default() -> App {
         App {
             pending_command: false,
+            avm_events: false,
             command: NineDofCommand::Exists,
             arg1: 0,
         }
@@ -158,6 +160,14 @@ impl hil::sensors::NineDofClient for NineDof<'_> {
             });
         });
 
+        for p in self.apps.iter() {
+            p.enter(|app_data, upcall_table| {
+                if app_data.avm_events {
+                    upcall_table.schedule_upcall(0, (arg1, arg2, arg3)).ok();
+                }
+            });
+        }
+
         // Check if there are any pending events.
         for cntr in self.apps.iter() {
             let appid = cntr.processid();
@@ -204,6 +214,16 @@ impl SyscallDriver for NineDof<'_> {
 
             // Single gyroscope reading.
             200 => self.enqueue_command(NineDofCommand::ReadGyroscope, arg1, appid),
+
+            // Get AVM events.
+            900 => {
+                let sub: bool = arg1 != 0;
+                self.apps.enter(appid, |grant_data, _upcall_table| {
+                    grant_data.avm_events = sub;
+                }).unwrap();
+
+                CommandReturn::success()
+            }
 
             _ => CommandReturn::failure(ErrorCode::NOSUPPORT),
         }
