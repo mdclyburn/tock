@@ -359,6 +359,7 @@ pub unsafe fn main() {
     );
     fxos8700_i2c.set_client(fxos8700);
     peripherals.pa[9].set_client(fxos8700);
+    fxos8700.setup();
 
     let ninedof =
         components::ninedof::NineDofComponent::new(board_kernel, capsules::ninedof::DRIVER_NUM)

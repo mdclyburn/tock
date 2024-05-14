@@ -28,7 +28,7 @@ use kernel::hil::i2c::{Error, I2CClient, I2CDevice};
 use kernel::utilities::cells::{OptionalCell, TakeCell};
 use kernel::ErrorCode;
 
-pub static mut BUF: [u8; 6] = [0; 6];
+pub static mut BUF: [u8; 7] = [0; 7];
 
 #[allow(dead_code)]
 enum Registers {
@@ -149,7 +149,7 @@ enum Registers {
     AFfmtThsZLsb = 0x78,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum State {
     /// Sensor is in standby mode
     Disabled,
@@ -174,6 +174,18 @@ enum State {
 
     /// Have the magnetometer values and sending them to application
     ReadMagValues,
+
+    EnableFFMT,
+
+    ConfigureFFMTThresholds,
+
+    IdleAVecM,
+
+    ClearingAVecM,
+
+    ReadInResponse,
+
+    StartupCheck,
 }
 
 pub struct Fxos8700cq<'a> {
@@ -190,6 +202,8 @@ impl<'a> Fxos8700cq<'a> {
         interrupt_pin1: &'a dyn gpio::InterruptPin<'a>,
         buffer: &'static mut [u8],
     ) -> Fxos8700cq<'a> {
+        let _ = interrupt_pin1.make_input();
+
         Fxos8700cq {
             i2c: i2c,
             interrupt_pin1: interrupt_pin1,
@@ -197,6 +211,16 @@ impl<'a> Fxos8700cq<'a> {
             buffer: TakeCell::new(buffer),
             callback: OptionalCell::empty(),
         }
+    }
+
+    pub fn setup(&self) {
+        self.state.set(State::StartupCheck);
+        let buffer = self.buffer.take().unwrap();
+        buffer[0] = Registers::WhoAmI as u8;
+        buffer[1] = 0x00;
+
+        self.i2c.enable();
+        self.i2c.write_read(buffer, 1, 1).unwrap();
     }
 
     fn start_read_accel(&self) -> Result<(), ErrorCode> {
@@ -245,28 +269,30 @@ impl<'a> Fxos8700cq<'a> {
             Err(ErrorCode::BUSY)
         }
     }
+
+    fn clear_avecm(&self) {
+        kernel::debug!("Clearing AVM interrupt.");
+        let buffer = self.buffer.take().unwrap();
+        buffer[0] = Registers::IntSource as u8;
+
+        self.i2c.enable();
+        self.i2c.write_read(buffer, 1, 2).unwrap();
+        self.state.set(State::ClearingAVecM);
+    }
 }
 
 impl gpio::Client for Fxos8700cq<'_> {
     fn fired(&self) {
-        self.buffer.take().map(|buffer| {
-            self.interrupt_pin1.disable_interrupts();
-
-            // When we get this interrupt we can read the sample.
-            self.i2c.enable();
-            buffer[0] = Registers::OutXMsb as u8;
-
-            // Upon success, this will trigger an upcall.
-            // As this particular upcall does not have any field
-            // for the status, we can ignore the error, as this
-            // yields to not scheduling the upcall.
-            if let Err((_error, buffer)) = self.i2c.write_read(buffer, 1, 6) {
-                self.buffer.replace(buffer);
-                self.i2c.disable();
-            } else {
-                self.state.set(State::ReadAccelReading);
+        let current_state = self.state.get();
+        let ip_state = self.interrupt_pin1.read();
+        if !ip_state {
+            kernel::debug!("Interrupt; state: {:?}", current_state);
+            if current_state == State::Disabled {
+                self.clear_avecm();
             }
-        });
+        } else {
+            kernel::debug!("Interrupt deasserted.");
+        }
     }
 }
 
@@ -289,7 +315,7 @@ impl I2CClient for Fxos8700cq<'_> {
             State::ReadAccelSetup => {
                 // Setup the interrupt so we know when the sample is ready
                 self.interrupt_pin1
-                    .enable_interrupts(gpio::InterruptEdge::FallingEdge);
+                    .enable_interrupts(gpio::InterruptEdge::EitherEdge);
 
                 // Enable the accelerometer.
                 buffer[0] = Registers::CtrlReg1 as u8;
@@ -394,7 +420,71 @@ impl I2CClient for Fxos8700cq<'_> {
                 self.callback
                     .map(|cb| cb.callback(x as usize, y as usize, z as usize));
             }
-            _ => {}
+
+            State::StartupCheck => {
+                kernel::debug!("Startup check result: {:X}", buffer[0]);
+
+                self.state.set(State::EnableFFMT);
+
+                self.i2c.enable();
+
+                buffer[0] = Registers::AVecmCfg as u8;
+                buffer[1] = 1 << 3;
+                buffer[2] = 0; // threshold msb
+                buffer[3] = 0x40; // threshold lsb
+                buffer[4] = 0x02; // debounce
+
+                self.i2c.enable();
+                self.i2c.write(buffer, 5).unwrap();
+            }
+
+            State::EnableFFMT => {
+                // Done enabling FFMT.
+                // Now set the thresholds.
+                kernel::debug!("Did initial setup of AVecM.");
+
+                buffer[0] = Registers::CtrlReg1 as u8;
+                buffer[1] = 0;
+                buffer[2] = 0;
+                buffer[3] = (1 << 2);
+                buffer[4] = (1 << 1);
+                buffer[5] = (1 << 1);
+
+                self.state.set(State::ConfigureFFMTThresholds);
+                self.i2c.enable();
+                self.i2c.write(buffer, 6).unwrap();
+            }
+
+            State::ConfigureFFMTThresholds => {
+                // Done setting FFMT thresholds.
+                // Now enable the interrupt.
+                kernel::debug!("Did interrupt setup.");
+
+                buffer[0] = Registers::CtrlReg1 as u8;
+                buffer[1] = 0x17;
+
+                self.state.set(State::IdleAVecM);
+                self.interrupt_pin1.enable_interrupts(gpio::InterruptEdge::EitherEdge);
+                self.i2c.enable();
+                self.i2c.write(buffer, 2).unwrap();
+            }
+
+            State::IdleAVecM => {
+                kernel::debug!("Done configuring AVM detection.");
+                self.buffer.replace(buffer);
+                self.state.set(State::Disabled);
+            }
+
+            State::ClearingAVecM => {
+                kernel::debug!("Cleared AVecM: {:X}, IP: {}", buffer[0], self.interrupt_pin1.read());
+                self.buffer.replace(buffer);
+                self.state.set(State::Disabled);
+            }
+
+            _ => {
+                kernel::debug!("buffer: {:X}, {:X}, IP: {}", buffer[0], buffer[1], self.interrupt_pin1.read());
+                self.buffer.replace(buffer);
+            }
         }
     }
 }
