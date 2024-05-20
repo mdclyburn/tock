@@ -596,83 +596,8 @@ pub unsafe fn main() {
     use kernel::hil::uart::Transmit as _;
     let _result = peripherals.usart0.power_off();
 
-    // Time window batching.
-    // let batching_strategy: &'static dyn BatchController = {
-    //     use kernel::hil::time::Alarm as _;
-
-    //     const WINDOW_DURATION_MS: usize = 250;
-
-    //     let bc = static_init!(
-    //         batching::TimeWindowBatching,
-    //         batching::TimeWindowBatching::new(
-    //             WINDOW_DURATION_MS,
-    //             &peripherals.ast,
-    //             alarm));
-    //     peripherals.ast.set_alarm_client(bc);
-    //     bc
-    // };
-
-    // let batching_strategy: &'static dyn BatchController = {
-    //     use kernel::hil::time::Alarm as _;
-
-    //     let bc = static_init!(
-    //         batching::ResponsiveBatching,
-    //         batching::ResponsiveBatching::new(
-    //             &peripherals.ast,
-    //             alarm));
-    //     peripherals.ast.set_alarm_client(bc);
-    //     bc
-    // };
-
-    // let batching_strategy: &'static dyn BatchController = {
-    //     use kernel::hil::time::Alarm as _;
-
-    //     let bc = static_init!(
-    //         batching::ObservantBatching,
-    //         batching::ObservantBatching::new(&peripherals.ast));
-
-    //     bc
-    // };
-
-    // let batching_strategy: &'static dyn BatchController = {
-    //     use kernel::hil::time::Alarm as _;
-
-    //     let bc = static_init!(
-    //         batching::DBSCANObserver,
-    //         batching::DBSCANObserver::new(&peripherals.ast));
-
-    //     bc
-    // };
-
-    // let batching_strategy: &'static dyn BatchController = {
-    //     static_init!(
-    //         batching::PrefetchTester,
-    //         batching::PrefetchTester::new(board_kernel, &mut PROCESSES))
-    // };
-
-    // let batching_strategy: &'static dyn BatchController =
-    //     static_init!(batching::FixedCountBatching,
-    //                  batching::FixedCountBatching::new(4));
-
-    let batching_strategy: &'static dyn BatchController = {
-        const WINDOW_DURATION_MS: usize = 1000;
-
-        let bc_alarm = static_init!(VirtualMuxAlarm<'static, sam4l::ast::Ast>,
-                                    VirtualMuxAlarm::new(mux_alarm));
-        let bc = static_init!(
-            batching::PrefetchController,
-            batching::PrefetchController::new(
-                WINDOW_DURATION_MS,
-                bc_alarm,
-                board_kernel,
-                &mut PROCESSES));
-        bc.configure();
-
-        bc
-    };
-
     // No batching.
-    // let batching_strategy = &();
+    let batching_strategy = &();
 
     board_kernel.set_batch_controller(batching_strategy);
     board_kernel.kernel_loop(&hail, chip, Some(&hail.ipc), &main_loop_capability);
