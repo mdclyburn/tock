@@ -1584,7 +1584,7 @@ impl BatchController for PrefetchController {
 
                     // Consider a command to execute ahead of time.
                     if self.shadow_process.cache_space_ready() {
-                        self.forward_batch();
+                        // self.forward_batch();
                         // If forward_batch() created an AoT batch, then it would have also opened the batch window
                         // (based on the timing of the next task).
                         // But if it did not, then we manually open it here.
