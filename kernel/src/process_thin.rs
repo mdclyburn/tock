@@ -148,6 +148,7 @@ impl ThinProcess {
         // Perhaps drivers' implementations could inform this.
         let mapping = match (driver_no, subdriver_no) {
             (0x00005, 3) => Some((0x00005, 0)),
+            (0x60000, 1) => Some((0x60000, 0)),
             (0x60001, 1) => Some((0x60001, 0)),
             _ => None,
         };

@@ -1409,13 +1409,13 @@ impl PrefetchController {
                     2 => {
 
                         self.extra_syscalls[0].set(Syscall::Command {
-                            driver_number: 0x60001,
+                            driver_number: 0x60000,
                             subdriver_number: 0x1,
                             arg0: 0,
                             arg1: 0,
                         });
 
-                        self.shadow_process.indicate(0x60001, 0x0);
+                        self.shadow_process.indicate(0x60000, 0x0);
                     },
 
                     _ => { return; },
