@@ -1243,7 +1243,7 @@ pub struct PrefetchController {
     /// Kernel dummy process.
     shadow_process: &'static ThinProcess,
     /// Ring schedule of processes' periodic tasks.
-    schedule: [(Cell<usize>, Cell<usize>); 3],
+    schedule: [(Cell<usize>, Cell<usize>, Cell<usize>); 5],
     /// Application buffers the controller is aware of.
     rw_allow_buffers: [OptionalCell<((usize, usize), *mut u8)>; 2],
     /// Last time the schedule was updated.
@@ -1274,9 +1274,11 @@ impl PrefetchController {
             extra_syscalls: [OptionalCell::empty(), OptionalCell::empty()],
             shadow_process,
             schedule: [
-                (Cell::new(core::usize::MAX), Cell::new(core::usize::MAX)),
-                (Cell::new(core::usize::MAX), Cell::new(core::usize::MAX)),
-                (Cell::new(core::usize::MAX), Cell::new(core::usize::MAX)),
+                (Cell::new(core::usize::MAX), Cell::new(core::usize::MAX), Cell::new(core::usize::MAX)),
+                (Cell::new(core::usize::MAX), Cell::new(core::usize::MAX), Cell::new(core::usize::MAX)),
+                (Cell::new(core::usize::MAX), Cell::new(core::usize::MAX), Cell::new(core::usize::MAX)),
+                (Cell::new(core::usize::MAX), Cell::new(core::usize::MAX), Cell::new(core::usize::MAX)),
+                (Cell::new(core::usize::MAX), Cell::new(core::usize::MAX), Cell::new(core::usize::MAX)),
             ],
             rw_allow_buffers: [OptionalCell::empty(),
                                OptionalCell::empty()],
@@ -1314,7 +1316,7 @@ impl PrefetchController {
         // Pick up the first call to the schedule.
         // Just update the last update time since there is nothing useful to do otherwise.
         if self.last_schedule_update.get() != 0 {
-            for (pid, dt) in self.schedule.iter() {
+            for (pid, dt, _init_dt) in self.schedule.iter() {
                 // Make sure the entry is, in fact, valid.
                 if pid.get() != core::usize::MAX {
                     // Simple subtraction, but if the next execution time expired, clear it.
@@ -1332,7 +1334,7 @@ impl PrefetchController {
     }
 
     /// Returns the soonest expiring application timer.
-    fn next_expiring_task(&self) -> Option<&(Cell<usize>, Cell<usize>)> {
+    fn next_expiring_task(&self) -> Option<&(Cell<usize>, Cell<usize>, Cell<usize>)> {
         // Need an up-to-date schedule to find the next-expiring task.
         self.update_schedule();
 
@@ -1340,7 +1342,7 @@ impl PrefetchController {
         // kernel::debug!("Schedule:");
         let mut best_idx = core::usize::MAX;
         for i in 0..self.schedule.len() {
-            let (pid, dt) = &self.schedule[i];
+            let (pid, dt, _init_dt) = &self.schedule[i];
             // kernel::debug!("{} @{}", pid.get(), dt.get());
             if pid.get() != core::usize::MAX {
                 if best_idx == core::usize::MAX || self.schedule[best_idx].1.get() > dt.get() {
@@ -1359,7 +1361,7 @@ impl PrefetchController {
     fn forward_batch(&self) {
         // Find the closest task to expiration.
         // That will be the task to forward-batch.
-        if let Some((pid, dt)) = self.next_expiring_task() {
+        if let Some((pid, dt, init_dt)) = self.next_expiring_task() {
             // kernel::debug!("{}: Next expiring: {} in {} tcs.",
             //                unsafe { core::ptr::read_volatile((0x400F0800 + 0x04) as *mut u32) },
             //                pid.get(),
@@ -1382,7 +1384,6 @@ impl PrefetchController {
                 match pid.get() {
                     // Loudness.
                     1 => {
-
                         let (allow_address, allow_size) = self.shadow_process.reserve_buffer(128)
                             .unwrap();
 
@@ -1406,16 +1407,40 @@ impl PrefetchController {
                         self.shadow_process.indicate(0x00005, 0x0);
                     },
 
+                    // Biometrics
                     2 => {
+                        if init_dt.get() == 16_000 * 2 {
+                            self.extra_syscalls[0].set(Syscall::Command {
+                                driver_number: 0x60000,
+                                subdriver_number: 0x1,
+                                arg0: 0,
+                                arg1: 0,
+                            });
 
-                        self.extra_syscalls[0].set(Syscall::Command {
-                            driver_number: 0x60000,
-                            subdriver_number: 0x1,
-                            arg0: 0,
-                            arg1: 0,
-                        });
+                            self.shadow_process.indicate(0x60000, 0x0);
+                        } else if init_dt.get() == 16_000 * 4 {
+                            let (allow_address, allow_size) = self.shadow_process.reserve_buffer(10)
+                                .unwrap();
 
-                        self.shadow_process.indicate(0x60000, 0x0);
+                            let syscall_buffer_allow = Syscall::ReadWriteAllow {
+                                driver_number: 0x00005,
+                                subdriver_number: 0,
+                                allow_address,
+                                allow_size,
+                            };
+
+                            let syscall_sample_command = Syscall::Command {
+                                driver_number: 0x00005,
+                                subdriver_number: 0x3,
+                                arg0: 1,
+                                arg1: 4,
+                            };
+
+                            self.extra_syscalls[0].set(syscall_buffer_allow);
+                            self.extra_syscalls[1].set(syscall_sample_command);
+
+                            self.shadow_process.indicate(0x00005, 0x0);
+                        }
                     },
 
                     _ => { return; },
@@ -1467,11 +1492,12 @@ impl BatchController for PrefetchController {
                     if invoking_pid != 0 {
                         self.update_schedule();
                         let matched_entry = self.schedule.iter()
-                            .find(|(pid, _dt)| pid.get() == invoking_pid);
-                        if let Some((pid, dt)) = matched_entry {
+                            .find(|(pid, _dt, init_dt)| pid.get() == invoking_pid && init_dt.get() == *syscall_dt);
+                        if let Some((pid, dt, init_dt)) = matched_entry {
                             // The application's schedule is currently tracked.
                             // Update the existing dt value with the new, reset value.
                             dt.set(*syscall_dt);
+                            init_dt.set(*syscall_dt);
                             // kernel::debug!("EU: ({}, {} [@{}])",
                             //                pid.get(),
                             //                dt.get(),
@@ -1479,7 +1505,7 @@ impl BatchController for PrefetchController {
                         } else {
                             // Find an empty slot.
                             let empty_entry = self.schedule.iter()
-                                .find(|(pid, _dt)| pid.get() == core::usize::MAX)
+                                .find(|(pid, _dt, _init_dt)| pid.get() == core::usize::MAX)
                                 .unwrap(); // If this does not work, then there are not enough entries in `schedule`.
                             empty_entry.0.set(invoking_pid);
                             empty_entry.1.set(*syscall_dt);
