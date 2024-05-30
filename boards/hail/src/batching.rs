@@ -142,8 +142,6 @@ pub struct TimeWindowBatching {
     /// Alarm used for time window batching.
     batch_alarm: &'static BatchAlarm,
     /// Alarm driver applications interact with.
-    alarm_driver: &'static dyn AlarmClient,
-    /// Time that the batch window expires; (reference, dt).
     next_expiration: OptionalCell<(usize, usize)>,
     /// The latest unexpired timer; (reference, dt).
     latest_alarm: Cell<(usize, usize)>,
@@ -153,15 +151,13 @@ pub struct TimeWindowBatching {
 
 impl TimeWindowBatching {
     pub fn new(window_duration_ms: usize,
-               batch_alarm: &'static BatchAlarm,
-               alarm_driver: &'static dyn AlarmClient)
+               batch_alarm: &'static BatchAlarm)
                -> TimeWindowBatching
     {
         TimeWindowBatching {
             batching_state: Cell::new(BatchingState::Batch),
             window_duration_ms,
             batch_alarm,
-            alarm_driver,
             next_expiration: OptionalCell::empty(),
             latest_alarm: Cell::new((0, 0)),
             pending_syscalls: [
@@ -211,7 +207,7 @@ impl TimeWindowBatching {
 
             let expiration = (now.into_usize(), window_duration_ticks as usize);
             self.next_expiration.set(expiration);
-            // debug!("batch window: {:?}", expiration);
+            // kernel::debug!("batch window: {:?}", expiration);
         }
     }
 }
@@ -223,49 +219,34 @@ impl BatchController for TimeWindowBatching {
             Syscall::Command { driver_number: _, subdriver_number: 0, .. } =>
                 QueueResult::Run(syscall),
 
-            // Alarm driver syscalls work differently...
-            // We modified the alarm capsule to not actually interact with the bottom-half.
-            // So, applications can register all the alarms they want.
-            // Since the kernel controls the timer, the kernel will call into the alarm capsule
-            // to make sure it eventually handles expired alarms set by applications.
-            //
-            // Instead of queueing the syscall, we let it through and make sure to open a batch window
-            // so that we will service this alarm eventually.
-            //
-            // Perhaps how applications use the alarms should determine the size of the batching window?
+            // Applications can register all the alarms they want.
             Syscall::Command { driver_number: 0,
                                subdriver_number,
                                arg0: syscall_reference,
                                arg1: syscall_dt } =>
             {
-                if *subdriver_number == batch::ALARM_COMMAND_SET_ALARM {
-                    // kernel::debug!("alarm: {:?}", syscall);
-                }
-
-                // Update the instant for the latest alarm set.
-                let (latest_reference, latest_dt) = self.latest_alarm.get();
-                if (latest_reference + latest_dt) < (syscall_reference + syscall_dt) {
-                    self.latest_alarm.set((*syscall_reference, *syscall_dt));
-                }
-
-                // Make sure the batch window is open.
-                self.open_batch_window();
-
                 // Make the kernel handle the syscall into the alarm capsule now.
                 QueueResult::Run(syscall)
             },
 
             // All other commands should go to the queue for later execution.
-            Syscall::Command { .. } => {
-                let empty_slot = self.pending_syscalls.iter()
-                    .find(|oc| oc.is_none())
-                    .expect("pending syscall overflow");
-                let pending_syscall = PendingSyscall::new(invoking_process.processid(), *syscall);
-                empty_slot.set(pending_syscall);
-                // Now that we have a pending syscall, we ensure that we have a batch window open.
-                self.open_batch_window();
-                // debug!("queued: {:?}", pending_syscall.syscall);
-                QueueResult::Queued
+            Syscall::Command { driver_number,
+                               subdriver_number, .. } => {
+                match driver_number {
+                    0x00001 | 0x00005 | 0x40001 | 0x40006 | 0x60000 | 0x60001 | 0x60004 | 0x60006 => {
+                        let empty_slot = self.pending_syscalls.iter()
+                            .find(|oc| oc.is_none())
+                            .expect("pending syscall overflow");
+                        let pending_syscall = PendingSyscall::new(invoking_process.processid(), *syscall);
+                        empty_slot.set(pending_syscall);
+                        // Now that we have a pending syscall, we ensure that we have a batch window open.
+                        self.open_batch_window();
+                        // kernel::debug!("queued: {:?}", pending_syscall.syscall);
+                        QueueResult::Queued
+                    },
+
+                    _ => QueueResult::Run(syscall),
+                }
             },
 
             // Any non-command syscalls should execute immediately.
@@ -300,6 +281,8 @@ impl BatchController for TimeWindowBatching {
         self.batching_state.set(BatchingState::Batch);
         self.open_batch_window();
     }
+
+    fn flush_upcalls(&self) -> bool { true }
 }
 
 impl AlarmClient for TimeWindowBatching {
@@ -307,12 +290,8 @@ impl AlarmClient for TimeWindowBatching {
     ///
     /// Run pending syscalls and also notify the alarm driver of expiration.
     fn alarm(&self) {
-        // debug!("batch window expired");
+        // kernel::debug!("batch window expired");
         self.next_expiration.clear();
-
-        // Alarm upcalls could lead to other operations becoming queued.
-        // Perhaps we should execute those as well while we are executing syscalls?
-        self.alarm_driver.alarm();
 
         // The next step is to run upcalls (and possibly collect their syscalls).
         self.batching_state.set(BatchingState::CollectUpcalls);

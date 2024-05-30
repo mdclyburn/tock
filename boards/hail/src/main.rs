@@ -597,18 +597,14 @@ pub unsafe fn main() {
     let _result = peripherals.usart0.power_off();
 
     let batching_strategy: &'static dyn BatchController = {
-        const WINDOW_DURATION_MS: usize = 1000;
+        use kernel::hil::time::Alarm;
 
         let bc_alarm = static_init!(VirtualMuxAlarm<'static, sam4l::ast::Ast>,
                                     VirtualMuxAlarm::new(mux_alarm));
-        let bc = static_init!(
-            batching::PrefetchController,
-            batching::PrefetchController::new(
-                WINDOW_DURATION_MS,
-                bc_alarm,
-                board_kernel,
-                &mut PROCESSES));
-        bc.configure();
+        let bc = static_init!(batching::TimeWindowBatching,
+                              batching::TimeWindowBatching::new(1000, bc_alarm));
+
+        bc_alarm.set_alarm_client(bc);
 
         bc
     };

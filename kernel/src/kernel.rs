@@ -429,22 +429,23 @@ impl Kernel {
 
             BatchingState::CollectUpcalls => {
                 // See if any process has upcalls to handle.
-                self.process_each(|p| p.flush_pending_tasks());
-                let upcalls_pending = self.processes.iter()
-                    .filter_map(|opt_proc| *opt_proc)
-                    .map(|proc| proc.has_tasks())
-                    .fold(false, |acc, cur| cur || acc);
-                if upcalls_pending {
-                    // debug!("upcalls only");
-                    scheduler.run_upcalls_only(true);
-                } else {
-                    // debug!("finished running upcalls");
-                    scheduler.run_upcalls_only(false);
-                    batch_controller.notify_upcalls_completed();
-                    // Early return; this function will get called again,
-                    // then we can run syscalls since the batching state changes.
-                    return;
-                }
+                // self.process_each(|p| p.flush_pending_tasks());
+                // let upcalls_pending = self.processes.iter()
+                //     .filter_map(|opt_proc| *opt_proc)
+                //     .map(|proc| proc.has_tasks())
+                //     .fold(false, |acc, cur| cur || acc);
+                // if upcalls_pending {
+                //     debug!("upcalls only");
+                //     scheduler.run_upcalls_only(true);
+                // } else {
+                //     debug!("finished running upcalls");
+                //     scheduler.run_upcalls_only(false);
+                //     batch_controller.notify_upcalls_completed();
+                //     // Early return; this function will get called again,
+                //     // then we can run syscalls since the batching state changes.
+                //     return;
+                // }
+                batch_controller.notify_upcalls_completed();
             },
 
             BatchingState::RunSyscalls => {
