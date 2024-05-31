@@ -233,7 +233,7 @@ impl BatchController for TimeWindowBatching {
             Syscall::Command { driver_number,
                                subdriver_number, .. } => {
                 match driver_number {
-                    0x00001 | 0x00005 | 0x40001 | 0x40006 | 0x60000 | 0x60001 | 0x60004 | 0x60006 => {
+                    0x00001 | 0x00005 | 0x40001 | 0x40006 | 0x60000 | 0x60001 | 0x60006 => {
                         let empty_slot = self.pending_syscalls.iter()
                             .find(|oc| oc.is_none())
                             .expect("pending syscall overflow");
