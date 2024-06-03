@@ -1605,7 +1605,7 @@ impl BatchController for PrefetchController {
                     //                kernel::config::since_boot_ms(),
                     //                driver_number,
                     //                subdriver_number);
-                    self.pending_syscall.set((self.batch_alarm.now().into_usize(),
+                    self.pending_syscall.set((kernel::config::now(),
                                               PendingSyscall::new(invoking_process.processid(), *syscall)));
 
                     // Consider a command to execute ahead of time.
@@ -1668,9 +1668,8 @@ impl BatchController for PrefetchController {
         if self.pending_syscall.is_some() {
             self.pending_syscall.take()
                 .map(|(t_add, p)| {
-                    // let batch_delay_ms = (self.batch_alarm.now().into_usize() - t_add)
-                    //     * 1000 / 16_000;
-                    // kernel::debug!("Batch delay: {} ms", batch_delay_ms);
+                    let batch_delay_ms = (kernel::config::now() - t_add) / 16;
+                    kernel::debug!("{}", batch_delay_ms);
 
                     (p.pid, p.syscall)
                 })
@@ -1680,6 +1679,7 @@ impl BatchController for PrefetchController {
             for optc_syscall in self.extra_syscalls.iter() {
                 if optc_syscall.is_some() {
                     // kernel::debug!("Dequeueing AoT extra.");
+                    kernel::debug!("0");
                     return optc_syscall
                         .take()
                         .map(|s| (self.shadow_process.processid(), s));

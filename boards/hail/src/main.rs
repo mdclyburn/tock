@@ -279,8 +279,8 @@ pub unsafe fn main() {
     // Create a shared UART channel for the console and for kernel debug.
     let uart_mux = components::console::UartMuxComponent::new(
         &peripherals.usart0,
-        // 115200,
-        57600,
+        115200,
+        // 57600,
         dynamic_deferred_caller,
     )
     .finalize(());
@@ -593,11 +593,20 @@ pub unsafe fn main() {
         debug!("{:?}", err);
     });
 
+    let it = PROCESSES.iter()
+        .zip((0..))
+        .filter(|(p, _no)| p.is_some())
+        .map(|(p, no)| (p.unwrap(), no));
+    for (proc, no) in it {
+        let name = proc.get_process_name();
+        kernel::debug!("{}: {}", no, name);
+    }
+
     use kernel::hil::uart::Transmit as _;
     let _result = peripherals.usart0.power_off();
 
     let batching_strategy: &'static dyn BatchController = {
-        const WINDOW_DURATION_MS: usize = 1000;
+        const WINDOW_DURATION_MS: usize = 750;
 
         let bc_alarm = static_init!(VirtualMuxAlarm<'static, sam4l::ast::Ast>,
                                     VirtualMuxAlarm::new(mux_alarm));
