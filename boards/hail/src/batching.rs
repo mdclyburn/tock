@@ -233,7 +233,7 @@ impl BatchController for TimeWindowBatching {
             Syscall::Command { driver_number,
                                subdriver_number, .. } => {
                 match driver_number {
-                    0x00001 | 0x00005 | 0x40001 | 0x40006 | 0x60000 | 0x60001 | 0x60006 => {
+                    0x00001 | 0x00005 | 0x40001 | 0x40006 | 0x60000 | 0x60001 | 0x60004 | 0x60006 => {
                         let empty_slot = self.pending_syscalls.iter()
                             .find(|oc| oc.is_none())
                             .expect("pending syscall overflow");
@@ -242,6 +242,15 @@ impl BatchController for TimeWindowBatching {
                         // Now that we have a pending syscall, we ensure that we have a batch window open.
                         self.open_batch_window();
                         // kernel::debug!("queued: {:?}", pending_syscall.syscall);
+
+                        if *driver_number == 0x60004 {
+                            self.batch_alarm.disarm();
+                            self.next_expiration.clear();
+
+                            // The next step is to run upcalls (and possibly collect their syscalls).
+                            self.batching_state.set(BatchingState::CollectUpcalls);
+                        }
+
                         QueueResult::Queued
                     },
 
@@ -252,7 +261,7 @@ impl BatchController for TimeWindowBatching {
             // Any non-command syscalls should execute immediately.
             _ => QueueResult::Run(syscall),
         }
-    }
+     }
 
     /// Remove a syscall from the queue.
     fn dequeue_syscall(&self) -> Option<(ProcessId, Syscall)> {
@@ -264,7 +273,11 @@ impl BatchController for TimeWindowBatching {
                 .take()
                 .unwrap();
             let delay_ms = (kernel::config::now() - pnd_syscall.t_enqueue) / 16;
-            kernel::debug!("{}", delay_ms);
+
+            match &pnd_syscall.syscall {
+                Syscall::Command { driver_number: 0x60004, .. } => {  },
+                _ => kernel::debug!("{}", delay_ms),
+            };
 
             Some((pnd_syscall.pid, pnd_syscall.syscall))
         } else {
