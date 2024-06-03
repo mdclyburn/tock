@@ -52,7 +52,7 @@ use kernel::{ErrorCode, ProcessId};
 use crate::driver;
 pub const DRIVER_NUM: usize = driver::NUM::Console as usize;
 
-static mut DUMMY_BUFFER: [u8; 1024] = [56; 1024];
+// static mut DUMMY_BUFFER: [u8; 1024] = [56; 1024];
 
 #[derive(Default)]
 pub struct App {
@@ -145,8 +145,8 @@ impl<'a> Console<'a> {
                     })
                     .unwrap_or(0);
                 app.write_remaining -= transaction_len;
-                // let _ = self.uart.transmit_buffer(buffer, transaction_len);
-                let _ = unsafe { self.uart.transmit_buffer(&mut DUMMY_BUFFER, DUMMY_BUFFER.len()) };
+                let _ = self.uart.transmit_buffer(buffer, transaction_len);
+                // let _ = unsafe { self.uart.transmit_buffer(&mut DUMMY_BUFFER, DUMMY_BUFFER.len()) };
             });
         } else {
             app.pending_write = true;

@@ -260,9 +260,13 @@ impl BatchController for TimeWindowBatching {
             .find(|oc| oc.is_some());
 
         if let Some(oc_pnd_syscall) = opt_oc_pnd_syscall {
-            oc_pnd_syscall
+            let pnd_syscall = oc_pnd_syscall
                 .take()
-                .map(|pnd_syscall| (pnd_syscall.pid, pnd_syscall.syscall))
+                .unwrap();
+            let delay_ms = (kernel::config::now() - pnd_syscall.t_enqueue) / 16;
+            kernel::debug!("{}", delay_ms);
+
+            Some((pnd_syscall.pid, pnd_syscall.syscall))
         } else {
             None
         }

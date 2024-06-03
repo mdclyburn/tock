@@ -11,6 +11,7 @@ pub const ALARM_COMMAND_SET_ALARM: usize = 6;
 pub struct PendingSyscall {
     pub pid: ProcessId,
     pub syscall: Syscall,
+    pub t_enqueue: usize,
 }
 
 impl PendingSyscall {
@@ -19,6 +20,7 @@ impl PendingSyscall {
         PendingSyscall {
             pid,
             syscall,
+            t_enqueue: crate::config::now(),
         }
     }
 }
