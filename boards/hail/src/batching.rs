@@ -214,52 +214,56 @@ impl TimeWindowBatching {
 
 impl BatchController for TimeWindowBatching {
     fn check_enqueue<'a>(&self, invoking_process: &dyn Process, syscall: &'a Syscall) -> QueueResult<'a> {
-        match syscall {
-            // Driver checks do not need queueing.
-            Syscall::Command { driver_number: _, subdriver_number: 0, .. } =>
-                QueueResult::Run(syscall),
+        if self.batching_state.get() == BatchingState::Batch {
+            match syscall {
+                // Driver checks do not need queueing.
+                Syscall::Command { driver_number: _, subdriver_number: 0, .. } =>
+                    QueueResult::Run(syscall),
 
-            // Applications can register all the alarms they want.
-            Syscall::Command { driver_number: 0,
-                               subdriver_number,
-                               arg0: syscall_reference,
-                               arg1: syscall_dt } =>
-            {
-                // Make the kernel handle the syscall into the alarm capsule now.
-                QueueResult::Run(syscall)
-            },
+                // Applications can register all the alarms they want.
+                Syscall::Command { driver_number: 0,
+                                   subdriver_number,
+                                   arg0: syscall_reference,
+                                   arg1: syscall_dt } =>
+                {
+                    // Make the kernel handle the syscall into the alarm capsule now.
+                    QueueResult::Run(syscall)
+                },
 
-            // All other commands should go to the queue for later execution.
-            Syscall::Command { driver_number,
-                               subdriver_number, .. } => {
-                match driver_number {
-                    0x00001 | 0x00005 | 0x40001 | 0x40006 | 0x60000 | 0x60001 | 0x60004 | 0x60006 => {
-                        let empty_slot = self.pending_syscalls.iter()
-                            .find(|oc| oc.is_none())
-                            .expect("pending syscall overflow");
-                        let pending_syscall = PendingSyscall::new(invoking_process.processid(), *syscall);
-                        empty_slot.set(pending_syscall);
-                        // Now that we have a pending syscall, we ensure that we have a batch window open.
-                        self.open_batch_window();
-                        // kernel::debug!("queued: {:?}", pending_syscall.syscall);
+                // All other commands should go to the queue for later execution.
+                Syscall::Command { driver_number,
+                                   subdriver_number, .. } => {
+                    match driver_number {
+                        0x00001 | 0x00005 | 0x40001 | 0x40006 | 0x60000 | 0x60001 | 0x60004 | 0x60006 => {
+                            let empty_slot = self.pending_syscalls.iter()
+                                .find(|oc| oc.is_none())
+                                .expect("pending syscall overflow");
+                            let pending_syscall = PendingSyscall::new(invoking_process.processid(), *syscall);
+                            empty_slot.set(pending_syscall);
+                            // Now that we have a pending syscall, we ensure that we have a batch window open.
+                            self.open_batch_window();
+                            // kernel::debug!("queued: {:?}", pending_syscall.syscall);
 
-                        if *driver_number == 0x60004 {
-                            self.batch_alarm.disarm();
-                            self.next_expiration.clear();
+                            if *driver_number == 0x60004 {
+                                self.batch_alarm.disarm();
+                                self.next_expiration.clear();
 
-                            // The next step is to run upcalls (and possibly collect their syscalls).
-                            self.batching_state.set(BatchingState::CollectUpcalls);
-                        }
+                                // The next step is to run upcalls (and possibly collect their syscalls).
+                                self.batching_state.set(BatchingState::CollectUpcalls);
+                            }
 
-                        QueueResult::Queued
-                    },
+                            QueueResult::Queued
+                        },
 
-                    _ => QueueResult::Run(syscall),
-                }
-            },
+                        _ => QueueResult::Run(syscall),
+                    }
+                },
 
-            // Any non-command syscalls should execute immediately.
-            _ => QueueResult::Run(syscall),
+                // Any non-command syscalls should execute immediately.
+                _ => QueueResult::Run(syscall),
+            }
+        } else {
+            QueueResult::Run(syscall)
         }
      }
 

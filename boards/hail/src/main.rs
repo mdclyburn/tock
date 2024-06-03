@@ -602,7 +602,7 @@ pub unsafe fn main() {
         let bc_alarm = static_init!(VirtualMuxAlarm<'static, sam4l::ast::Ast>,
                                     VirtualMuxAlarm::new(mux_alarm));
         let bc = static_init!(batching::TimeWindowBatching,
-                              batching::TimeWindowBatching::new(1000, bc_alarm));
+                              batching::TimeWindowBatching::new(480, bc_alarm));
 
         bc_alarm.set_alarm_client(bc);
 
