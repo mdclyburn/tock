@@ -2,6 +2,7 @@
  */
 
 use core::cell::Cell;
+use core::cmp;
 
 use kernel::batch;
 use kernel::batch::{
@@ -1730,5 +1731,158 @@ impl AlarmClient for PrefetchController {
         self.update_schedule();
         // self.next_expiring_task()
         //     .map(|(pid, dt)| kernel::debug!("Next expiration? {}", pid.get()));
+    }
+}
+
+pub struct RateHarmonizedBatching {
+    batching_state: Cell<BatchingState>,
+    batch_alarm: &'static BatchAlarm,
+    shortest_periods: Cell<(usize, usize)>,
+    pending_syscalls: [OptionalCell<(PendingSyscall, usize)>; 5],
+}
+
+impl RateHarmonizedBatching {
+    pub unsafe fn new(batch_alarm: &'static BatchAlarm) -> RateHarmonizedBatching {
+        RateHarmonizedBatching {
+            batching_state: Cell::new(BatchingState::Batch),
+            batch_alarm,
+            shortest_periods: Cell::new((ms_to_ticks(600_000),
+                                         ms_to_ticks(1_200_000))),
+            pending_syscalls: [
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+                OptionalCell::empty(),
+            ],
+        }
+    }
+
+    fn update_harmonizing_period(&self, p_new: usize) {
+        if p_new == 0 { return; }
+
+        let (p1, p2) = self.shortest_periods.get();
+        if p_new != p1 {
+            let new_p1 = cmp::min(p1, p_new);
+            let new_p2 = if new_p1 != p1 {
+                p1
+            } else {
+                cmp::min(p_new, p2)
+            };
+
+            if (new_p1, new_p2) != (p1, p2) {
+                kernel::debug!("Updating harmonizing period data: ({}, {})", new_p1, new_p2);
+                self.shortest_periods.set((new_p1, new_p2));
+
+                // Reset the batching window timing.
+                // RQ: what if applications frequently change their alarms?
+                self.open_batch_window(true);
+            }
+        }
+    }
+
+    fn harmonizing_period(&self) -> usize {
+        let (p1, p2) = self.shortest_periods.get();
+        if p2 < p1 * 2 {
+            p1 / 2
+        } else {
+            p1
+        }
+    }
+
+    fn open_batch_window(&self, force: bool) {
+        if force {
+            self.batch_alarm.disarm();
+        }
+
+        if !self.batch_alarm.is_armed() || force {
+            let now = self.batch_alarm.now();
+            self.batch_alarm.set_alarm(now, time::Ticks32::from(self.harmonizing_period() as u32));
+            kernel::debug!("--- Batch window open ({}, {})", now.into_usize(), self.harmonizing_period());
+        }
+    }
+}
+
+impl BatchController for RateHarmonizedBatching {
+    fn check_enqueue<'a>(&self, process: &'static dyn Process, syscall: &'a Syscall) -> QueueResult<'a> {
+        match syscall {
+            // Driver checks do not need queueing.
+            Syscall::Command { driver_number: _, subdriver_number: 0, .. } =>
+                QueueResult::Run(syscall),
+
+            // Track periodic task rates for harmonic period calculation.
+            Syscall::Command { driver_number: 0,
+                               subdriver_number,
+                               arg0: _syscall_reference,
+                               arg1: syscall_dt } =>
+            {
+                // self.update_harmonizing_period(*syscall_dt);
+                QueueResult::Run(syscall)
+            },
+
+            // Accelerometer is latency-sensitive.
+            Syscall::Command { driver_number: 0x60004, .. } =>
+                QueueResult::Run(syscall),
+
+            // End the batching period once the shortest-duration task arrives.
+            Syscall::Command { driver_number: 1, .. } => {
+                self.batching_state.set(BatchingState::CollectUpcalls);
+                QueueResult::Run(syscall)
+            },
+
+            // All other commands get batched.
+            Syscall::Command { .. } => {
+                let empty_slot = self.pending_syscalls.iter()
+                    .find(|oc| oc.is_none())
+                    .expect("pending syscall overflow");
+                let pending_syscall = (PendingSyscall::new(process.processid(), *syscall),
+                                       self.batch_alarm.now().into_usize());
+                empty_slot.set(pending_syscall);
+
+                // Difference between AoT batching and this system:
+                // We do not open batching windows dependent on the arrival of an event.
+
+                QueueResult::Queued
+            },
+
+            _ => QueueResult::Run(syscall),
+        }
+    }
+
+    fn dequeue_syscall(&self) -> Option<(ProcessId, Syscall)> {
+        let opt_oc_pnd_syscall = self.pending_syscalls.iter()
+            .find(|oc| oc.is_some());
+
+        if let Some(oc_pnd_syscall) = opt_oc_pnd_syscall {
+            oc_pnd_syscall
+                .take()
+                .map(|(pnd_syscall, t_arrival)| {
+                    let now = self.batch_alarm.now().into_usize();
+                    kernel::debug!("delay: {}", (now - t_arrival) * 1_000 / 16_000);
+                    (pnd_syscall.pid, pnd_syscall.syscall)
+                })
+        } else {
+            None
+        }
+    }
+
+    /// Returns the current batching state.
+    fn state(&self, _k: bool) -> BatchingState {
+        self.batching_state.get()
+    }
+
+    fn notify_upcalls_completed(&self) {
+        self.batching_state.set(BatchingState::RunSyscalls);
+    }
+
+    fn notify_syscalls_completed(&self) {
+        self.batching_state.set(BatchingState::Batch);
+    }
+}
+
+impl AlarmClient for RateHarmonizedBatching {
+    fn alarm(&self) {
+        self.batching_state.set(BatchingState::CollectUpcalls);
+        self.open_batch_window(false);
     }
 }
