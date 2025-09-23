@@ -1,3 +1,19 @@
+# System-wide Batch Peripheral Scheduling in Multi-tenant Embedded Systems
+
+Tock OS code implementing a batching peripheral scheduler.
+- See `kernel/src/batch.rs` for the batch controller interface.
+- Kernel source changes are available in `kernel/src/kernel.rs`.
+  `git blame` can show the changes necessary in the kernel
+  which implement the **batching framework**.
+- Batch controller implementations are available in
+  `boards/hail/src/batching.rs`. The `PrefetchController`
+  defines the Ahead-of-Time batching policy.
+  - This implementation of AoT is not optimized and not production-ready.
+    Its structure makes it easy to alter for collecting experiment data.
+
+This altered version of Tock OS must be used together with the evaluation applications in my libtock-c repository's
+[eas-batching branch](https://github.com/mdclyburn/libtock-c/tree/eas-batching/master)
+
 # ![TockOS](http://www.tockos.org/assets/img/tock.svg "TockOS Logo")
 
 [![tock-ci](https://github.com/tock/tock/workflows/tock-ci/badge.svg)][tock-ci]
