@@ -45,7 +45,7 @@ struct Platform {
                 components::isolated_nonvolatile_storage::ISOLATED_NONVOLATILE_STORAGE_APP_REGION_SIZE_DEFAULT
             },
         >,
-    encryption_oracle: &'static AES128CTREncryptionOracleDriver,
+    isle: &'static capsules_extra::isle::Isle<'static>,
 }
 
 impl SyscallDriverLookup for Platform {
@@ -57,9 +57,7 @@ impl SyscallDriverLookup for Platform {
             capsules_extra::eui64::DRIVER_NUM => f(Some(self.eui64)),
             capsules_extra::ieee802154::DRIVER_NUM => f(Some(self.ieee802154)),
             capsules_extra::screen::screen::DRIVER_NUM => f(Some(self.screen)),
-            capsules_extra::tutorials::encryption_oracle_chkpt5::DRIVER_NUM => {
-                f(Some(self.encryption_oracle))
-            }
+            capsules_extra::isle::DRIVER_NO => f(Some(self.isle)),
             capsules_extra::isolated_nonvolatile_storage_driver::DRIVER_NUM => {
                 f(Some(self.nonvolatile_storage))
             }
@@ -130,30 +128,40 @@ pub unsafe fn main() {
         nrf52840::ieee802154_radio::Radio,
     ));
 
+    // ISLE
+    let isle = static_init!(
+        capsules_extra::isle::Isle,
+        capsules_extra::isle::Isle::new(
+        &nrf52840_peripherals.nrf52.ecb,
+        board_kernel.create_grant(
+            capsules_extra::isle::DRIVER_NO,
+            &create_capability!(capabilities::MemoryAllocationCapability))));
+
     //--------------------------------------------------------------------------
     // AES Encryption Oracle
     //--------------------------------------------------------------------------
-    const CRYPT_SIZE: usize = 7 * kernel::hil::symmetric_encryption::AES128_BLOCK_SIZE;
-    let aes_src_buffer = kernel::static_init!([u8; 16], [0; 16]);
-    let aes_dst_buffer = kernel::static_init!([u8; CRYPT_SIZE], [0; CRYPT_SIZE]);
+    // const CRYPT_SIZE: usize = 7 * kernel::hil::symmetric_encryption::AES128_BLOCK_SIZE;
+    // let aes_src_buffer = kernel::static_init!([u8; 16], [0; 16]);
+    // let aes_dst_buffer = kernel::static_init!([u8; CRYPT_SIZE], [0; CRYPT_SIZE]);
 
-    let encryption_oracle = static_init!(
-        AES128CTREncryptionOracleDriver,
-        AES128CTREncryptionOracleDriver::new(
-            &nrf52840_peripherals.nrf52.ecb,
-            aes_src_buffer,
-            aes_dst_buffer,
-            board_kernel.create_grant(
-                capsules_extra::tutorials::encryption_oracle_chkpt5::DRIVER_NUM,
-                &create_capability!(capabilities::MemoryAllocationCapability)
-            )
-        )
-    );
+    // let encryption_oracle = static_init!(
+    //     AES128CTREncryptionOracleDriver,
+    //     AES128CTREncryptionOracleDriver::new(
+    //         &nrf52840_peripherals.nrf52.ecb,
+    //         aes_src_buffer,
+    //         aes_dst_buffer,
+    //         board_kernel.create_grant(
+    //             capsules_extra::tutorials::encryption_oracle_chkpt5::DRIVER_NUM,
+    //             &create_capability!(capabilities::MemoryAllocationCapability)
+    //         )
+    //     )
+    // );
 
-    kernel::hil::symmetric_encryption::AES128::set_client(
-        &nrf52840_peripherals.nrf52.ecb,
-        encryption_oracle,
-    );
+    // kernel::hil::symmetric_encryption::AES128::set_client(
+    //     &nrf52840_peripherals.nrf52.ecb,
+    //     encryption_oracle,
+    // );
+
     //--------------------------------------------------------------------------
     // SCREEN
     //--------------------------------------------------------------------------
@@ -224,7 +232,7 @@ pub unsafe fn main() {
         ieee802154,
         screen,
         nonvolatile_storage,
-        encryption_oracle,
+        isle,
     };
 
     //--------------------------------------------------------------------------

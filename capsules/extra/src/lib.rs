@@ -54,6 +54,7 @@ pub mod hts221;
 pub mod humidity;
 pub mod ieee802154;
 pub mod isl29035;
+pub mod isle;
 pub mod isolated_nonvolatile_storage_driver;
 pub mod kv_driver;
 pub mod kv_store_permissions;
