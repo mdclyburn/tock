@@ -132,10 +132,11 @@ pub unsafe fn main() {
     let isle = static_init!(
         capsules_extra::isle::Isle,
         capsules_extra::isle::Isle::new(
-        &nrf52840_peripherals.nrf52.ecb,
-        board_kernel.create_grant(
-            capsules_extra::isle::DRIVER_NO,
-            &create_capability!(capabilities::MemoryAllocationCapability))));
+            &nrf52840_peripherals.nrf52.ecb,
+            static_init!([u8; 128], [0; 128]),
+            board_kernel.create_grant(
+                capsules_extra::isle::DRIVER_NO,
+                &create_capability!(capabilities::MemoryAllocationCapability))));
     kernel::hil::symmetric_encryption::AES128CCM::set_client(
         &nrf52840_peripherals.nrf52.ecb,
         isle);
