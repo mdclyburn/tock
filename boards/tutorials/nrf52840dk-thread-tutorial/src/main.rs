@@ -17,6 +17,8 @@ use nrf52840::gpio::Pin;
 use nrf52840::interrupt_service::Nrf52840DefaultPeripherals;
 use nrf52840dk_lib::{self, NUM_PROCS};
 
+mod isle_config;
+
 type ScreenDriver = components::screen::ScreenComponentType;
 
 // State for loading and holding applications.
@@ -132,6 +134,7 @@ pub unsafe fn main() {
     let isle = static_init!(
         capsules_extra::isle::Isle,
         capsules_extra::isle::Isle::new(
+            static_init!(isle_config::Fixed, isle_config::Fixed),
             &nrf52840_peripherals.nrf52.ecb,
             static_init!([u8; 128], [0; 128]),
             board_kernel.create_grant(
