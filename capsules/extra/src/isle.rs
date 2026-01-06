@@ -194,23 +194,24 @@ impl<'a> SyscallDriver for Isle<'a> {
                     // TODO: Dynamically choose the right context.
                     let group_oscore_ctx = &ad.group_oscore_ctxs[0];
 
-                    match kad.get_readonly_processbuffer(ALLOW_NO_IN_BUFFER) {
-                        Ok(in_buffer) => {
+                    let (res_in_buf, res_out_buf) = (
+                        kad.get_readonly_processbuffer(ALLOW_NO_IN_BUFFER),
+                        kad.get_readwrite_processbuffer(ALLOW_NO_OUT_BUFFER));
+                    match (res_in_buf, res_out_buf) {
+                        (Ok(in_buffer), Ok(out_buffer)) =>
                             self.encrypt_send(
                                 &in_buffer,
-                                group_oscore_ctx)
-                        },
+                                group_oscore_ctx),
 
-                        Err(process_err) => {
-                            Err(ErrorCode::FAIL)
-                        }
+                        _ => Err(ErrorCode::FAIL)
                     }
-                });
+                })
+                    .map_err(|_e| ErrorCode::FAIL)
+                    .flatten();
 
-                if let Err(_e) = self.crypt.set_key(&crypt_key) {
-                    CommandReturn::failure(ErrorCode::FAIL)
-                } else {
-                    CommandReturn::success()
+                match res {
+                    Ok(()) => CommandReturn::success(),
+                    Err(ec) => CommandReturn::failure(ErrorCode::FAIL),
                 }
             },
 
