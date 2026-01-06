@@ -136,6 +136,9 @@ pub unsafe fn main() {
         board_kernel.create_grant(
             capsules_extra::isle::DRIVER_NO,
             &create_capability!(capabilities::MemoryAllocationCapability))));
+    kernel::hil::symmetric_encryption::AES128CCM::set_client(
+        &nrf52840_peripherals.nrf52.ecb,
+        isle);
 
     //--------------------------------------------------------------------------
     // AES Encryption Oracle

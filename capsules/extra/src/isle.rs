@@ -10,7 +10,10 @@ use kernel::grant::{
     Grant,
     UpcallCount,
 };
-use kernel::hil::symmetric_encryption::AES128CCM;
+use kernel::hil::symmetric_encryption::{
+    AES128CCM,
+    CCMClient,
+};
 use kernel::process::{
     Error,
     ProcessId,
@@ -100,7 +103,7 @@ impl<'a> SyscallDriver for Isle<'a> {
                 CommandReturn::success()
             },
 
-            _ => CommandReturn::failure(ErrorCode::NOSUPPORT),
+            _ => CommandReturn::failure(ErrorCode::INVAL),
         }
     }
 
@@ -108,5 +111,17 @@ impl<'a> SyscallDriver for Isle<'a> {
         self.app_data.enter(
             pid,
             |_grant_data, _kernel_grant_data| {  })
+    }
+}
+
+impl<'a> CCMClient for Isle<'a> {
+    fn crypt_done(
+        &self,
+        buffer: &'static mut [u8],
+        op_result: Result<(), ErrorCode>,
+        tag_is_valid: bool,
+    )
+    {
+        unimplemented!()
     }
 }
