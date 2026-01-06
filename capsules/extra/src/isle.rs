@@ -26,11 +26,38 @@ use kernel::utilities::cells::MapCell;
 
 pub const DRIVER_NO: usize = capsules_core::driver::NUM::Isle as usize;
 
-pub struct AppData;
+struct GroupOSCOREContext {
+    group_id: u16,
+    master_secret: [u8; 16],
+    master_salt: [u8; 8],
+    sig_enc_key: [u8; 16],
+    sender_seq_no: u32,
+}
+
+impl Default for GroupOSCOREContext {
+    fn default() -> GroupOSCOREContext {
+        GroupOSCOREContext {
+            group_id: 0xFFFF,
+            master_secret: [0x00; 16],
+            master_salt: [0x00; 8],
+            sig_enc_key: [0x00; 16],
+            sender_seq_no: 0,
+        }
+    }
+}
+
+pub struct AppData {
+    group_oscore_ctxs: [GroupOSCOREContext; 2],
+}
 
 impl Default for AppData {
     fn default() -> AppData {
-        AppData
+        AppData {
+            group_oscore_ctxs: [
+                GroupOSCOREContext::default(),
+                GroupOSCOREContext::default(),
+            ],
+        }
     }
 }
 
@@ -68,7 +95,18 @@ impl<'a> SyscallDriver for Isle<'a> {
 
             // Translate CoAP message to Group OSCORE.
             (1, _arg0, _arg1) => {
-                CommandReturn::failure(ErrorCode::NOSUPPORT)
+                let mut crypt_key: [u8; 16] = [0; 16];
+                let res = self.app_data.enter(pid, |ad, _kad| {
+                    // TODO: Dynamically choose the right context.
+                    let goctx = &ad.group_oscore_ctxs[0];
+                    // NEXT: derive the key using group context.
+                });
+
+                if let Err(_e) = self.crypt.set_key(&crypt_key) {
+                    CommandReturn::failure(ErrorCode::FAIL)
+                } else {
+                    CommandReturn::success()
+                }
             },
 
             // Set lower half of IP address.
