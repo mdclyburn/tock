@@ -109,6 +109,7 @@ const IP6_ADDR_LEN: usize = 16;
 
 const ALLOW_NO_IN_BUFFER: usize = 0;
 const ALLOW_NO_OUT_BUFFER: usize = 0;
+const UPCALL_OUT_MESSAGE_READY: usize = 0;
 
 const HMAC_TAG_LEN: usize = 8;
 
@@ -119,7 +120,7 @@ pub struct Isle {
     config_provider: &'static dyn ISLEConfigurationProvider,
     crypt: &'static dyn Crypto,
     crypt_buffer: TakeCell<'static, [u8]>,
-    app_data: Grant<AppData, UpcallCount<0>, AllowRoCount<1>, AllowRwCount<1>>,
+    app_data: Grant<AppData, UpcallCount<1>, AllowRoCount<1>, AllowRwCount<1>>,
     mleid_address: MapCell<[u8; IP6_ADDR_LEN]>,
     pending_for: OptionalCell<PendingState>,
 }
@@ -129,7 +130,7 @@ impl Isle {
         config_provider: &'static dyn ISLEConfigurationProvider,
         crypt: &'static dyn Crypto,
         crypt_buffer: &'static mut [u8; 128],
-        grant_data: Grant<AppData, UpcallCount<0>, AllowRoCount<1>, AllowRwCount<1>>,
+        grant_data: Grant<AppData, UpcallCount<1>, AllowRoCount<1>, AllowRwCount<1>>,
     ) -> Isle {
         Isle {
             config_provider,
@@ -386,6 +387,12 @@ impl symmetric_encryption::Client<'static> for Isle {
                                 .copy_from_slice(&hmac[0..HMAC_TAG_LEN]);
                         })
                     }).flatten();
+
+                // Notify the application layer that this payload is ready to send.
+                let _ = kad.schedule_upcall(
+                    UPCALL_OUT_MESSAGE_READY,
+                    (if write_res.is_ok() { 0 } else { 1 }, 0, 0))
+                    .map_err(|e| debug!("Message ready upcall error: {:?}", e));
 
                 // Reset capsule state.
                 // This buffer belongs back with the capsule.
