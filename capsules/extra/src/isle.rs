@@ -49,7 +49,6 @@ pub struct GroupOSCOREContext {
     master_salt: [u8; 8],
     message_key: [u8; 16],
     hash_key: [u8; 16],
-    sig_enc_key: [u8; 16],
     sender_seq_no: u32,
 }
 
@@ -76,7 +75,6 @@ impl Default for GroupOSCOREContext {
             master_salt: [0x00; 8],
             message_key: [0x00; 16],
             hash_key: [0x00; 16],
-            sig_enc_key: [0x00; 16],
             sender_seq_no: 0,
         }
     }
@@ -100,7 +98,6 @@ impl Default for AppData {
 #[derive(Clone, Copy)]
 struct PendingState {
     pid: ProcessId,
-    message_len: u8,
     aad_len: u8,
     ciphertext_len: u8,
 }
@@ -232,7 +229,7 @@ impl SyscallDriver for Isle {
                         kad.get_readonly_processbuffer(ALLOW_NO_IN_BUFFER),
                         kad.get_readwrite_processbuffer(ALLOW_NO_OUT_BUFFER));
                     match (res_in_buf, res_out_buf) {
-                        (Ok(in_buffer), Ok(out_buffer)) =>
+                        (Ok(in_buffer), Ok(_out_buffer)) =>
                             self.encrypt_send(
                                 group_oscore_ctx,
                                 &in_buffer,
@@ -249,13 +246,12 @@ impl SyscallDriver for Isle {
                     Ok(ciphertext_len) => {
                         self.pending_for.set(PendingState {
                             pid,
-                            message_len: msg_len as u8,
                             aad_len: aad_len as u8,
                             ciphertext_len: ciphertext_len as u8,
                         });
                         CommandReturn::success()
                     },
-                    Err(ec) => CommandReturn::failure(ErrorCode::FAIL),
+                    Err(_ec) => CommandReturn::failure(ErrorCode::FAIL),
                 }
             },
 
@@ -298,7 +294,7 @@ impl SyscallDriver for Isle {
     }
 
     fn allocate_grant(&self, pid: ProcessId) -> Result<(), Error> {
-        self.app_data.enter(pid, |ad, kad| {
+        self.app_data.enter(pid, |ad, _kad| {
             // Get the context provider to set Group OSCORE parameters.
             self.config_provider.init_context(&mut ad.group_oscore_ctxs);
 
@@ -351,13 +347,13 @@ impl SyscallDriver for Isle {
 impl symmetric_encryption::Client<'static> for Isle {
     fn crypt_done(
         &self,
-        plaintext_buffer: Option<&'static mut [u8]>,
+        _plaintext_buffer: Option<&'static mut [u8]>,
         ciphertext_buffer: &'static mut [u8],
     )
     {
         debug!("Payload encryption done.");
         self.pending_for.map(|pending_state| {
-            self.app_data.enter(pending_state.pid, |ad, kad| {
+            self.app_data.enter(pending_state.pid, |_ad, kad| {
                 // Build the input to the HMAC by reusing the ciphertext in the capsule's buffer.
                 let (mut aad_src_offset, mut aad_dst_offset) = (
                     pending_state.ciphertext_len as usize,
@@ -365,6 +361,8 @@ impl symmetric_encryption::Client<'static> for Isle {
                 );
                 while aad_dst_offset < ciphertext_buffer.len() {
                     ciphertext_buffer[aad_src_offset] = ciphertext_buffer[aad_dst_offset];
+                    aad_src_offset += 1;
+                    aad_dst_offset += 1;
                 }
 
                 // Compute the HMAC.
@@ -372,7 +370,8 @@ impl symmetric_encryption::Client<'static> for Isle {
                 let mut hmac = [0u8; 32];
                 ascon::hash256(
                     &ciphertext_buffer[0..pending_state.ciphertext_len as usize + pending_state.aad_len as usize],
-                    &mut hmac);
+                    &mut hmac)
+                    .unwrap();
 
                 // Copy the ciphertext and HMAC tag back to the application's buffer.
                 // Use the const-defined HMAC tag length.

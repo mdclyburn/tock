@@ -29,12 +29,6 @@ const FAULT_RESPONSE: capsules_system::process_policies::PanicFaultPolicy =
 type Ieee802154RawDriver =
     components::ieee802154::Ieee802154RawComponentType<nrf52840::ieee802154_radio::Radio<'static>>;
 
-type AES128CTREncryptionOracleDriver =
-    capsules_extra::tutorials::encryption_oracle_chkpt5::EncryptionOracleDriver<
-        'static,
-        nrf52840::aes::AesECB<'static>,
-    >;
-
 struct Platform {
     base: nrf52840dk_lib::Platform,
     ieee802154: &'static Ieee802154RawDriver,
