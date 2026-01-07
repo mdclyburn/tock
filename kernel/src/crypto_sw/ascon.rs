@@ -8,7 +8,7 @@ use crate::errorcode::ErrorCode;
 /// Computes the 256-bit hash of `input` and writes it to `output`.
 /// Length of `output` must be 32 bytes.
 /// Derived from MIT-licensed implementation found at:
-/// https://github.com/RustCrypto/hashes/blob/master/ascon-hash256/src/lib.rs
+/// <https://github.com/RustCrypto/hashes/blob/master/ascon-hash256/src/lib.rs>
 pub fn hash256(input: &[u8], output: &mut [u8]) -> Result<(), ErrorCode> {
     if output.len() != 32 {
         Err(ErrorCode::INVAL)

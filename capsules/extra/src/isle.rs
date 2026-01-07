@@ -3,6 +3,7 @@
 
 use core::default::Default;
 
+use kernel::debug;
 use kernel::errorcode::ErrorCode;
 use kernel::grant::{
     AllowRoCount,
@@ -10,9 +11,10 @@ use kernel::grant::{
     Grant,
     UpcallCount,
 };
+use kernel::hil::symmetric_encryption;
 use kernel::hil::symmetric_encryption::{
-    AES128CCM,
-    CCMClient,
+    AES128,
+    AES128CBC,
 };
 use kernel::process::{
     Error,
@@ -98,22 +100,25 @@ const IP6_ADDR_LEN: usize = 16;
 const ALLOW_NO_IN_BUFFER: usize = 0;
 const ALLOW_NO_OUT_BUFFER: usize = 0;
 
-pub struct Isle<'a> {
+pub trait Crypto: AES128<'static> + AES128CBC {  }
+impl<T: AES128<'static> + AES128CBC> Crypto for T {  }
+
+pub struct Isle {
     config_provider: &'static dyn ISLEConfigurationProvider,
-    crypt: &'a dyn AES128CCM<'a>,
+    crypt: &'static dyn Crypto,
     crypt_buffer: TakeCell<'static, [u8]>,
     app_data: Grant<AppData, UpcallCount<0>, AllowRoCount<1>, AllowRwCount<1>>,
     mleid_address: MapCell<[u8; IP6_ADDR_LEN]>,
     pending_for: OptionalCell<(ProcessId, (usize, usize))>,
 }
 
-impl<'a> Isle<'a> {
+impl Isle {
     pub fn new(
         config_provider: &'static dyn ISLEConfigurationProvider,
-        crypt: &'a dyn AES128CCM<'a>,
+        crypt: &'static dyn Crypto,
         crypt_buffer: &'static mut [u8; 128],
         grant_data: Grant<AppData, UpcallCount<0>, AllowRoCount<1>, AllowRwCount<1>>,
-    ) -> Isle<'a> {
+    ) -> Isle {
         Isle {
             config_provider,
             crypt,
@@ -129,26 +134,23 @@ impl<'a> Isle<'a> {
         group_oscore_context: &GroupOSCOREContext,
         payload_buffer: &ReadOnlyProcessBufferRef,
         message_len: usize,
+        aad_len: usize,
     ) -> Result<(), ErrorCode>
     {
-        // Set the key.
+        // Set the mode, key, and IV encryption parameters.
+        self.crypt.set_mode_aes128cbc(true)?;
         self.crypt.set_key(&group_oscore_context.message_key)?;
-
-        // Construct the nonce.
         self.crypt_buffer.map_or(Err(ErrorCode::BUSY), |buf| {
-            // Use the least significant 7 bytes of the sender ID (IP6 host number).
-            let sender_id_len = 7;
-            buf[0] = sender_id_len;
-            self.mleid_address.map(|addr| buf[1..1+7].copy_from_slice(&addr[9..16]));
-            // Use four bytes from the SSN and pad with a zero byte.
-            let ssn = &group_oscore_context.sender_seq_no;
-            buf[8] = (*ssn & 0xFF) as u8;
-            buf[9] =  (*ssn >>  8) as u8;
-            buf[10] = (*ssn >> 16) as u8;
-            buf[11] = (*ssn >> 24) as u8;
-            buf[12] = 0u8;
-            // Set the nonce.
-            self.crypt.set_nonce(&buf[..13])
+            self.mleid_address.map_or(Err(ErrorCode::OFF), |addr| {
+                buf[0..8].copy_from_slice(&addr[0..8]);
+                buf[8..12].copy_from_slice(&[
+                    (group_oscore_context.sender_seq_no & 0xFF) as u8,
+                    ((group_oscore_context.sender_seq_no >> 8) & 0xFF) as u8,
+                    ((group_oscore_context.sender_seq_no >> 16) & 0xFF) as u8,
+                    ((group_oscore_context.sender_seq_no >> 24) & 0xFF) as u8]);
+                buf[13..16].copy_from_slice(&[0u8; 4]);
+                self.crypt.set_iv(&buf[0..16])
+            })
         })?;
 
         // Copy the payload into the capsule buffer.
@@ -158,25 +160,31 @@ impl<'a> Isle<'a> {
         // self.crypt_buffer.map(|buf| buf[0..payload_buffer.len()].copy_from_slice(&payload_buffer));
 
         // Encrypt the payload.
-        if let Err((ec, buf)) = self.crypt.crypt(
+        let plaintext_len = self.crypt_buffer.map_or(
+            Err(ErrorCode::BUSY),
+            |buf| {
+                pad_plaintext(
+                    buf,
+                    message_len + aad_len,
+                    symmetric_encryption::AES128_BLOCK_SIZE)
+            })?;
+        if let Some((ec, _src_buf, dst_buf)) = self.crypt.crypt(
+            None,
             // TODO: get rid of unwrap.
             self.crypt_buffer.take().unwrap(),
-            aad_offset as usize,
             0,
-            64,
-            4,
-            true,
-            true)
+            plaintext_len)
         {
-            self.crypt_buffer.put(Some(buf));
-            Err(ec)
+            self.crypt_buffer.put(Some(dst_buf));
+            ec
         } else {
+            debug!("Started encrypting payload.");
             Ok(())
         }
     }
 }
 
-impl<'a> SyscallDriver for Isle<'a> {
+impl SyscallDriver for Isle {
     fn command(
         &self,
         command_no: usize,
@@ -189,7 +197,7 @@ impl<'a> SyscallDriver for Isle<'a> {
 
             // Translate CoAP message to Group OSCORE.
             (1, msg_len, aad_len) => {
-                let mut crypt_key: [u8; 16] = [0; 16];
+                debug!("Mapping CoAP to Group OSCORE.");
                 let res = self.app_data.enter(pid, |ad, kad| {
                     // TODO: Dynamically choose the right context.
                     let group_oscore_ctx = &ad.group_oscore_ctxs[0];
@@ -202,7 +210,8 @@ impl<'a> SyscallDriver for Isle<'a> {
                             self.encrypt_send(
                                 group_oscore_ctx,
                                 &in_buffer,
-                                msg_len),
+                                msg_len,
+                                aad_len),
 
                         _ => Err(ErrorCode::FAIL)
                     }
@@ -221,6 +230,7 @@ impl<'a> SyscallDriver for Isle<'a> {
 
             // Set lower half of IP address.
             (10, block01, block23) => {
+                debug!("Set lower half of IP6 address.");
                 self.mleid_address.map(|addr| {
                     addr[00] = ((block01 >> 00) & 0xFF) as u8;
                     addr[01] = ((block01 >> 08) & 0xFF) as u8;
@@ -237,6 +247,7 @@ impl<'a> SyscallDriver for Isle<'a> {
 
             // Set upper half of IP address.
             (20, block45, block67) => {
+                debug!("Set upper half of IP6 address.");
                 self.mleid_address.map(|addr| {
                     addr[08] = ((block45 >> 00) & 0xFF) as u8;
                     addr[09] = ((block45 >> 08) & 0xFF) as u8;
@@ -306,14 +317,14 @@ impl<'a> SyscallDriver for Isle<'a> {
     }
 }
 
-impl<'a> CCMClient for Isle<'a> {
+impl symmetric_encryption::Client<'static> for Isle {
     fn crypt_done(
         &self,
-        _buffer: &'static mut [u8],
-        _op_result: Result<(), ErrorCode>,
-        _tag_is_valid: bool,
+        plaintext_buffer: Option<&'static mut [u8]>,
+        ciphertext_buffer: &'static mut [u8],
     )
     {
+        debug!("Payload encryption done.");
         self.pending_for.map(|(pid, (msg_len, aad_len))| {
             self.app_data.enter(pid, |ad, kad| {
                 // Encryption is done.
@@ -321,4 +332,25 @@ impl<'a> CCMClient for Isle<'a> {
             }).unwrap();
         });
     }
+}
+
+fn pad_plaintext(
+    buffer: &mut [u8],
+    payload_len: usize,
+    block_size: usize
+) -> Result<usize, ErrorCode>
+{
+    let mut padded_len = 0;
+    while padded_len < payload_len {
+        padded_len += block_size;
+        if block_size > buffer.len() {
+            return Err(ErrorCode::NOMEM)
+        }
+    }
+
+    for b in &mut buffer[payload_len..] {
+        *b = 0;
+    }
+
+    Ok(padded_len)
 }

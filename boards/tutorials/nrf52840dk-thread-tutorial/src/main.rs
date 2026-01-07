@@ -47,7 +47,7 @@ struct Platform {
                 components::isolated_nonvolatile_storage::ISOLATED_NONVOLATILE_STORAGE_APP_REGION_SIZE_DEFAULT
             },
         >,
-    isle: &'static capsules_extra::isle::Isle<'static>,
+    isle: &'static capsules_extra::isle::Isle,
 }
 
 impl SyscallDriverLookup for Platform {
@@ -140,7 +140,7 @@ pub unsafe fn main() {
             board_kernel.create_grant(
                 capsules_extra::isle::DRIVER_NO,
                 &create_capability!(capabilities::MemoryAllocationCapability))));
-    kernel::hil::symmetric_encryption::AES128CCM::set_client(
+    kernel::hil::symmetric_encryption::AES128::set_client(
         &nrf52840_peripherals.nrf52.ecb,
         isle);
 
