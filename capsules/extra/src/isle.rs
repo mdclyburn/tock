@@ -23,6 +23,7 @@ use kernel::process::{
 use kernel::processbuffer::{
     ReadOnlyProcessBufferRef,
     ReadableProcessBuffer,
+    WriteableProcessBuffer,
 };
 use kernel::syscall::{
     CommandReturn,
@@ -96,9 +97,20 @@ impl Default for AppData {
     }
 }
 
+#[derive(Clone, Copy)]
+struct PendingState {
+    pid: ProcessId,
+    message_len: u8,
+    aad_len: u8,
+    ciphertext_len: u8,
+}
+
 const IP6_ADDR_LEN: usize = 16;
+
 const ALLOW_NO_IN_BUFFER: usize = 0;
 const ALLOW_NO_OUT_BUFFER: usize = 0;
+
+const HMAC_TAG_LEN: usize = 8;
 
 pub trait Crypto: AES128<'static> + AES128CBC {  }
 impl<T: AES128<'static> + AES128CBC> Crypto for T {  }
@@ -109,7 +121,7 @@ pub struct Isle {
     crypt_buffer: TakeCell<'static, [u8]>,
     app_data: Grant<AppData, UpcallCount<0>, AllowRoCount<1>, AllowRwCount<1>>,
     mleid_address: MapCell<[u8; IP6_ADDR_LEN]>,
-    pending_for: OptionalCell<(ProcessId, (usize, usize))>,
+    pending_for: OptionalCell<PendingState>,
 }
 
 impl Isle {
@@ -135,7 +147,7 @@ impl Isle {
         payload_buffer: &ReadOnlyProcessBufferRef,
         message_len: usize,
         aad_len: usize,
-    ) -> Result<(), ErrorCode>
+    ) -> Result<usize, ErrorCode>
     {
         // Set the mode, key, and IV encryption parameters.
         self.crypt.set_mode_aes128cbc(true)?;
@@ -154,11 +166,26 @@ impl Isle {
         })?;
 
         // Copy the message into the capsule buffer.
-        // AAD starts right after the message.
-        self.crypt_buffer.map(|buf| payload_buffer.enter(|pbuf| pbuf.copy_to_slice(&mut buf[0..message_len])));
+        self.crypt_buffer.map(|buf| {
+            payload_buffer.enter(|pbuf| {
+                // The message first.
+                (&pbuf[0..message_len])
+                    .copy_to_slice(&mut buf[0..message_len]);
+                // AAD starts right after the message.
+                // We move it to the end of the capsule's buffer and do not encrypt it.
+                // It will later be used for HMAC tag calculation.
+                //
+                // This assumes that the AAD won't be overwritten between now and the HMAC calculation.
+                // The padding and encryption are the only intermediate operations on the buffer.
+                // Messages will be less than 64 bytes due to application layer payload size constraints.
+                let crypt_buffer_len = buf.len();
+                (&pbuf[message_len..message_len+aad_len])
+                    .copy_to_slice(&mut buf[crypt_buffer_len - aad_len..]);
+            })
+        });
 
         // Encrypt the payload.
-        let plaintext_len = self.crypt_buffer.map_or(
+        let padded_len = self.crypt_buffer.map_or(
             Err(ErrorCode::BUSY),
             |buf| {
                 pad_plaintext(
@@ -171,13 +198,13 @@ impl Isle {
             // TODO: get rid of unwrap.
             self.crypt_buffer.take().unwrap(),
             0,
-            plaintext_len)
+            padded_len)
         {
             self.crypt_buffer.put(Some(dst_buf));
-            ec
+            ec.map(|_x| 0)
         } else {
             debug!("Started encrypting payload.");
-            Ok(())
+            Ok(padded_len)
         }
     }
 }
@@ -218,8 +245,13 @@ impl SyscallDriver for Isle {
                     .flatten();
 
                 match res {
-                    Ok(()) => {
-                        self.pending_for.set((pid, (msg_len, aad_len)));
+                    Ok(ciphertext_len) => {
+                        self.pending_for.set(PendingState {
+                            pid,
+                            message_len: msg_len as u8,
+                            aad_len: aad_len as u8,
+                            ciphertext_len: ciphertext_len as u8,
+                        });
                         CommandReturn::success()
                     },
                     Err(ec) => CommandReturn::failure(ErrorCode::FAIL),
@@ -323,8 +355,46 @@ impl symmetric_encryption::Client<'static> for Isle {
     )
     {
         debug!("Payload encryption done.");
-        self.pending_for.map(|(pid, (msg_len, aad_len))| {
-            self.app_data.enter(pid, |ad, kad| {
+        self.pending_for.map(|pending_state| {
+            self.app_data.enter(pending_state.pid, |ad, kad| {
+                // Build the input to the HMAC by reusing the ciphertext in the capsule's buffer.
+                let (mut aad_src_offset, mut aad_dst_offset) = (
+                    pending_state.ciphertext_len as usize,
+                    ciphertext_buffer.len() - pending_state.aad_len as usize,
+                );
+                while aad_dst_offset < ciphertext_buffer.len() {
+                    ciphertext_buffer[aad_src_offset] = ciphertext_buffer[aad_dst_offset];
+                }
+
+                // Compute the HMAC.
+                use kernel::crypto_sw::ascon;
+                let mut hmac = [0u8; 32];
+                ascon::hash256(
+                    &ciphertext_buffer[0..pending_state.ciphertext_len as usize + pending_state.aad_len as usize],
+                    &mut hmac);
+
+                // Copy the ciphertext and HMAC tag back to the application's buffer.
+                // Use the const-defined HMAC tag length.
+                let write_res = kad.get_readwrite_processbuffer(ALLOW_NO_OUT_BUFFER)
+                    .map(|out_pbuf| {
+                        out_pbuf.mut_enter(|out_buf| {
+                            out_buf.get(0..pending_state.ciphertext_len as usize)
+                                .unwrap()
+                                .copy_from_slice(&ciphertext_buffer[0..pending_state.ciphertext_len as usize]);
+                            out_buf.get(pending_state.ciphertext_len as usize..(pending_state.ciphertext_len + 8) as usize)
+                                .unwrap()
+                                .copy_from_slice(&hmac[0..HMAC_TAG_LEN]);
+                        })
+                    }).flatten();
+
+                // Reset capsule state.
+                // This buffer belongs back with the capsule.
+                self.crypt_buffer.put(Some(ciphertext_buffer));
+                self.pending_for.clear();
+
+                if let Err(e) = write_res {
+                    debug!("Error completing message protection: {:?}", e);
+                }
             }).unwrap();
         });
     }
