@@ -153,11 +153,9 @@ impl Isle {
             })
         })?;
 
-        // Copy the payload into the capsule buffer.
+        // Copy the message into the capsule buffer.
         // AAD starts right after the message.
-        let aad_offset = message_len;
-        self.crypt_buffer.map(|buf| payload_buffer.enter(|pbuf| pbuf.copy_to_slice(&mut buf[0..pbuf.len()])));
-        // self.crypt_buffer.map(|buf| buf[0..payload_buffer.len()].copy_from_slice(&payload_buffer));
+        self.crypt_buffer.map(|buf| payload_buffer.enter(|pbuf| pbuf.copy_to_slice(&mut buf[0..message_len])));
 
         // Encrypt the payload.
         let plaintext_len = self.crypt_buffer.map_or(
@@ -165,7 +163,7 @@ impl Isle {
             |buf| {
                 pad_plaintext(
                     buf,
-                    message_len + aad_len,
+                    message_len,
                     symmetric_encryption::AES128_BLOCK_SIZE)
             })?;
         if let Some((ec, _src_buf, dst_buf)) = self.crypt.crypt(
@@ -327,8 +325,6 @@ impl symmetric_encryption::Client<'static> for Isle {
         debug!("Payload encryption done.");
         self.pending_for.map(|(pid, (msg_len, aad_len))| {
             self.app_data.enter(pid, |ad, kad| {
-                // Encryption is done.
-                // Generate the MAC and then the payload is ready.
             }).unwrap();
         });
     }
