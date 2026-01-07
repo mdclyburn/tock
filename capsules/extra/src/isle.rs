@@ -98,6 +98,7 @@ impl Default for AppData {
 #[derive(Clone, Copy)]
 struct PendingState {
     pid: ProcessId,
+    ctx_no: u8,
     aad_len: u8,
     ciphertext_len: u8,
 }
@@ -223,7 +224,8 @@ impl SyscallDriver for Isle {
                 debug!("Mapping CoAP to Group OSCORE.");
                 let res = self.app_data.enter(pid, |ad, kad| {
                     // TODO: Dynamically choose the right context.
-                    let group_oscore_ctx = &ad.group_oscore_ctxs[0];
+                    let ctx_no: u8 = 0;
+                    let group_oscore_ctx = &ad.group_oscore_ctxs[ctx_no as usize];
 
                     let (res_in_buf, res_out_buf) = (
                         kad.get_readonly_processbuffer(ALLOW_NO_IN_BUFFER),
@@ -234,7 +236,8 @@ impl SyscallDriver for Isle {
                                 group_oscore_ctx,
                                 &in_buffer,
                                 msg_len,
-                                aad_len),
+                                aad_len)
+                            .map(|ciphertext_len| (ciphertext_len, ctx_no)),
 
                         _ => Err(ErrorCode::FAIL)
                     }
@@ -243,9 +246,10 @@ impl SyscallDriver for Isle {
                     .flatten();
 
                 match res {
-                    Ok(ciphertext_len) => {
+                    Ok((ciphertext_len, ctx_no)) => {
                         self.pending_for.set(PendingState {
                             pid,
+                            ctx_no,
                             aad_len: aad_len as u8,
                             ciphertext_len: ciphertext_len as u8,
                         });
@@ -353,14 +357,31 @@ impl symmetric_encryption::Client<'static> for Isle {
     {
         debug!("Payload encryption done.");
         self.pending_for.map(|pending_state| {
-            self.app_data.enter(pending_state.pid, |_ad, kad| {
+            self.app_data.enter(pending_state.pid, |ad, kad| {
                 // Build the input to the HMAC by reusing the ciphertext in the capsule's buffer.
                 let (mut aad_src_offset, mut aad_dst_offset) = (
                     pending_state.ciphertext_len as usize,
                     ciphertext_buffer.len() - pending_state.aad_len as usize,
                 );
+                let mut ssn_marker_run = 0;
                 while aad_dst_offset < ciphertext_buffer.len() {
+                    // Fill in the SSN if we just finished copying its space.
+                    if ssn_marker_run == 4 {
+                        let ssn = ad.group_oscore_ctxs[pending_state.ctx_no as usize].sender_seq_no;
+                        ciphertext_buffer[aad_dst_offset-4] = (ssn & 0xFF) as u8;
+                        ciphertext_buffer[aad_dst_offset-3] = (ssn >> 1) as u8;
+                        ciphertext_buffer[aad_dst_offset-2] = (ssn >> 2) as u8;
+                        ciphertext_buffer[aad_dst_offset-1] = (ssn >> 3) as u8;
+                        ad.group_oscore_ctxs[pending_state.ctx_no as usize].sender_seq_no += 1;
+                    }
+
                     ciphertext_buffer[aad_src_offset] = ciphertext_buffer[aad_dst_offset];
+
+                    // Check for the SSN marker.
+                    if ciphertext_buffer[aad_src_offset] == 0xFE {
+                        ssn_marker_run += 1;
+                    }
+
                     aad_src_offset += 1;
                     aad_dst_offset += 1;
                 }
