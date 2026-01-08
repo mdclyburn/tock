@@ -409,10 +409,11 @@ impl symmetric_encryption::Client<'static> for Isle {
                     }).flatten();
 
                 // Notify the application layer that this payload is ready to send.
+                let total_len = pending_state.ciphertext_len as usize + HMAC_TAG_LEN;
                 let _ = kad.schedule_upcall(
                     UPCALL_OUT_MESSAGE_READY,
-                    (if write_res.is_ok() { 0 } else { 1 }, 0, 0))
-                    .map_err(|e| debug!("Message ready upcall error: {:?}", e));
+                    (if write_res.is_ok() { 0 } else { 1 }, total_len as usize, 0))
+                    .map_err(|e| debug!("[isle] message ready upcall error: {:?}", e));
 
                 // Reset capsule state.
                 // This buffer belongs back with the capsule.
