@@ -135,7 +135,7 @@ impl Isle {
             crypt,
             crypt_buffer: TakeCell::new(crypt_buffer),
             app_data: grant_data,
-            mleid_address: MapCell::empty(),
+            mleid_address: MapCell::new([0; 16]),
             pending_for: OptionalCell::empty(),
         }
     }
@@ -149,22 +149,28 @@ impl Isle {
     ) -> Result<usize, ErrorCode>
     {
         // Set the mode, key, and IV encryption parameters.
+        debug!("[isle] configuring cryptoprocessor");
         self.crypt.set_mode_aes128cbc(true)?;
         self.crypt.set_key(&group_oscore_context.message_key)?;
         self.crypt_buffer.map_or(Err(ErrorCode::BUSY), |buf| {
-            self.mleid_address.map_or(Err(ErrorCode::OFF), |addr| {
+            debug!("[isle] crypt buffer <-");
+            self.mleid_address.map(|addr| {
+                debug!("[isle] <- addr");
                 buf[0..8].copy_from_slice(&addr[0..8]);
+                debug!("[isle] <- SSN");
                 buf[8..12].copy_from_slice(&[
                     (group_oscore_context.sender_seq_no & 0xFF) as u8,
                     ((group_oscore_context.sender_seq_no >> 8) & 0xFF) as u8,
                     ((group_oscore_context.sender_seq_no >> 16) & 0xFF) as u8,
                     ((group_oscore_context.sender_seq_no >> 24) & 0xFF) as u8]);
-                buf[13..16].copy_from_slice(&[0u8; 4]);
+                buf[12..16].copy_from_slice(&[0u8; 4]);
+                debug!("[isle] setting IV");
                 self.crypt.set_iv(&buf[0..16])
-            })
+            }).unwrap() // We always initialize the address to zero.
         })?;
 
         // Copy the message into the capsule buffer.
+        debug!("[isle] copying message to internal buffer");
         self.crypt_buffer.map(|buf| {
             payload_buffer.enter(|pbuf| {
                 // The message first.
