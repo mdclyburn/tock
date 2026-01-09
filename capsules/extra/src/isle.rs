@@ -229,7 +229,7 @@ impl SyscallDriver for Isle {
 
             // Translate CoAP message to Group OSCORE.
             (1, msg_len, aad_len) => {
-                debug!("[isle] mapping CoAP to Group OSCORE.");
+                debug!("[isle] mapping {} B CoAP message to Group OSCORE.", msg_len);
                 let res = self.app_data.enter(pid, |ad, kad| {
                     // TODO: Dynamically choose the right context.
                     let ctx_no: u8 = 0;
