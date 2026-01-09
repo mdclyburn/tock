@@ -190,6 +190,7 @@ impl Isle {
         });
 
         // Encrypt the payload.
+        debug!("[isle] padding plaintext");
         let padded_len = self.crypt_buffer.map_or(
             Err(ErrorCode::BUSY),
             |buf| {
@@ -198,6 +199,7 @@ impl Isle {
                     message_len,
                     symmetric_encryption::AES128_BLOCK_SIZE)
             })?;
+        debug!("[isle] initiating encryption of {} B", padded_len);
         if let Some((ec, _src_buf, dst_buf)) = self.crypt.crypt(
             None,
             // TODO: get rid of unwrap.
@@ -208,7 +210,7 @@ impl Isle {
             self.crypt_buffer.put(Some(dst_buf));
             ec.map(|_x| 0)
         } else {
-            debug!("Started encrypting payload.");
+            debug!("[isle] started encrypting payload.");
             Ok(padded_len)
         }
     }
@@ -227,7 +229,7 @@ impl SyscallDriver for Isle {
 
             // Translate CoAP message to Group OSCORE.
             (1, msg_len, aad_len) => {
-                debug!("Mapping CoAP to Group OSCORE.");
+                debug!("[isle] mapping CoAP to Group OSCORE.");
                 let res = self.app_data.enter(pid, |ad, kad| {
                     // TODO: Dynamically choose the right context.
                     let ctx_no: u8 = 0;
@@ -245,10 +247,16 @@ impl SyscallDriver for Isle {
                                 aad_len)
                             .map(|ciphertext_len| (ciphertext_len, ctx_no)),
 
-                        _ => Err(ErrorCode::FAIL)
+                        _ => {
+                            debug!("[isle] application has not provided both buffers");
+                            Err(ErrorCode::FAIL)
+                        }
                     }
                 })
-                    .map_err(|_e| ErrorCode::FAIL)
+                    .map_err(|_e| {
+                        debug!("[isle] an error occured during encrypt_send");
+                        ErrorCode::FAIL
+                    })
                     .flatten();
 
                 match res {
@@ -267,7 +275,7 @@ impl SyscallDriver for Isle {
 
             // Set lower half of IP address.
             (10, block01, block23) => {
-                debug!("Set lower half of IP6 address.");
+                debug!("[isle] set lower half of IP6 address.");
                 self.mleid_address.map(|addr| {
                     addr[00] = ((block01 >> 00) & 0xFF) as u8;
                     addr[01] = ((block01 >> 08) & 0xFF) as u8;
@@ -284,7 +292,7 @@ impl SyscallDriver for Isle {
 
             // Set upper half of IP address.
             (20, block45, block67) => {
-                debug!("Set upper half of IP6 address.");
+                debug!("[isle] set upper half of IP6 address.");
                 self.mleid_address.map(|addr| {
                     addr[08] = ((block45 >> 00) & 0xFF) as u8;
                     addr[09] = ((block45 >> 08) & 0xFF) as u8;
@@ -361,7 +369,7 @@ impl symmetric_encryption::Client<'static> for Isle {
         ciphertext_buffer: &'static mut [u8],
     )
     {
-        debug!("Payload encryption done.");
+        debug!("[isle] payload encryption done.");
         self.pending_for.map(|pending_state| {
             self.app_data.enter(pending_state.pid, |ad, kad| {
                 // Build the input to the HMAC by reusing the ciphertext in the capsule's buffer.
@@ -427,7 +435,7 @@ impl symmetric_encryption::Client<'static> for Isle {
                 self.pending_for.clear();
 
                 if let Err(e) = write_res {
-                    debug!("Error completing message protection: {:?}", e);
+                    debug!("[isle] error completing message protection: {:?}", e);
                 }
             }).unwrap();
         });
