@@ -140,13 +140,14 @@ impl Isle {
         }
     }
 
-    fn encrypt_send(
+    /// Perform prerequisite setup for encryption or decryption of ISLE message.
+    fn prepare_crypt_op(
         &self,
         group_oscore_context: &GroupOSCOREContext,
         payload_buffer: &ReadOnlyProcessBufferRef,
         message_len: usize,
         aad_len: usize,
-    ) -> Result<usize, ErrorCode>
+    ) -> Result<(), ErrorCode>
     {
         // Set the mode, key, and IV encryption parameters.
         debug!("[isle] configuring cryptoprocessor");
@@ -189,7 +190,16 @@ impl Isle {
             })
         });
 
-        // Encrypt the payload.
+        Ok(())
+    }
+
+    /// Encrypt a message for transmission over the network.
+    fn encrypt_send(
+        &self,
+        message_len: usize,
+    ) -> Result<usize, ErrorCode>
+    {
+        // Pad the message to length.
         debug!("[isle] padding plaintext");
         let padded_len = self.crypt_buffer.map_or(
             Err(ErrorCode::BUSY),
@@ -199,6 +209,8 @@ impl Isle {
                     message_len,
                     symmetric_encryption::AES128_BLOCK_SIZE)
             })?;
+
+        // Encrypt the payload.
         debug!("[isle] initiating encryption of {} B", padded_len);
         if let Some((ec, _src_buf, dst_buf)) = self.crypt.crypt(
             None,
@@ -240,12 +252,9 @@ impl SyscallDriver for Isle {
                         kad.get_readwrite_processbuffer(ALLOW_NO_OUT_BUFFER));
                     match (res_in_buf, res_out_buf) {
                         (Ok(in_buffer), Ok(_out_buffer)) =>
-                            self.encrypt_send(
-                                group_oscore_ctx,
-                                &in_buffer,
-                                msg_len,
-                                aad_len)
-                            .map(|ciphertext_len| (ciphertext_len, ctx_no)),
+                            self.prepare_crypt_op(group_oscore_ctx, &in_buffer, msg_len, aad_len)
+                                .and_then(|_empty| self.encrypt_send(msg_len))
+                                .map(|ct_len| (ct_len, ctx_no)),
 
                         _ => {
                             debug!("[isle] application has not provided both buffers");
