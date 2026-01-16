@@ -101,6 +101,7 @@ struct PendingState {
     ctx_no: u8,
     aad_len: u8,
     ciphertext_len: u8,
+    is_send: bool,
 }
 
 const IP6_ADDR_LEN: usize = 16;
@@ -140,6 +141,9 @@ impl Isle {
         }
     }
 
+    /// Location of the partial IV in the AAD.
+    const AAD_PIV_BYTE_OFFSET: usize = 19;
+
     /// Perform prerequisite setup for encryption or decryption of ISLE message.
     fn prepare_crypt_op(
         &self,
@@ -147,23 +151,35 @@ impl Isle {
         payload_buffer: &ReadOnlyProcessBufferRef,
         message_len: usize,
         aad_len: usize,
+        is_send: bool,
     ) -> Result<(), ErrorCode>
     {
         // Set the mode, key, and IV encryption parameters.
         debug!("[isle] configuring cryptoprocessor");
-        self.crypt.set_mode_aes128cbc(true)?;
+        self.crypt.set_mode_aes128cbc(is_send)?;
         self.crypt.set_key(&group_oscore_context.message_key)?;
         self.crypt_buffer.map_or(Err(ErrorCode::BUSY), |buf| {
             debug!("[isle] crypt buffer <-");
             self.mleid_address.map(|addr| {
                 debug!("[isle] <- addr");
                 buf[0..8].copy_from_slice(&addr[0..8]);
-                debug!("[isle] <- SSN");
-                buf[8..12].copy_from_slice(&[
-                    (group_oscore_context.sender_seq_no & 0xFF) as u8,
-                    ((group_oscore_context.sender_seq_no >> 8) & 0xFF) as u8,
-                    ((group_oscore_context.sender_seq_no >> 16) & 0xFF) as u8,
-                    ((group_oscore_context.sender_seq_no >> 24) & 0xFF) as u8]);
+                // On a send, this capsule will provide the sequence no. from the grant data.
+                // On a receive, the partial IV from the message will be present in the AAD.
+                if is_send {
+                    debug!("[isle] <- SSN");
+                    buf[8..12].copy_from_slice(&[
+                        (group_oscore_context.sender_seq_no & 0xFF) as u8,
+                        ((group_oscore_context.sender_seq_no >> 8) & 0xFF) as u8,
+                        ((group_oscore_context.sender_seq_no >> 16) & 0xFF) as u8,
+                        ((group_oscore_context.sender_seq_no >> 24) & 0xFF) as u8]);
+                } else {
+                    // The network stack has provided the received value in the AAD.
+                    payload_buffer.enter(|pbuf| {
+                        (&pbuf[Self::AAD_PIV_BYTE_OFFSET..Self::AAD_PIV_BYTE_OFFSET+4])
+                            .copy_to_slice(&mut buf[8..12]);
+                    })
+                        .unwrap();
+                }
                 buf[12..16].copy_from_slice(&[0u8; 4]);
                 debug!("[isle] setting IV");
                 self.crypt.set_iv(&buf[0..16])
@@ -226,6 +242,61 @@ impl Isle {
             Ok(padded_len)
         }
     }
+
+    /// Decrypt a message that was received over the network.
+    ///
+    /// Performs a check that the HMAC tag matches the expected value
+    /// and then triggers a decryption operation on the ciphertext.
+    fn decrypt_recv(
+        &self,
+        message_len: usize,
+        aad_len: usize,
+    ) -> Result<(), ErrorCode>
+    {
+        // First need to verify that the contents of the payload are authentic.
+        // Current state of crypt_buffer: CIPHERTEXT + HMAC + AAD.
+        // So the buffer is already ready for the HMAC computation.
+
+        // Compute the HMAC.
+        use kernel::crypto_sw::ascon;
+        let mut hmac = [0u8; 32];
+        self.crypt_buffer.map(|cbuf| {
+            ascon::hash256(
+                &cbuf[0..message_len as usize + aad_len as usize],
+                &mut hmac)
+                .unwrap();
+        });
+
+        // Compare the HMAC tag up to the const length.
+        let res = self.crypt_buffer.map(|cbuf| {
+            for i in 0..HMAC_TAG_LEN {
+                if hmac[i] != cbuf[i] {
+                    return Err(ErrorCode::NOACK);
+                }
+            }
+
+            Ok(())
+        }).unwrap();
+        if let Err(_ec) = res {
+            debug!("[isle] HMAC tag check failed");
+            return res;
+        }
+
+        if let Some((err, _src_buf, dst_buf)) = self.crypt.crypt(
+            None,
+            // TODO: get rid of unwrap.
+            // It missing means we are already busy with a TX or RX.
+            self.crypt_buffer.take().unwrap(),
+            0,
+            message_len)
+        {
+            self.crypt_buffer.put(Some(dst_buf));
+            err.map(|_x| ())
+        } else {
+            debug!("[isle] decryption started.");
+            Ok(())
+        }
+    }
 }
 
 impl SyscallDriver for Isle {
@@ -252,12 +323,12 @@ impl SyscallDriver for Isle {
                         kad.get_readwrite_processbuffer(ALLOW_NO_OUT_BUFFER));
                     match (res_in_buf, res_out_buf) {
                         (Ok(in_buffer), Ok(_out_buffer)) =>
-                            self.prepare_crypt_op(group_oscore_ctx, &in_buffer, msg_len, aad_len)
+                            self.prepare_crypt_op(group_oscore_ctx, &in_buffer, msg_len, aad_len, true)
                                 .and_then(|_empty| self.encrypt_send(msg_len))
                                 .map(|ct_len| (ct_len, ctx_no)),
 
                         _ => {
-                            debug!("[isle] application has not provided both buffers");
+                            debug!("[isle] application has not provided both buffers for send");
                             Err(ErrorCode::FAIL)
                         }
                     }
@@ -275,10 +346,53 @@ impl SyscallDriver for Isle {
                             ctx_no,
                             aad_len: aad_len as u8,
                             ciphertext_len: ciphertext_len as u8,
+                            is_send: true,
                         });
                         CommandReturn::success()
                     },
                     Err(_ec) => CommandReturn::failure(ErrorCode::FAIL),
+                }
+            },
+
+            // Translate a received message from Group OSCORE to CoAP.
+            (2, msg_len, aad_len) => {
+                debug!("Mapping {} B Group OSCORE message to CoAP.", msg_len);
+                let res = self.app_data.enter(pid, |ad, kad| {
+                    // TODO: Dynamically choose the right context.
+                    let ctx_no: u8 = 0;
+                    let group_oscore_ctx = &ad.group_oscore_ctxs[ctx_no as usize];
+
+                    let allow_buffers = (
+                        kad.get_readonly_processbuffer(ALLOW_NO_IN_BUFFER),
+                        kad.get_readwrite_processbuffer(ALLOW_NO_OUT_BUFFER));
+                    if let (Ok(in_buffer), Ok(_out_buffer)) = allow_buffers {
+                        self.prepare_crypt_op(group_oscore_ctx, &in_buffer, msg_len, aad_len, false)
+                            .and_then(|_empty| self.decrypt_recv(msg_len, aad_len))
+                            .map(|_empty| ctx_no)
+                    } else {
+                        debug!("[isle] application has not provided both buffers for recv");
+                        Err(ErrorCode::FAIL)
+                    }
+                })
+                    .map_err(|_e| {
+                        debug!("[isle] an error occured during decrypt_recv");
+                        ErrorCode::FAIL
+                    })
+                    .flatten();
+
+                match res {
+                    Ok(ctx_no) => {
+                        self.pending_for.set(PendingState {
+                            pid,
+                            ctx_no,
+                            aad_len: aad_len as u8,
+                            ciphertext_len: msg_len as u8,
+                            is_send: false,
+                        });
+                        CommandReturn::success()
+                    },
+
+                    Err(_ec) =>  CommandReturn::failure(ErrorCode::FAIL)
                 }
             },
 
@@ -378,73 +492,88 @@ impl symmetric_encryption::Client<'static> for Isle {
         ciphertext_buffer: &'static mut [u8],
     )
     {
-        debug!("[isle] payload encryption done.");
+        debug!("[isle] payload cryptographic operation done.");
         self.pending_for.map(|pending_state| {
             self.app_data.enter(pending_state.pid, |ad, kad| {
-                // Build the input to the HMAC by reusing the ciphertext in the capsule's buffer.
-                let (mut aad_src_offset, mut aad_dst_offset) = (
-                    pending_state.ciphertext_len as usize,
-                    ciphertext_buffer.len() - pending_state.aad_len as usize,
-                );
-                let mut ssn_marker_run = 0;
-                while aad_dst_offset < ciphertext_buffer.len() {
-                    // Fill in the SSN if we just finished copying its space.
-                    if ssn_marker_run == 4 {
-                        let ssn = ad.group_oscore_ctxs[pending_state.ctx_no as usize].sender_seq_no;
-                        ciphertext_buffer[aad_dst_offset-4] = (ssn & 0xFF) as u8;
-                        ciphertext_buffer[aad_dst_offset-3] = (ssn >> 1) as u8;
-                        ciphertext_buffer[aad_dst_offset-2] = (ssn >> 2) as u8;
-                        ciphertext_buffer[aad_dst_offset-1] = (ssn >> 3) as u8;
-                        ad.group_oscore_ctxs[pending_state.ctx_no as usize].sender_seq_no += 1;
+                if pending_state.is_send {
+                    // The encryption operation is complete.
+                    // Now we must construct the tag and send the final message (ciphertext + aad tag)
+                    // back to the network stack which will complete the transmission of the message.
+                    debug!("[isle] operation was for encrypt/send");
+
+                    // Build the input to the HMAC by reusing the ciphertext in the capsule's buffer.
+                    let (mut aad_src_offset, mut aad_dst_offset) = (
+                        pending_state.ciphertext_len as usize,
+                        ciphertext_buffer.len() - pending_state.aad_len as usize,
+                    );
+                    let mut ssn_marker_run = 0;
+                    while aad_dst_offset < ciphertext_buffer.len() {
+                        // Fill in the SSN if we just finished copying its space.
+                        if ssn_marker_run == 4 {
+                            let ssn = ad.group_oscore_ctxs[pending_state.ctx_no as usize].sender_seq_no;
+                            ciphertext_buffer[aad_dst_offset-4] = (ssn & 0xFF) as u8;
+                            ciphertext_buffer[aad_dst_offset-3] = (ssn >> 1) as u8;
+                            ciphertext_buffer[aad_dst_offset-2] = (ssn >> 2) as u8;
+                            ciphertext_buffer[aad_dst_offset-1] = (ssn >> 3) as u8;
+                            ad.group_oscore_ctxs[pending_state.ctx_no as usize].sender_seq_no += 1;
+                        }
+
+                        ciphertext_buffer[aad_src_offset] = ciphertext_buffer[aad_dst_offset];
+
+                        // Check for the SSN marker.
+                        if ciphertext_buffer[aad_src_offset] == 0xFE {
+                            ssn_marker_run += 1;
+                        }
+
+                        aad_src_offset += 1;
+                        aad_dst_offset += 1;
                     }
 
-                    ciphertext_buffer[aad_src_offset] = ciphertext_buffer[aad_dst_offset];
+                    // Compute the HMAC.
+                    use kernel::crypto_sw::ascon;
+                    let mut hmac = [0u8; 32];
+                    ascon::hash256(
+                        &ciphertext_buffer[0..pending_state.ciphertext_len as usize + pending_state.aad_len as usize],
+                        &mut hmac)
+                        .unwrap();
 
-                    // Check for the SSN marker.
-                    if ciphertext_buffer[aad_src_offset] == 0xFE {
-                        ssn_marker_run += 1;
+                    // Copy the ciphertext and HMAC tag back to the application's buffer.
+                    // Use the const-defined HMAC tag length.
+                    let write_res = kad.get_readwrite_processbuffer(ALLOW_NO_OUT_BUFFER)
+                        .map(|out_pbuf| {
+                            out_pbuf.mut_enter(|out_buf| {
+                                out_buf.get(0..pending_state.ciphertext_len as usize)
+                                    .unwrap()
+                                    .copy_from_slice(&ciphertext_buffer[0..pending_state.ciphertext_len as usize]);
+                                out_buf.get(pending_state.ciphertext_len as usize..(pending_state.ciphertext_len + 8) as usize)
+                                    .unwrap()
+                                    .copy_from_slice(&hmac[0..HMAC_TAG_LEN]);
+                            })
+                        }).flatten();
+
+                    // Notify the application layer that this payload is ready to send.
+                    let total_len = pending_state.ciphertext_len as usize + HMAC_TAG_LEN;
+                    let _ = kad.schedule_upcall(
+                        UPCALL_OUT_MESSAGE_READY,
+                        (if write_res.is_ok() { 0 } else { 1 }, total_len as usize, 0))
+                        .map_err(|e| debug!("[isle] message ready upcall error: {:?}", e));
+
+                    // Reset capsule state.
+                    // This buffer belongs back with the capsule.
+                    self.crypt_buffer.put(Some(ciphertext_buffer));
+                    self.pending_for.clear();
+
+                    if let Err(e) = write_res {
+                        debug!("[isle] error completing message protection: {:?}", e);
                     }
+                } else {
+                    // The decryption operation is complete.
+                    // We must now only copy the plaintext back to the application's buffer
+                    // and notify the network stack that the payload is ready
+                    // to be provided to the application.
+                    debug!("[isle] operation was for decrypt/recv");
 
-                    aad_src_offset += 1;
-                    aad_dst_offset += 1;
-                }
-
-                // Compute the HMAC.
-                use kernel::crypto_sw::ascon;
-                let mut hmac = [0u8; 32];
-                ascon::hash256(
-                    &ciphertext_buffer[0..pending_state.ciphertext_len as usize + pending_state.aad_len as usize],
-                    &mut hmac)
-                    .unwrap();
-
-                // Copy the ciphertext and HMAC tag back to the application's buffer.
-                // Use the const-defined HMAC tag length.
-                let write_res = kad.get_readwrite_processbuffer(ALLOW_NO_OUT_BUFFER)
-                    .map(|out_pbuf| {
-                        out_pbuf.mut_enter(|out_buf| {
-                            out_buf.get(0..pending_state.ciphertext_len as usize)
-                                .unwrap()
-                                .copy_from_slice(&ciphertext_buffer[0..pending_state.ciphertext_len as usize]);
-                            out_buf.get(pending_state.ciphertext_len as usize..(pending_state.ciphertext_len + 8) as usize)
-                                .unwrap()
-                                .copy_from_slice(&hmac[0..HMAC_TAG_LEN]);
-                        })
-                    }).flatten();
-
-                // Notify the application layer that this payload is ready to send.
-                let total_len = pending_state.ciphertext_len as usize + HMAC_TAG_LEN;
-                let _ = kad.schedule_upcall(
-                    UPCALL_OUT_MESSAGE_READY,
-                    (if write_res.is_ok() { 0 } else { 1 }, total_len as usize, 0))
-                    .map_err(|e| debug!("[isle] message ready upcall error: {:?}", e));
-
-                // Reset capsule state.
-                // This buffer belongs back with the capsule.
-                self.crypt_buffer.put(Some(ciphertext_buffer));
-                self.pending_for.clear();
-
-                if let Err(e) = write_res {
-                    debug!("[isle] error completing message protection: {:?}", e);
+                    // NEXT: pass the plaintext to the network stack.
                 }
             }).unwrap();
         });
