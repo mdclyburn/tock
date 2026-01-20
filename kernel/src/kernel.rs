@@ -543,7 +543,7 @@ impl Kernel {
                     // to the kernel, we must first run `disable_app_mpu` before
                     // attempting to access any userspace memory.
                     process.setup_mpu();
-                    chip.mpu().enable_app_mpu();
+                    // chip.mpu().enable_app_mpu();
 
                     scheduler_timer.arm();
                     let context_switch_reason = process.switch_to();
@@ -562,9 +562,9 @@ impl Kernel {
                     // kernel-private memory. Invoking this function is safe
                     // here, as we always call `enable_app_mpu` above before
                     // switching back to a process.
-                    unsafe {
-                        chip.mpu().disable_app_mpu();
-                    }
+                    // unsafe {
+                    //     chip.mpu().disable_app_mpu();
+                    // }
 
                     // Now the process has returned back to the kernel. Check
                     // why and handle the process as appropriate.
