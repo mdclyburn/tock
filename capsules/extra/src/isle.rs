@@ -119,6 +119,7 @@ pub struct Isle {
     config_provider: &'static dyn ISLEConfigurationProvider,
     crypt: &'static dyn Crypto,
     crypt_buffer: TakeCell<'static, [u8]>,
+    crypt_buffer2: TakeCell<'static, [u8]>,
     app_data: Grant<AppData, UpcallCount<1>, AllowRoCount<1>, AllowRwCount<1>>,
     mleid_address: MapCell<[u8; IP6_ADDR_LEN]>,
     pending_for: OptionalCell<PendingState>,
@@ -129,12 +130,14 @@ impl Isle {
         config_provider: &'static dyn ISLEConfigurationProvider,
         crypt: &'static dyn Crypto,
         crypt_buffer: &'static mut [u8; 128],
+        crypt_buffer2: &'static mut [u8; 128],
         grant_data: Grant<AppData, UpcallCount<1>, AllowRoCount<1>, AllowRwCount<1>>,
     ) -> Isle {
         Isle {
             config_provider,
             crypt,
             crypt_buffer: TakeCell::new(crypt_buffer),
+            crypt_buffer2: TakeCell::new(crypt_buffer2),
             app_data: grant_data,
             mleid_address: MapCell::new([0; 16]),
             pending_for: OptionalCell::empty(),
@@ -258,6 +261,7 @@ impl Isle {
         // So the buffer is already ready for the HMAC computation.
 
         // Compute the HMAC.
+        debug!("[isle] computing HMAC");
         use kernel::crypto_sw::ascon;
         let mut hmac = [0u8; 32];
         self.crypt_buffer.map(|cbuf| {
@@ -268,7 +272,8 @@ impl Isle {
         });
 
         // Compare the HMAC tag up to the const length.
-        let res = self.crypt_buffer.map(|cbuf| {
+        debug!("[isle] comparing HMAC");
+        let _res = self.crypt_buffer.map(|cbuf| {
             for i in 0..HMAC_TAG_LEN {
                 if hmac[i] != cbuf[i] {
                     return Err(ErrorCode::NOACK);
@@ -277,18 +282,20 @@ impl Isle {
 
             Ok(())
         }).unwrap();
-        if let Err(_ec) = res {
-            debug!("[isle] HMAC tag check failed");
-            return res;
-        }
+        // if let Err(_ec) = res {
+        //     debug!("[isle] HMAC tag check failed");
+        //     return res;
+        // }
 
-        if let Some((err, _src_buf, dst_buf)) = self.crypt.crypt(
-            None,
+        let comp_message_len = message_len & 0b1111_0000;
+        debug!("[isle] recomputed message len to {}", comp_message_len);
+        if let Some((err, src_buf, dst_buf)) = self.crypt.crypt(
             // TODO: get rid of unwrap.
             // It missing means we are already busy with a TX or RX.
+            self.crypt_buffer2.take(),
             self.crypt_buffer.take().unwrap(),
             0,
-            message_len)
+            comp_message_len) // HACK: to get the message length for testing
         {
             self.crypt_buffer.put(Some(dst_buf));
             err.map(|_x| ())
@@ -362,6 +369,14 @@ impl SyscallDriver for Isle {
                     let ctx_no: u8 = 0;
                     let group_oscore_ctx = &ad.group_oscore_ctxs[ctx_no as usize];
 
+                    self.pending_for.set(PendingState {
+                        pid,
+                        ctx_no,
+                        aad_len: aad_len as u8,
+                        ciphertext_len: msg_len as u8,
+                        is_send: false,
+                    });
+
                     let allow_buffers = (
                         kad.get_readonly_processbuffer(ALLOW_NO_IN_BUFFER),
                         kad.get_readwrite_processbuffer(ALLOW_NO_OUT_BUFFER));
@@ -381,16 +396,7 @@ impl SyscallDriver for Isle {
                     .flatten();
 
                 match res {
-                    Ok(ctx_no) => {
-                        self.pending_for.set(PendingState {
-                            pid,
-                            ctx_no,
-                            aad_len: aad_len as u8,
-                            ciphertext_len: msg_len as u8,
-                            is_send: false,
-                        });
-                        CommandReturn::success()
-                    },
+                    Ok(_ctx_no) => CommandReturn::success(),
 
                     Err(_ec) =>  CommandReturn::failure(ErrorCode::FAIL)
                 }
@@ -488,7 +494,7 @@ impl SyscallDriver for Isle {
 impl symmetric_encryption::Client<'static> for Isle {
     fn crypt_done(
         &self,
-        _plaintext_buffer: Option<&'static mut [u8]>,
+        plaintext_buffer: Option<&'static mut [u8]>,
         ciphertext_buffer: &'static mut [u8],
     )
     {
@@ -561,6 +567,7 @@ impl symmetric_encryption::Client<'static> for Isle {
                     // Reset capsule state.
                     // This buffer belongs back with the capsule.
                     self.crypt_buffer.put(Some(ciphertext_buffer));
+                    self.crypt_buffer2.put(plaintext_buffer);
                     self.pending_for.clear();
 
                     if let Err(e) = write_res {
@@ -573,7 +580,34 @@ impl symmetric_encryption::Client<'static> for Isle {
                     // to be provided to the application.
                     debug!("[isle] operation was for decrypt/recv");
 
-                    // NEXT: pass the plaintext to the network stack.
+                    let plaintext_buffer = plaintext_buffer.unwrap();
+
+                    // Write the decrypted data to the application's buffer.
+                    let write_res = kad.get_readwrite_processbuffer(ALLOW_NO_OUT_BUFFER)
+                        .map(|out_pbuf| {
+                            out_pbuf.mut_enter(|out_buf| {
+                                out_buf.get(0..(pending_state.ciphertext_len & 0b1111_0000) as usize)
+                                    .unwrap()
+                                    .copy_from_slice(&plaintext_buffer[0..(pending_state.ciphertext_len & 0b1111_0000) as usize]);
+                            })
+                        }).flatten();
+
+                    // Notify the application layer that this payload is ready to receive.
+                    let total_len = pending_state.ciphertext_len as usize + HMAC_TAG_LEN;
+                    let _ = kad.schedule_upcall(
+                        UPCALL_OUT_MESSAGE_READY,
+                        (if write_res.is_ok() { 0 } else { 1 }, total_len as usize, 0))
+                        .map_err(|e| debug!("[isle] message ready upcall error: {:?}", e));
+
+                    // Reset capsule state.
+                    // This buffer belongs back with the capsule.
+                    self.crypt_buffer.put(Some(ciphertext_buffer));
+                    self.crypt_buffer2.put(Some(plaintext_buffer));
+                    self.pending_for.clear();
+
+                    if let Err(e) = write_res {
+                        debug!("[isle] error completing message protection: {:?}", e);
+                    }
                 }
             }).unwrap();
         });

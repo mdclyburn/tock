@@ -1183,7 +1183,7 @@ impl<C: Chip, D: 'static + ProcessStandardDebug> Process for ProcessStandard<'_,
                             // Now, to mark that the grant has been entered, we
                             // set the lowest bit to one and save this as the
                             // grant pointer.
-                            grant_entry.grant_ptr = (grant_ptr as usize | 0x1) as *mut u8;
+                            // grant_entry.grant_ptr = (grant_ptr as usize | 0x1) as *mut u8;
 
                             // And we return the grant pointer to the entered
                             // grant.

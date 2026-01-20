@@ -131,6 +131,7 @@ pub unsafe fn main() {
             static_init!(isle_config::Fixed, isle_config::Fixed),
             &nrf52840_peripherals.nrf52.ecb,
             static_init!([u8; 128], [0; 128]),
+            static_init!([u8; 128], [0; 128]),
             board_kernel.create_grant(
                 capsules_extra::isle::DRIVER_NO,
                 &create_capability!(capabilities::MemoryAllocationCapability))));
