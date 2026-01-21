@@ -93,3 +93,28 @@ pub(crate) const CONFIG: Config = Config {
     debug_panics: !cfg!(feature = "no_debug_panics"),
     debug_process_credentials: cfg!(feature = "debug_process_credentials"),
 };
+
+pub fn toggle_debug_pin() {
+    let gpio_1_01 = ((0x5000_0300 + 0x0504) as *mut usize);
+    unsafe { *gpio_1_01 ^= (1 << 1); }
+}
+
+static mut CC: [usize; 6] = [0; 6];
+
+#[inline]
+pub fn record(idx: usize) {
+    unsafe {
+        CC[idx] = *((0x4001_1000 + 0x0504) as *mut usize);
+    }
+}
+
+pub fn show() {
+    unsafe {
+        use crate::debug;
+        // debug!("encryption: {} - {} = {:.1} μs", CC[1], CC[0], (CC[1] - CC[0]) as f32 / 8.39f32);
+        // debug!("hashing: {} - {} = {:.1} μs", CC[3], CC[2], (CC[3] - CC[2]) as f32 / 8.39f32);
+        debug!("encryption: {:.1} μs", (CC[1] - CC[0]) as f32 / 0.032768f32);
+        debug!("hashing: {:.1} μs", (CC[3] - CC[2]) as f32 / 0.032768f32);
+        debug!("os total: {:.1} μs", (CC[5] - CC[4]) as f32 / 0.032768f32);
+    }
+}
