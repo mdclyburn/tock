@@ -234,14 +234,15 @@ impl Isle {
         // debug!("[isle] initiating encryption of {} B", padded_len);
         // config::toggle_debug_pin();
         config::record(0);
-        if let Some((ec, _src_buf, dst_buf)) = self.crypt.crypt(
-            None,
+        if let Some((ec, src_buf, dst_buf)) = self.crypt.crypt(
             // TODO: get rid of unwrap.
-            self.crypt_buffer.take().unwrap(),
+            Some(self.crypt_buffer.take().unwrap()),
+            self.crypt_buffer2.take().unwrap(),
             0,
             padded_len)
         {
-            self.crypt_buffer.put(Some(dst_buf));
+            self.crypt_buffer.put(src_buf);
+            self.crypt_buffer2.put(Some(dst_buf));
             ec.map(|_x| 0)
         } else {
             // debug!("[isle] started encrypting payload.");
