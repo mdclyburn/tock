@@ -232,7 +232,7 @@ impl Isle {
 
         // Encrypt the payload.
         // debug!("[isle] initiating encryption of {} B", padded_len);
-        // config::toggle_debug_pin();
+        config::toggle_debug_pin();
         config::record(0);
         if let Some((ec, src_buf, dst_buf)) = self.crypt.crypt(
             // TODO: get rid of unwrap.
@@ -504,8 +504,14 @@ impl symmetric_encryption::Client<'static> for Isle {
     )
     {
         // debug!("[isle] payload cryptographic operation done.");
-        // config::toggle_debug_pin();
+        config::toggle_debug_pin();
         config::record(1);
+        // debug!("[isle] {:X} {:X} {:X} {:X}",
+        //        ciphertext_buffer[0],
+        //        ciphertext_buffer[1],
+        //        ciphertext_buffer[2],
+        //        ciphertext_buffer[3]);
+
         self.pending_for.map(|pending_state| {
             self.app_data.enter(pending_state.pid, |ad, kad| {
                 if pending_state.is_send {

@@ -102,6 +102,13 @@ pub fn toggle_debug_pin() {
 static mut CC: [usize; 6] = [0; 6];
 
 #[inline]
+pub fn read_now() -> usize {
+    unsafe {
+        *((0x4001_1000 + 0x0504) as *mut usize)
+    }
+}
+
+#[inline]
 pub fn record(idx: usize) {
     unsafe {
         CC[idx] = *((0x4001_1000 + 0x0504) as *mut usize);

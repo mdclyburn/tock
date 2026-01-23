@@ -73,6 +73,8 @@ use kernel::utilities::registers::interfaces::{Readable, Writeable};
 use kernel::utilities::registers::{register_bitfields, ReadOnly, ReadWrite, WriteOnly};
 use kernel::utilities::StaticRef;
 use kernel::ErrorCode;
+use kernel::config;
+use kernel::debug;
 
 use crate::constants::TxPower;
 
@@ -822,6 +824,7 @@ impl<'a> Radio<'a> {
                 // shortcut is not enabled, the state machine/driver will likely
                 // exhibit undefined behavior.
                 ////////////////////////////////////////////////////////////////
+                debug!("rx start: {}", config::read_now());
 
                 // Since READY_START shortcut enabled, always clear READY event
                 self.registers.event_ready.write(Event::READY::CLEAR);
