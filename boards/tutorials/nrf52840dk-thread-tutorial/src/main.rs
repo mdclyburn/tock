@@ -16,7 +16,7 @@ use kernel::{capabilities, create_capability, static_init};
 use nrf52840::gpio::Pin;
 use nrf52840::interrupt_service::Nrf52840DefaultPeripherals;
 use nrf52840dk_lib::{self, NUM_PROCS};
-
+use nrf52;
 mod isle_config;
 
 type ScreenDriver = components::screen::ScreenComponentType;
@@ -42,6 +42,7 @@ struct Platform {
             },
         >,
     isle: &'static capsules_extra::isle::Isle,
+    clock: nrf52::clock::Clock,
 }
 
 impl SyscallDriverLookup for Platform {
@@ -73,6 +74,21 @@ impl KernelResources<ChipHw> for Platform {
     type WatchDog = <nrf52840dk_lib::Platform as KernelResources<ChipHw>>::WatchDog;
     type ContextSwitchCallback =
         <nrf52840dk_lib::Platform as KernelResources<ChipHw>>::ContextSwitchCallback;
+
+    fn prepare_sleep(&self) {
+        self.clock.high_stop();
+        self.clock.low_stop();
+    }
+
+    fn rouse_sleep(&self) {
+        self.clock.high_start();
+        self.clock.low_start();
+        loop {
+            if self.clock.high_running() && self.clock.low_running() {
+                break;
+            }
+        }
+    }
 
     fn syscall_driver_lookup(&self) -> &Self::SyscallDriverLookup {
         self
@@ -235,6 +251,7 @@ pub unsafe fn main() {
         screen,
         nonvolatile_storage,
         isle,
+        clock: nrf52::clock::Clock::new(),
     };
 
     //--------------------------------------------------------------------------

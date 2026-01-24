@@ -824,7 +824,7 @@ impl<'a> Radio<'a> {
                 // shortcut is not enabled, the state machine/driver will likely
                 // exhibit undefined behavior.
                 ////////////////////////////////////////////////////////////////
-                debug!("rx start: {}", config::read_now());
+                // debug!("rx start: {}", config::read_now());
 
                 // Since READY_START shortcut enabled, always clear READY event
                 self.registers.event_ready.write(Event::READY::CLEAR);

@@ -45,6 +45,10 @@ pub trait KernelResources<C: Chip> {
     /// of the kernel.
     type WatchDog: watchdog::WatchDog;
 
+    fn prepare_sleep(&self) {  }
+
+    fn rouse_sleep(&self) {  }
+
     /// Returns a reference to the implementation of the SyscallDriverLookup this
     /// platform will use to route syscalls.
     fn syscall_driver_lookup(&self) -> &Self::SyscallDriverLookup;

@@ -15,6 +15,7 @@ screen_ssd1306 = []
 screen_sh1106 = []
 
 [dependencies]
+nrf52 = { path = "../../../chips/nrf52" }
 kernel = { path = "../../../kernel" }
 nrf52840 = { path = "../../../chips/nrf52840" }
 nrf52840dk = { path = "../../nordic/nrf52840dk" }

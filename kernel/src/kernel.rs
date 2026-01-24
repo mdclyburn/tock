@@ -398,7 +398,9 @@ impl Kernel {
                                     if !chip.has_pending_interrupts() && !DeferredCall::has_tasks()
                                     {
                                         resources.watchdog().suspend();
+                                        resources.prepare_sleep();
                                         chip.sleep();
+                                        resources.rouse_sleep();
                                         resources.watchdog().resume();
                                     }
                                 });

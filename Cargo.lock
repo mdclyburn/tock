@@ -957,6 +957,7 @@ dependencies = [
  "capsules-system",
  "components",
  "kernel",
+ "nrf52",
  "nrf52840",
  "nrf52840dk",
  "tock_build_scripts",
