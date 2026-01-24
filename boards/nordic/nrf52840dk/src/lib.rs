@@ -196,19 +196,7 @@ pub type Eui64Driver = components::eui64::Eui64ComponentType;
 
 /// Supported drivers by the platform
 pub struct Platform {
-    ble_radio: &'static capsules_extra::ble_advertising_driver::BLE<
-        'static,
-        nrf52840::ble_radio::Radio<'static>,
-        VirtualMuxAlarm<'static, nrf52840::rtc::Rtc<'static>>,
-    >,
     button: &'static capsules_core::button::Button<'static, nrf52840::gpio::GPIOPin<'static>>,
-    pconsole: &'static capsules_core::process_console::ProcessConsole<
-        'static,
-        { capsules_core::process_console::DEFAULT_COMMAND_HISTORY_LEN },
-        VirtualMuxAlarm<'static, nrf52840::rtc::Rtc<'static>>,
-        components::process_console::Capability,
-    >,
-    console: &'static capsules_core::console::Console<'static>,
     gpio: &'static capsules_core::gpio::GPIO<'static, nrf52840::gpio::GPIOPin<'static>>,
     led: &'static capsules_core::led::LedDriver<
         'static,
@@ -216,26 +204,20 @@ pub struct Platform {
         4,
     >,
     rng: &'static RngDriver,
-    adc: &'static capsules_core::adc::AdcDedicated<'static, nrf52840::adc::Adc<'static>>,
-    temp: &'static TemperatureDriver,
     /// The IPC driver.
     pub ipc: kernel::ipc::IPC<{ NUM_PROCS as u8 }>,
-    analog_comparator: &'static capsules_extra::analog_comparator::AnalogComparator<
-        'static,
-        nrf52840::acomp::Comparator<'static>,
-    >,
+    // analog_comparator: &'static capsules_extra::analog_comparator::AnalogComparator<
+    //     'static,
+    //     nrf52840::acomp::Comparator<'static>,
+    // >,
     alarm: &'static AlarmDriver,
-    i2c_master_slave: &'static capsules_core::i2c_master_slave_driver::I2CMasterSlaveDriver<
-        'static,
-        nrf52840::i2c::TWI<'static>,
-    >,
     spi_controller: &'static capsules_core::spi_controller::Spi<
-        'static,
-        capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice<
             'static,
+        capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice<
+                'static,
             nrf52840::spi::SPIM<'static>,
+            >,
         >,
-    >,
     kv_driver: &'static KVDriver,
     scheduler: &'static RoundRobinSched<'static>,
     systick: cortexm4::systick::SysTick,
@@ -247,19 +229,12 @@ impl SyscallDriverLookup for Platform {
         F: FnOnce(Option<&dyn kernel::syscall::SyscallDriver>) -> R,
     {
         match driver_num {
-            capsules_core::console::DRIVER_NUM => f(Some(self.console)),
             capsules_core::gpio::DRIVER_NUM => f(Some(self.gpio)),
             capsules_core::alarm::DRIVER_NUM => f(Some(self.alarm)),
             capsules_core::led::DRIVER_NUM => f(Some(self.led)),
             capsules_core::button::DRIVER_NUM => f(Some(self.button)),
             capsules_core::rng::DRIVER_NUM => f(Some(self.rng)),
-            capsules_core::adc::DRIVER_NUM => f(Some(self.adc)),
-            capsules_extra::ble_advertising_driver::DRIVER_NUM => f(Some(self.ble_radio)),
-            capsules_extra::temperature::DRIVER_NUM => f(Some(self.temp)),
-            capsules_extra::analog_comparator::DRIVER_NUM => f(Some(self.analog_comparator)),
             kernel::ipc::DRIVER_NUM => f(Some(&self.ipc)),
-            capsules_core::i2c_master_slave_driver::DRIVER_NUM => f(Some(self.i2c_master_slave)),
-            capsules_core::spi_controller::DRIVER_NUM => f(Some(self.spi_controller)),
             capsules_extra::kv_driver::DRIVER_NUM => f(Some(self.kv_driver)),
             _ => f(None),
         }
@@ -444,22 +419,22 @@ pub unsafe fn start_no_pconsole() -> (
     // Choose the channel for serial output. This board can be configured to use
     // either the Segger RTT channel or via UART with traditional TX/RX GPIO
     // pins.
-    let uart_channel = if USB_DEBUGGING {
-        // Initialize early so any panic beyond this point can use the RTT
-        // memory object.
-        let rtt_memory_refs = components::segger_rtt::SeggerRttMemoryComponent::new()
-            .finalize(components::segger_rtt_memory_component_static!());
+    // let uart_channel = if USB_DEBUGGING {
+    //     // Initialize early so any panic beyond this point can use the RTT
+    //     // memory object.
+    //     let rtt_memory_refs = components::segger_rtt::SeggerRttMemoryComponent::new()
+    //         .finalize(components::segger_rtt_memory_component_static!());
 
-        // XXX: This is inherently unsafe as it aliases the mutable reference to
-        // rtt_memory. This aliases reference is only used inside a panic
-        // handler, which should be OK, but maybe we should use a const
-        // reference to rtt_memory and leverage interior mutability instead.
-        self::io::set_rtt_memory(&*core::ptr::from_mut(rtt_memory_refs.rtt_memory));
+    //     // XXX: This is inherently unsafe as it aliases the mutable reference to
+    //     // rtt_memory. This aliases reference is only used inside a panic
+    //     // handler, which should be OK, but maybe we should use a const
+    //     // reference to rtt_memory and leverage interior mutability instead.
+    //     self::io::set_rtt_memory(&*core::ptr::from_mut(rtt_memory_refs.rtt_memory));
 
-        UartChannel::Rtt(rtt_memory_refs)
-    } else {
-        UartChannel::Pins(UartPins::new(UART_RTS, UART_TXD, UART_CTS, UART_RXD))
-    };
+    //     UartChannel::Rtt(rtt_memory_refs)
+    // } else {
+    //     UartChannel::Pins(UartPins::new(UART_RTS, UART_TXD, UART_CTS, UART_RXD))
+    // };
 
     // Create an array to hold process references.
     let processes = components::process_array::ProcessArrayComponent::new()
@@ -588,89 +563,89 @@ pub unsafe fn start_no_pconsole() -> (
     )
     .finalize(components::alarm_component_static!(nrf52840::rtc::Rtc));
 
-    //--------------------------------------------------------------------------
-    // UART & CONSOLE & DEBUG
-    //--------------------------------------------------------------------------
+    // //--------------------------------------------------------------------------
+    // // UART & CONSOLE & DEBUG
+    // //--------------------------------------------------------------------------
 
-    let uart_channel = nrf52_components::UartChannelComponent::new(
-        uart_channel,
-        mux_alarm,
-        &base_peripherals.uarte0,
-    )
-    .finalize(nrf52_components::uart_channel_component_static!(
-        nrf52840::rtc::Rtc
-    ));
+    // let uart_channel = nrf52_components::UartChannelComponent::new(
+    //     uart_channel,
+    //     mux_alarm,
+    //     &base_peripherals.uarte0,
+    // )
+    // .finalize(nrf52_components::uart_channel_component_static!(
+    //     nrf52840::rtc::Rtc
+    // ));
 
-    // Tool for displaying information about processes.
-    let process_printer = components::process_printer::ProcessPrinterTextComponent::new()
-        .finalize(components::process_printer_text_component_static!());
-    PROCESS_PRINTER = Some(process_printer);
+    // // Tool for displaying information about processes.
+    // let process_printer = components::process_printer::ProcessPrinterTextComponent::new()
+    //     .finalize(components::process_printer_text_component_static!());
+    // PROCESS_PRINTER = Some(process_printer);
 
-    // Virtualize the UART channel for the console and for kernel debug.
-    let uart_mux = components::console::UartMuxComponent::new(uart_channel, 115200)
-        .finalize(components::uart_mux_component_static!());
+    // // Virtualize the UART channel for the console and for kernel debug.
+    // let uart_mux = components::console::UartMuxComponent::new(uart_channel, 115200)
+    //     .finalize(components::uart_mux_component_static!());
 
-    // Create the process console, an interactive terminal for managing
-    // processes.
-    let pconsole = components::process_console::ProcessConsoleComponent::new(
-        board_kernel,
-        uart_mux,
-        mux_alarm,
-        process_printer,
-        Some(cortexm4::support::reset),
-    )
-    .finalize(components::process_console_component_static!(
-        nrf52840::rtc::Rtc<'static>
-    ));
+    // // Create the process console, an interactive terminal for managing
+    // // processes.
+    // let pconsole = components::process_console::ProcessConsoleComponent::new(
+    //     board_kernel,
+    //     uart_mux,
+    //     mux_alarm,
+    //     process_printer,
+    //     Some(cortexm4::support::reset),
+    // )
+    // .finalize(components::process_console_component_static!(
+    //     nrf52840::rtc::Rtc<'static>
+    // ));
 
-    // Setup the serial console for userspace.
-    let console = components::console::ConsoleComponent::new(
-        board_kernel,
-        capsules_core::console::DRIVER_NUM,
-        uart_mux,
-    )
-    .finalize(components::console_component_static!());
+    // // Setup the serial console for userspace.
+    // let console = components::console::ConsoleComponent::new(
+    //     board_kernel,
+    //     capsules_core::console::DRIVER_NUM,
+    //     uart_mux,
+    // )
+    // .finalize(components::console_component_static!());
 
-    // Create the debugger object that handles calls to `debug!()`.
-    components::debug_writer::DebugWriterComponent::new::<
-        <ChipHw as kernel::platform::chip::Chip>::ThreadIdProvider,
-    >(
-        uart_mux,
-        create_capability!(capabilities::SetDebugWriterCapability),
-    )
-    .finalize(components::debug_writer_component_static!());
+    // // Create the debugger object that handles calls to `debug!()`.
+    // components::debug_writer::DebugWriterComponent::new::<
+    //     <ChipHw as kernel::platform::chip::Chip>::ThreadIdProvider,
+    // >(
+    //     uart_mux,
+    //     create_capability!(capabilities::SetDebugWriterCapability),
+    // )
+    // .finalize(components::debug_writer_component_static!());
 
-    //--------------------------------------------------------------------------
-    // BLE
-    //--------------------------------------------------------------------------
+    // //--------------------------------------------------------------------------
+    // // BLE
+    // //--------------------------------------------------------------------------
 
-    let ble_radio = components::ble::BLEComponent::new(
-        board_kernel,
-        capsules_extra::ble_advertising_driver::DRIVER_NUM,
-        &base_peripherals.ble_radio,
-        mux_alarm,
-    )
-    .finalize(components::ble_component_static!(
-        nrf52840::rtc::Rtc,
-        nrf52840::ble_radio::Radio
-    ));
+    // let ble_radio = components::ble::BLEComponent::new(
+    //     board_kernel,
+    //     capsules_extra::ble_advertising_driver::DRIVER_NUM,
+    //     &base_peripherals.ble_radio,
+    //     mux_alarm,
+    // )
+    // .finalize(components::ble_component_static!(
+    //     nrf52840::rtc::Rtc,
+    //     nrf52840::ble_radio::Radio
+    // ));
 
-    //--------------------------------------------------------------------------
-    // TEMPERATURE (internal)
-    //--------------------------------------------------------------------------
+    // //--------------------------------------------------------------------------
+    // // TEMPERATURE (internal)
+    // //--------------------------------------------------------------------------
 
-    let temp = components::temperature::TemperatureComponent::new(
-        board_kernel,
-        capsules_extra::temperature::DRIVER_NUM,
-        &base_peripherals.temp,
-    )
-    .finalize(components::temperature_component_static!(
-        nrf52840::temperature::Temp
-    ));
+    // let temp = components::temperature::TemperatureComponent::new(
+    //     board_kernel,
+    //     capsules_extra::temperature::DRIVER_NUM,
+    //     &base_peripherals.temp,
+    // )
+    // .finalize(components::temperature_component_static!(
+    //     nrf52840::temperature::Temp
+    // ));
 
-    //--------------------------------------------------------------------------
-    // RANDOM NUMBER GENERATOR
-    //--------------------------------------------------------------------------
+    // //--------------------------------------------------------------------------
+    // // RANDOM NUMBER GENERATOR
+    // //--------------------------------------------------------------------------
 
     let rng = components::rng::RngComponent::new(
         board_kernel,
@@ -683,30 +658,30 @@ pub unsafe fn start_no_pconsole() -> (
     // ADC
     //--------------------------------------------------------------------------
 
-    let adc_channels = static_init!(
-        [nrf52840::adc::AdcChannelSetup; 6],
-        [
-            nrf52840::adc::AdcChannelSetup::new(nrf52840::adc::AdcChannel::AnalogInput1),
-            nrf52840::adc::AdcChannelSetup::new(nrf52840::adc::AdcChannel::AnalogInput2),
-            nrf52840::adc::AdcChannelSetup::new(nrf52840::adc::AdcChannel::AnalogInput4),
-            nrf52840::adc::AdcChannelSetup::new(nrf52840::adc::AdcChannel::AnalogInput5),
-            nrf52840::adc::AdcChannelSetup::new(nrf52840::adc::AdcChannel::AnalogInput6),
-            nrf52840::adc::AdcChannelSetup::new(nrf52840::adc::AdcChannel::AnalogInput7),
-        ]
-    );
-    let adc = components::adc::AdcDedicatedComponent::new(
-        &base_peripherals.adc,
-        adc_channels,
-        board_kernel,
-        capsules_core::adc::DRIVER_NUM,
-    )
-    .finalize(components::adc_dedicated_component_static!(
-        nrf52840::adc::Adc
-    ));
+    // let adc_channels = static_init!(
+    //     [nrf52840::adc::AdcChannelSetup; 6],
+    //     [
+    //         nrf52840::adc::AdcChannelSetup::new(nrf52840::adc::AdcChannel::AnalogInput1),
+    //         nrf52840::adc::AdcChannelSetup::new(nrf52840::adc::AdcChannel::AnalogInput2),
+    //         nrf52840::adc::AdcChannelSetup::new(nrf52840::adc::AdcChannel::AnalogInput4),
+    //         nrf52840::adc::AdcChannelSetup::new(nrf52840::adc::AdcChannel::AnalogInput5),
+    //         nrf52840::adc::AdcChannelSetup::new(nrf52840::adc::AdcChannel::AnalogInput6),
+    //         nrf52840::adc::AdcChannelSetup::new(nrf52840::adc::AdcChannel::AnalogInput7),
+    //     ]
+    // );
+    // let adc = components::adc::AdcDedicatedComponent::new(
+    //     &base_peripherals.adc,
+    //     adc_channels,
+    //     board_kernel,
+    //     capsules_core::adc::DRIVER_NUM,
+    // )
+    // .finalize(components::adc_dedicated_component_static!(
+    //     nrf52840::adc::Adc
+    // ));
 
-    //--------------------------------------------------------------------------
-    // SPI
-    //--------------------------------------------------------------------------
+    // //--------------------------------------------------------------------------
+    // // SPI
+    // //--------------------------------------------------------------------------
 
     let mux_spi = components::spi::SpiMuxComponent::new(&base_peripherals.spim0)
         .finalize(components::spi_mux_component_static!(nrf52840::spi::SPIM));
@@ -812,43 +787,43 @@ pub unsafe fn start_no_pconsole() -> (
     // I2C CONTROLLER/TARGET
     //--------------------------------------------------------------------------
 
-    let i2c_master_slave = components::i2c::I2CMasterSlaveDriverComponent::new(
-        board_kernel,
-        capsules_core::i2c_master_slave_driver::DRIVER_NUM,
-        &base_peripherals.twi1,
-    )
-    .finalize(components::i2c_master_slave_component_static!(
-        nrf52840::i2c::TWI
-    ));
+    // let i2c_master_slave = components::i2c::I2CMasterSlaveDriverComponent::new(
+    //     board_kernel,
+    //     capsules_core::i2c_master_slave_driver::DRIVER_NUM,
+    //     &base_peripherals.twi1,
+    // )
+    // .finalize(components::i2c_master_slave_component_static!(
+    //     nrf52840::i2c::TWI
+    // ));
 
-    base_peripherals.twi1.configure(
-        nrf52840::pinmux::Pinmux::new(I2C_SCL_PIN as u32),
-        nrf52840::pinmux::Pinmux::new(I2C_SDA_PIN as u32),
-    );
-    base_peripherals.twi1.set_speed(nrf52840::i2c::Speed::K400);
+    // base_peripherals.twi1.configure(
+    //     nrf52840::pinmux::Pinmux::new(I2C_SCL_PIN as u32),
+    //     nrf52840::pinmux::Pinmux::new(I2C_SDA_PIN as u32),
+    // );
+    // base_peripherals.twi1.set_speed(nrf52840::i2c::Speed::K400);
 
-    //--------------------------------------------------------------------------
-    // ANALOG COMPARATOR
-    //--------------------------------------------------------------------------
+    // //--------------------------------------------------------------------------
+    // // ANALOG COMPARATOR
+    // //--------------------------------------------------------------------------
 
-    // Initialize AC using AIN5 (P0.29) as VIN+ and VIN- as AIN0 (P0.02)
-    // These are hardcoded pin assignments specified in the driver
-    let analog_comparator_channel = static_init!(
-        nrf52840::acomp::Channel,
-        nrf52840::acomp::Channel::new(nrf52840::acomp::ChannelNumber::AC0)
-    );
-    let analog_comparator = components::analog_comparator::AnalogComparatorComponent::new(
-        &base_peripherals.acomp,
-        components::analog_comparator_component_helper!(
-            nrf52840::acomp::Channel,
-            analog_comparator_channel
-        ),
-        board_kernel,
-        capsules_extra::analog_comparator::DRIVER_NUM,
-    )
-    .finalize(components::analog_comparator_component_static!(
-        nrf52840::acomp::Comparator
-    ));
+    // // Initialize AC using AIN5 (P0.29) as VIN+ and VIN- as AIN0 (P0.02)
+    // // These are hardcoded pin assignments specified in the driver
+    // let analog_comparator_channel = static_init!(
+    //     nrf52840::acomp::Channel,
+    //     nrf52840::acomp::Channel::new(nrf52840::acomp::ChannelNumber::AC0)
+    // );
+    // let analog_comparator = components::analog_comparator::AnalogComparatorComponent::new(
+    //     &base_peripherals.acomp,
+    //     components::analog_comparator_component_helper!(
+    //         nrf52840::acomp::Channel,
+    //         analog_comparator_channel
+    //     ),
+    //     board_kernel,
+    //     capsules_extra::analog_comparator::DRIVER_NUM,
+    // )
+    // .finalize(components::analog_comparator_component_static!(
+    //     nrf52840::acomp::Comparator
+    // ));
 
     //--------------------------------------------------------------------------
     // NRF CLOCK SETUP
@@ -912,22 +887,22 @@ pub unsafe fn start_no_pconsole() -> (
 
     let platform = Platform {
         button,
-        ble_radio,
-        pconsole,
-        console,
+        // ble_radio,
+        // pconsole,
+        // console,
         led,
         gpio,
         rng,
-        adc,
-        temp,
+        // adc,
+        // temp,
         alarm,
-        analog_comparator,
+        // analog_comparator,
         ipc: kernel::ipc::IPC::new(
             board_kernel,
             kernel::ipc::DRIVER_NUM,
             &memory_allocation_capability,
         ),
-        i2c_master_slave,
+        // i2c_master_slave,
         spi_controller,
         kv_driver,
         scheduler,
@@ -960,6 +935,6 @@ pub unsafe fn start() -> (
     &'static MuxAlarm<'static, nrf52840::rtc::Rtc<'static>>,
 ) {
     let (kernel, platform, chip, peripherals, mux_alarm) = start_no_pconsole();
-    let _ = platform.pconsole.start();
+    // let _ = platform.pconsole.start();
     (kernel, platform, chip, peripherals, mux_alarm)
 }
