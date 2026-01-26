@@ -232,8 +232,8 @@ impl Isle {
 
         // Encrypt the payload.
         // debug!("[isle] initiating encryption of {} B", padded_len);
-        config::toggle_debug_pin();
-        config::record(0);
+        // config::toggle_debug_pin();
+        // config::record(0);
         if let Some((ec, src_buf, dst_buf)) = self.crypt.crypt(
             // TODO: get rid of unwrap.
             Some(self.crypt_buffer.take().unwrap()),
@@ -264,6 +264,7 @@ impl Isle {
         // Current state of crypt_buffer: CIPHERTEXT + HMAC + AAD.
         // So the buffer is already ready for the HMAC computation.
 
+        config::record(0);
         // Compute the HMAC.
         // debug!("[isle] computing HMAC");
         use kernel::crypto_sw::ascon;
@@ -324,7 +325,7 @@ impl SyscallDriver for Isle {
             // Translate CoAP message to Group OSCORE.
             (1, msg_len, aad_len) => {
                 // debug!("[isle] mapping {} B CoAP message to Group OSCORE.", msg_len);
-                config::record(4);
+                // config::record(4);
                 let res = self.app_data.enter(pid, |ad, kad| {
                     // TODO: Dynamically choose the right context.
                     let ctx_no: u8 = 0;
@@ -368,6 +369,7 @@ impl SyscallDriver for Isle {
 
             // Translate a received message from Group OSCORE to CoAP.
             (2, msg_len, aad_len) => {
+                // config::record(2);
                 // debug!("Mapping {} B Group OSCORE message to CoAP.", msg_len);
                 let res = self.app_data.enter(pid, |ad, kad| {
                     // TODO: Dynamically choose the right context.
@@ -504,8 +506,8 @@ impl symmetric_encryption::Client<'static> for Isle {
     )
     {
         // debug!("[isle] payload cryptographic operation done.");
-        config::toggle_debug_pin();
-        config::record(1);
+        // config::toggle_debug_pin();
+        // config::record(1);
         // debug!("[isle] {:X} {:X} {:X} {:X}",
         //        ciphertext_buffer[0],
         //        ciphertext_buffer[1],
@@ -551,14 +553,14 @@ impl symmetric_encryption::Client<'static> for Isle {
                     // Compute the HMAC.
                     use kernel::crypto_sw::ascon;
                     // config::toggle_debug_pin();
-                    config::record(2);
+                    // config::record(2);
                     let mut hmac = [0u8; 32];
                     ascon::hash256(
                         &ciphertext_buffer[0..pending_state.ciphertext_len as usize + pending_state.aad_len as usize],
                         &mut hmac)
                         .unwrap();
                     // config::toggle_debug_pin();
-                    config::record(3);
+                    // config::record(3);
 
                     // Copy the ciphertext and HMAC tag back to the application's buffer.
                     // Use the const-defined HMAC tag length.
@@ -596,6 +598,8 @@ impl symmetric_encryption::Client<'static> for Isle {
                     // and notify the network stack that the payload is ready
                     // to be provided to the application.
                     // debug!("[isle] operation was for decrypt/recv");
+                    config::record(1);
+                    config::show();
 
                     let plaintext_buffer = plaintext_buffer.unwrap();
 
@@ -628,9 +632,6 @@ impl symmetric_encryption::Client<'static> for Isle {
                 }
             }).unwrap();
         });
-
-        config::record(5);
-        config::show();
     }
 }
 

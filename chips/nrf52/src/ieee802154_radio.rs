@@ -824,7 +824,12 @@ impl<'a> Radio<'a> {
                 // shortcut is not enabled, the state machine/driver will likely
                 // exhibit undefined behavior.
                 ////////////////////////////////////////////////////////////////
-                debug!("rx start: {}", config::read_now());
+                // kernel::config::toggle_debug_pin();
+                // debug!("rx start: {}", config::read_now());
+                // unsafe {
+                //     let bbb: *mut u32 = 0x2001_3650 as *mut u32;
+                //     *bbb = config::read_now() as u32;
+                // }
 
                 // Since READY_START shortcut enabled, always clear READY event
                 self.registers.event_ready.write(Event::READY::CLEAR);
