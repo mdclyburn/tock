@@ -100,6 +100,34 @@ pub fn toggle_debug_pin() {
 }
 
 static mut CC: [usize; 6] = [0; 6];
+static mut I_WAKE: usize = 0;
+
+#[inline]
+pub fn get_wake() -> usize {
+    unsafe {
+        I_WAKE
+    }
+}
+
+#[inline]
+pub fn set_wake() {
+    unsafe {
+        I_WAKE = now();
+    }
+}
+
+pub fn now() -> usize {
+    unsafe {
+        *((0x4001_1000 + 0x0504) as *mut usize)
+    }
+}
+
+pub fn add_to_active_time(dur: usize) {
+    let bbb = 0x2001_3670 as *mut usize;
+    unsafe {
+        *bbb += dur;
+    }
+}
 
 #[inline]
 pub fn record(idx: usize) {
