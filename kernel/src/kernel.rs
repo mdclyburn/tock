@@ -398,9 +398,7 @@ impl Kernel {
                                     if !chip.has_pending_interrupts() && !DeferredCall::has_tasks()
                                     {
                                         resources.watchdog().suspend();
-                                        config::add_to_active_time(config::now() - config::get_wake());
                                         chip.sleep();
-                                        config::set_wake();
                                         resources.watchdog().resume();
                                     }
                                 });
