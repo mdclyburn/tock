@@ -98,7 +98,6 @@ impl Default for AppData {
 #[derive(Clone, Copy)]
 struct PendingState {
     pid: ProcessId,
-    ctx_no: u8,
     aad_len: u8,
     ciphertext_len: u8,
     is_send: bool,
@@ -215,7 +214,9 @@ impl Isle {
     /// Encrypt a message for transmission over the network.
     fn encrypt_send(
         &self,
+        pid: ProcessId,
         message_len: usize,
+        aad_len: usize,
     ) -> Result<usize, ErrorCode>
     {
         // Pad the message to length.
@@ -231,9 +232,17 @@ impl Isle {
 
         // Encrypt the payload.
         debug!("[isle] initiating encryption of {} B", padded_len);
-        if let Some((ec, _src_buf, dst_buf)) = self.crypt.crypt(
-            None,
-            // TODO: get rid of unwrap.
+        // Set up pending state here so that there cannot be a race between
+        // setting up the pending state and completing the encryption operation.
+        self.pending_for.set(PendingState {
+            pid,
+            aad_len: aad_len as u8,
+            ciphertext_len: padded_len as u8,
+            is_send: true,
+        });
+
+        // Perform the encryption.
+        if let Some((ec, src_buf, dst_buf)) = self.crypt.crypt(
             Some(self.crypt_buffer.take().unwrap()),
             self.crypt_buffer2.take().unwrap(),
             0,
@@ -241,6 +250,7 @@ impl Isle {
         {
             self.crypt_buffer.put(src_buf);
             self.crypt_buffer2.put(Some(dst_buf));
+            self.pending_for.clear();
             ec.map(|_x| 0)
         } else {
             debug!("[isle] started encrypting payload.");
@@ -254,6 +264,7 @@ impl Isle {
     /// and then triggers a decryption operation on the ciphertext.
     fn decrypt_recv(
         &self,
+        pid: ProcessId,
         message_len: usize,
         aad_len: usize,
     ) -> Result<(), ErrorCode>
@@ -289,16 +300,25 @@ impl Isle {
         //     return res;
         // }
 
-        let comp_message_len = message_len & 0b1111_0000;
-        debug!("[isle] recomputed message len to {}", comp_message_len);
-        if let Some((err, src_buf, dst_buf)) = self.crypt.crypt(
+        let ciphertext_len: usize = message_len - HMAC_TAG_LEN;
+        debug!("[isle] ciphertext len = {}", ciphertext_len);
+        // Set up pending state here so that there cannot be a race between
+        // setting up the pending state and completing the decryption operation.
+        self.pending_for.set(PendingState {
+            pid,
+            aad_len: aad_len as u8,
+            ciphertext_len: ciphertext_len as u8,
+            is_send: false,
+        });
+        if let Some((err, _src_buf, dst_buf)) = self.crypt.crypt(
             // TODO: get rid of unwrap.
             // It missing means we are already busy with a TX or RX.
             self.crypt_buffer2.take(),
             self.crypt_buffer.take().unwrap(),
             0,
-            comp_message_len) // HACK: to get the message length for testing
+            ciphertext_len) // HACK: to get the message length for testing
         {
+            self.pending_for.clear();
             self.crypt_buffer.put(Some(dst_buf));
             err.map(|_x| ())
         } else {
@@ -322,85 +342,73 @@ impl SyscallDriver for Isle {
             // Translate CoAP message to Group OSCORE.
             (1, msg_len, aad_len) => {
                 debug!("[isle] mapping {} B CoAP message to Group OSCORE.", msg_len);
-                let res = self.app_data.enter(pid, |ad, kad| {
-                    // TODO: Dynamically choose the right context.
-                    let ctx_no: u8 = 0;
-                    let group_oscore_ctx = &ad.group_oscore_ctxs[ctx_no as usize];
+                // Check buffers and prepare for the encryption operation.
+                let operation_res = self.app_data.enter(
+                    pid,
+                    |ad, kad| {
+                        // Get the right Group OSCORE context.
+                        let group_oscore_ctx = &ad.group_oscore_ctxs[0usize];
 
-                    let (res_in_buf, res_out_buf) = (
-                        kad.get_readonly_processbuffer(ALLOW_NO_IN_BUFFER),
-                        kad.get_readwrite_processbuffer(ALLOW_NO_OUT_BUFFER));
-                    match (res_in_buf, res_out_buf) {
-                        (Ok(in_buffer), Ok(_out_buffer)) =>
-                            self.prepare_crypt_op(group_oscore_ctx, &in_buffer, msg_len, aad_len, true)
-                                .and_then(|_empty| self.encrypt_send(msg_len))
-                                .map(|ct_len| (ct_len, ctx_no)),
-
-                        _ => {
+                        // Ensure that both the application's input and output buffers are available
+                        // before starting the operation.
+                        let app_buffers = (
+                            kad.get_readonly_processbuffer(ALLOW_NO_IN_BUFFER),
+                            kad.get_readwrite_processbuffer(ALLOW_NO_OUT_BUFFER));
+                        if let (Ok(app_in_buffer), Ok(_app_out_buffer)) = app_buffers {
+                            self.prepare_crypt_op(group_oscore_ctx, &app_in_buffer, msg_len, aad_len, true)
+                        } else {
                             debug!("[isle] application has not provided both buffers for send");
-                            Err(ErrorCode::FAIL)
+                            Err(ErrorCode::NOMEM)
                         }
-                    }
-                })
-                    .map_err(|_e| {
-                        debug!("[isle] an error occured during encrypt_send");
+                    })
+                    .map_err(|_perr| {
+                        debug!("[isle] process error setting up for send");
                         ErrorCode::FAIL
                     })
-                    .flatten();
+                    .and_then(|_empty| {
+                        self.encrypt_send(pid, msg_len, aad_len)
+                    });
 
-                match res {
-                    Ok((ciphertext_len, ctx_no)) => {
-                        self.pending_for.set(PendingState {
-                            pid,
-                            ctx_no,
-                            aad_len: aad_len as u8,
-                            ciphertext_len: ciphertext_len as u8,
-                            is_send: true,
-                        });
-                        CommandReturn::success()
-                    },
-                    Err(_ec) => CommandReturn::failure(ErrorCode::FAIL),
+                if let Err(_ec) = operation_res {
+                    CommandReturn::failure(ErrorCode::FAIL)
+                } else {
+                    CommandReturn::success()
                 }
             },
 
             // Translate a received message from Group OSCORE to CoAP.
             (2, msg_len, aad_len) => {
                 debug!("Mapping {} B Group OSCORE message to CoAP.", msg_len);
-                let res = self.app_data.enter(pid, |ad, kad| {
-                    // TODO: Dynamically choose the right context.
-                    let ctx_no: u8 = 0;
-                    let group_oscore_ctx = &ad.group_oscore_ctxs[ctx_no as usize];
+                let operation_res = self.app_data.enter(pid, |ad, kad| {
+                    let group_oscore_ctx = &ad.group_oscore_ctxs[0usize];
 
                     self.pending_for.set(PendingState {
                         pid,
-                        ctx_no,
                         aad_len: aad_len as u8,
                         ciphertext_len: msg_len as u8,
                         is_send: false,
                     });
 
-                    let allow_buffers = (
+                    let app_buffers = (
                         kad.get_readonly_processbuffer(ALLOW_NO_IN_BUFFER),
                         kad.get_readwrite_processbuffer(ALLOW_NO_OUT_BUFFER));
-                    if let (Ok(in_buffer), Ok(_out_buffer)) = allow_buffers {
+                    if let (Ok(in_buffer), Ok(_out_buffer)) = app_buffers {
                         self.prepare_crypt_op(group_oscore_ctx, &in_buffer, msg_len, aad_len, false)
-                            .and_then(|_empty| self.decrypt_recv(msg_len, aad_len))
-                            .map(|_empty| ctx_no)
                     } else {
                         debug!("[isle] application has not provided both buffers for recv");
                         Err(ErrorCode::FAIL)
                     }
                 })
                     .map_err(|_e| {
-                        debug!("[isle] an error occured during decrypt_recv");
+                        debug!("[isle] process error setting up for receive");
                         ErrorCode::FAIL
                     })
-                    .flatten();
+                    .and_then(|_empty| self.decrypt_recv(pid, msg_len, aad_len));
 
-                match res {
-                    Ok(_ctx_no) => CommandReturn::success(),
-
-                    Err(_ec) =>  CommandReturn::failure(ErrorCode::FAIL)
+                if let Err(_ec) = operation_res {
+                    CommandReturn::failure(ErrorCode::FAIL)
+                } else {
+                    CommandReturn::success()
                 }
             },
 
@@ -518,12 +526,12 @@ impl symmetric_encryption::Client<'static> for Isle {
                     while aad_dst_offset < ciphertext_buffer.len() {
                         // Fill in the SSN if we just finished copying its space.
                         if ssn_marker_run == 4 {
-                            let ssn = ad.group_oscore_ctxs[pending_state.ctx_no as usize].sender_seq_no;
+                            let ssn = ad.group_oscore_ctxs[0usize].sender_seq_no;
                             ciphertext_buffer[aad_dst_offset-4] = (ssn & 0xFF) as u8;
                             ciphertext_buffer[aad_dst_offset-3] = (ssn >> 1) as u8;
                             ciphertext_buffer[aad_dst_offset-2] = (ssn >> 2) as u8;
                             ciphertext_buffer[aad_dst_offset-1] = (ssn >> 3) as u8;
-                            ad.group_oscore_ctxs[pending_state.ctx_no as usize].sender_seq_no += 1;
+                            ad.group_oscore_ctxs[0usize].sender_seq_no += 1;
                         }
 
                         ciphertext_buffer[aad_src_offset] = ciphertext_buffer[aad_dst_offset];
@@ -560,6 +568,7 @@ impl symmetric_encryption::Client<'static> for Isle {
                         }).flatten();
 
                     // Notify the application layer that this payload is ready to send.
+                    // The total length includes the length of the HMAC tag.
                     let total_len = pending_state.ciphertext_len as usize + HMAC_TAG_LEN;
                     let _ = kad.schedule_upcall(
                         UPCALL_OUT_MESSAGE_READY,
