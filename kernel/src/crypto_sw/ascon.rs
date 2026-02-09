@@ -23,6 +23,9 @@ impl CryptographicHasher for AsconHash256 {
 /// * `input`: The message data to hash.
 /// * `hkey`: The key to use for the hash. Must be a multiple of 8 bytes in length.
 /// * `output`: The buffer to write the 32-byte hash result into.
+///
+/// Derived from MIT-licensed implementation found at:
+/// <https://github.com/RustCrypto/hashes/blob/master/ascon-hash256/src/lib.rs>
 pub fn hash256(hkey: &[u8], input: &[u8], output: &mut [u8]) -> Result<(), ErrorCode> {
     let args_are_viable =
         output.len() == 32

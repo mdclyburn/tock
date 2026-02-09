@@ -114,9 +114,51 @@ const HMAC_TAG_LEN: usize = 8;
 pub trait Crypto: AES128<'static> + AES128CBC {  }
 impl<T: AES128<'static> + AES128CBC> Crypto for T {  }
 
+pub trait CryptoProcessorClient {
+    fn encrypt_done(
+        &self,
+        plaintext_buffer: &mut [u8],
+        ciphertext_buffer: &mut [u8],
+        tag_buffer: &mut [u8],
+        nonce_buffer: &mut [u8],
+    );
+
+    fn decrypt_done(
+        &self,
+        ciphertext_buffer: &mut [u8],
+        plaintext_buffer: &mut [u8],
+        tag_buffer: &mut [u8],
+        nonce_buffer: &mut [u8],
+    );
+}
+
+pub trait CryptoProcessor {
+    fn encrypt(
+        &self,
+        ckey: &[u8],
+        nonce: &[u8],
+        in_plaintext: &[u8],
+        out_ciphertext: &mut [u8],
+    ) -> Result<(), ErrorCode>;
+
+    fn decrypt(
+        &self,
+        ckey: &[u8],
+        nonce: &[u8],
+        in_ciphertext: &[u8],
+        out_plaintext: &mut [u8],
+    ) -> Result<bool, ErrorCode>;
+
+    fn set_client(
+        &self,
+        client: &'static dyn CryptoProcessorClient
+    );
+}
+
 /// Network-level isolation packet filter for applications.
 pub struct Isle {
     config_provider: &'static dyn ISLEConfigurationProvider,
+
     crypt: &'static dyn Crypto,
     crypt_buffer: TakeCell<'static, [u8]>,
     crypt_buffer2: TakeCell<'static, [u8]>,
@@ -280,13 +322,18 @@ impl Isle {
         use kernel::crypto_sw::ascon;
         let mut hmac = [0u8; 32];
         let dummy_hkey = [0u8; 8];
-        self.crypt_buffer.map(|cbuf| {
-            ascon::hash256(
-                &dummy_hkey,
-                &cbuf[0..message_len as usize + aad_len as usize],
-                &mut hmac)
-                .unwrap();
-        });
+        self.app_data.enter(
+            pid,
+            |ad, kad| {
+                self.crypt_buffer.map(|cbuf| {
+                    ascon::hash256(
+                        &ad.group_oscore_ctxs[0].hash_key,
+                        &cbuf[0..message_len as usize + aad_len as usize],
+                        &mut hmac)
+                        .unwrap();
+                });
+            })
+            .map_err(|_e| ErrorCode::BUSY)?;
 
         // Compare the HMAC tag up to the const length.
         debug!("[isle] comparing HMAC");
@@ -492,8 +539,7 @@ impl SyscallDriver for Isle {
                 // Derive the encryption key.
                 use kernel::crypto_sw::ascon;
                 let mut crypt_buffer: [u8; 32] = [0; 32];
-                let dummy_hkey = [0u8; 8];
-                ascon::hash256(&dummy_hkey, &kd_input, &mut crypt_buffer).unwrap();
+                ascon::hash256(&[], &kd_input, &mut crypt_buffer).unwrap();
                 // Save it in the application's grant.
                 ctx.message_key.copy_from_slice(&crypt_buffer[..16]);
 
