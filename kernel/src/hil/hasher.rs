@@ -105,3 +105,14 @@ pub trait SipHash {
     ///    - NOSUPPORT: The operation is not supported
     fn set_keys(&self, k0: u64, k1: u64) -> Result<(), ErrorCode>;
 }
+
+/// Cryptographic hash calculator.
+pub trait CryptographicHasher {
+    /// Calculate the hash of the input data.
+    fn hash(
+        &self,
+        hkey: &[u8],
+        in_data: &[u8],
+        out_hash: &mut [u8],
+    ) -> Result<(), ErrorCode>;
+}
