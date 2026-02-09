@@ -3,7 +3,6 @@
 
 use core::default::Default;
 
-use kernel::config;
 use kernel::debug;
 use kernel::errorcode::ErrorCode;
 use kernel::grant::{
@@ -159,18 +158,18 @@ impl Isle {
     ) -> Result<(), ErrorCode>
     {
         // Set the mode, key, and IV encryption parameters.
-        // debug!("[isle] configuring cryptoprocessor");
+        debug!("[isle] configuring cryptoprocessor");
         self.crypt.set_mode_aes128cbc(is_send)?;
         self.crypt.set_key(&group_oscore_context.message_key)?;
         self.crypt_buffer.map_or(Err(ErrorCode::BUSY), |buf| {
-            // debug!("[isle] crypt buffer <-");
+            debug!("[isle] crypt buffer <-");
             self.mleid_address.map(|addr| {
-                // debug!("[isle] <- addr");
+                debug!("[isle] <- addr");
                 buf[0..8].copy_from_slice(&addr[0..8]);
                 // On a send, this capsule will provide the sequence no. from the grant data.
                 // On a receive, the partial IV from the message will be present in the AAD.
                 if is_send {
-                    // debug!("[isle] <- SSN");
+                    debug!("[isle] <- SSN");
                     buf[8..12].copy_from_slice(&[
                         (group_oscore_context.sender_seq_no & 0xFF) as u8,
                         ((group_oscore_context.sender_seq_no >> 8) & 0xFF) as u8,
@@ -185,13 +184,13 @@ impl Isle {
                         .unwrap();
                 }
                 buf[12..16].copy_from_slice(&[0u8; 4]);
-                // debug!("[isle] setting IV");
+                debug!("[isle] setting IV");
                 self.crypt.set_iv(&buf[0..16])
             }).unwrap() // We always initialize the address to zero.
         })?;
 
         // Copy the message into the capsule buffer.
-        // debug!("[isle] copying message to internal buffer");
+        debug!("[isle] copying message to internal buffer");
         self.crypt_buffer.map(|buf| {
             payload_buffer.enter(|pbuf| {
                 // The message first.
@@ -220,7 +219,7 @@ impl Isle {
     ) -> Result<usize, ErrorCode>
     {
         // Pad the message to length.
-        // debug!("[isle] padding plaintext");
+        debug!("[isle] padding plaintext");
         let padded_len = self.crypt_buffer.map_or(
             Err(ErrorCode::BUSY),
             |buf| {
@@ -231,10 +230,9 @@ impl Isle {
             })?;
 
         // Encrypt the payload.
-        // debug!("[isle] initiating encryption of {} B", padded_len);
-        // config::toggle_debug_pin();
-        config::record(0);
-        if let Some((ec, src_buf, dst_buf)) = self.crypt.crypt(
+        debug!("[isle] initiating encryption of {} B", padded_len);
+        if let Some((ec, _src_buf, dst_buf)) = self.crypt.crypt(
+            None,
             // TODO: get rid of unwrap.
             Some(self.crypt_buffer.take().unwrap()),
             self.crypt_buffer2.take().unwrap(),
@@ -245,7 +243,7 @@ impl Isle {
             self.crypt_buffer2.put(Some(dst_buf));
             ec.map(|_x| 0)
         } else {
-            // debug!("[isle] started encrypting payload.");
+            debug!("[isle] started encrypting payload.");
             Ok(padded_len)
         }
     }
@@ -265,7 +263,7 @@ impl Isle {
         // So the buffer is already ready for the HMAC computation.
 
         // Compute the HMAC.
-        // debug!("[isle] computing HMAC");
+        debug!("[isle] computing HMAC");
         use kernel::crypto_sw::ascon;
         let mut hmac = [0u8; 32];
         self.crypt_buffer.map(|cbuf| {
@@ -276,7 +274,7 @@ impl Isle {
         });
 
         // Compare the HMAC tag up to the const length.
-        // debug!("[isle] comparing HMAC");
+        debug!("[isle] comparing HMAC");
         let _res = self.crypt_buffer.map(|cbuf| {
             for i in 0..HMAC_TAG_LEN {
                 if hmac[i] != cbuf[i] {
@@ -292,7 +290,7 @@ impl Isle {
         // }
 
         let comp_message_len = message_len & 0b1111_0000;
-        // debug!("[isle] recomputed message len to {}", comp_message_len);
+        debug!("[isle] recomputed message len to {}", comp_message_len);
         if let Some((err, src_buf, dst_buf)) = self.crypt.crypt(
             // TODO: get rid of unwrap.
             // It missing means we are already busy with a TX or RX.
@@ -304,7 +302,7 @@ impl Isle {
             self.crypt_buffer.put(Some(dst_buf));
             err.map(|_x| ())
         } else {
-            // debug!("[isle] decryption started.");
+            debug!("[isle] decryption started.");
             Ok(())
         }
     }
@@ -323,8 +321,7 @@ impl SyscallDriver for Isle {
 
             // Translate CoAP message to Group OSCORE.
             (1, msg_len, aad_len) => {
-                // debug!("[isle] mapping {} B CoAP message to Group OSCORE.", msg_len);
-                config::record(4);
+                debug!("[isle] mapping {} B CoAP message to Group OSCORE.", msg_len);
                 let res = self.app_data.enter(pid, |ad, kad| {
                     // TODO: Dynamically choose the right context.
                     let ctx_no: u8 = 0;
@@ -340,13 +337,13 @@ impl SyscallDriver for Isle {
                                 .map(|ct_len| (ct_len, ctx_no)),
 
                         _ => {
-                            // debug!("[isle] application has not provided both buffers for send");
+                            debug!("[isle] application has not provided both buffers for send");
                             Err(ErrorCode::FAIL)
                         }
                     }
                 })
                     .map_err(|_e| {
-                        // debug!("[isle] an error occured during encrypt_send");
+                        debug!("[isle] an error occured during encrypt_send");
                         ErrorCode::FAIL
                     })
                     .flatten();
@@ -368,7 +365,7 @@ impl SyscallDriver for Isle {
 
             // Translate a received message from Group OSCORE to CoAP.
             (2, msg_len, aad_len) => {
-                // debug!("Mapping {} B Group OSCORE message to CoAP.", msg_len);
+                debug!("Mapping {} B Group OSCORE message to CoAP.", msg_len);
                 let res = self.app_data.enter(pid, |ad, kad| {
                     // TODO: Dynamically choose the right context.
                     let ctx_no: u8 = 0;
@@ -390,12 +387,12 @@ impl SyscallDriver for Isle {
                             .and_then(|_empty| self.decrypt_recv(msg_len, aad_len))
                             .map(|_empty| ctx_no)
                     } else {
-                        // debug!("[isle] application has not provided both buffers for recv");
+                        debug!("[isle] application has not provided both buffers for recv");
                         Err(ErrorCode::FAIL)
                     }
                 })
                     .map_err(|_e| {
-                        // debug!("[isle] an error occured during decrypt_recv");
+                        debug!("[isle] an error occured during decrypt_recv");
                         ErrorCode::FAIL
                     })
                     .flatten();
@@ -409,7 +406,7 @@ impl SyscallDriver for Isle {
 
             // Set lower half of IP address.
             (10, block01, block23) => {
-                // debug!("[isle] set lower half of IP6 address.");
+                debug!("[isle] set lower half of IP6 address.");
                 self.mleid_address.map(|addr| {
                     addr[00] = ((block01 >> 00) & 0xFF) as u8;
                     addr[01] = ((block01 >> 08) & 0xFF) as u8;
@@ -426,7 +423,7 @@ impl SyscallDriver for Isle {
 
             // Set upper half of IP address.
             (20, block45, block67) => {
-                // debug!("[isle] set upper half of IP6 address.");
+                debug!("[isle] set upper half of IP6 address.");
                 self.mleid_address.map(|addr| {
                     addr[08] = ((block45 >> 00) & 0xFF) as u8;
                     addr[09] = ((block45 >> 08) & 0xFF) as u8;
@@ -503,16 +500,14 @@ impl symmetric_encryption::Client<'static> for Isle {
         ciphertext_buffer: &'static mut [u8],
     )
     {
-        // debug!("[isle] payload cryptographic operation done.");
-        // config::toggle_debug_pin();
-        config::record(1);
+        debug!("[isle] payload cryptographic operation done.");
         self.pending_for.map(|pending_state| {
             self.app_data.enter(pending_state.pid, |ad, kad| {
                 if pending_state.is_send {
                     // The encryption operation is complete.
                     // Now we must construct the tag and send the final message (ciphertext + aad tag)
                     // back to the network stack which will complete the transmission of the message.
-                    // debug!("[isle] operation was for encrypt/send");
+                    debug!("[isle] operation was for encrypt/send");
 
                     // Build the input to the HMAC by reusing the ciphertext in the capsule's buffer.
                     let (mut aad_src_offset, mut aad_dst_offset) = (
@@ -544,15 +539,11 @@ impl symmetric_encryption::Client<'static> for Isle {
 
                     // Compute the HMAC.
                     use kernel::crypto_sw::ascon;
-                    // config::toggle_debug_pin();
-                    config::record(2);
                     let mut hmac = [0u8; 32];
                     ascon::hash256(
                         &ciphertext_buffer[0..pending_state.ciphertext_len as usize + pending_state.aad_len as usize],
                         &mut hmac)
                         .unwrap();
-                    // config::toggle_debug_pin();
-                    config::record(3);
 
                     // Copy the ciphertext and HMAC tag back to the application's buffer.
                     // Use the const-defined HMAC tag length.
@@ -582,14 +573,14 @@ impl symmetric_encryption::Client<'static> for Isle {
                     self.pending_for.clear();
 
                     if let Err(e) = write_res {
-                        // debug!("[isle] error completing message protection: {:?}", e);
+                        debug!("[isle] error completing message protection: {:?}", e);
                     }
                 } else {
                     // The decryption operation is complete.
                     // We must now only copy the plaintext back to the application's buffer
                     // and notify the network stack that the payload is ready
                     // to be provided to the application.
-                    // debug!("[isle] operation was for decrypt/recv");
+                    debug!("[isle] operation was for decrypt/recv");
 
                     let plaintext_buffer = plaintext_buffer.unwrap();
 
@@ -617,14 +608,11 @@ impl symmetric_encryption::Client<'static> for Isle {
                     self.pending_for.clear();
 
                     if let Err(e) = write_res {
-                        // debug!("[isle] error completing message protection: {:?}", e);
+                        debug!("[isle] error completing message protection: {:?}", e);
                     }
                 }
             }).unwrap();
         });
-
-        config::record(5);
-        config::show();
     }
 }
 
