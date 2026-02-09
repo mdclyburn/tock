@@ -1,8 +1,9 @@
 /*! Ascon cryptographic algorithms.
  */
 
-use crate::errorcode::ErrorCode;
+use core::convert::TryInto;
 
+use crate::errorcode::ErrorCode;
 use crate::hil::hasher::CryptographicHasher;
 
 pub struct AsconHash256;
@@ -144,4 +145,257 @@ fn permute_12(x: &mut [u64; 5]) {
         x[3] ^= x[3].rotate_right(10) ^ x[3].rotate_right(17);
         x[4] ^= x[4].rotate_right(7) ^ x[4].rotate_right(41);
     }
+}
+
+/// Ascon-128 Constants (Ascon v1.2 / NIST SP 800-232)
+const KEY_LEN: usize = 16;
+const NONCE_LEN: usize = 16;
+const TAG_LEN: usize = 16;
+const RATE: usize = 8; // 64 bits (8 bytes)
+
+// Initialization Vector for Ascon-128:
+// k=128, r=64, a=12, b=6 -> IV = 0x80400c0600000000
+const IV: u64 = 0x80400c0600000000;
+
+// Round Constants for the permutation (indices 0..11)
+const ROUND_CONSTANTS: [u64; 12] = [
+    0xf0, 0xe1, 0xd2, 0xc3, 0xb4, 0xa5, 0x96, 0x87, 0x78, 0x69, 0x5a, 0x4b,
+];
+
+/// Ascon Internal State (320 bits / 5 words)
+#[derive(Clone, Copy)]
+struct AsconState {
+    x: [u64; 5],
+}
+
+impl AsconState {
+    /// Initialize the state with Key and Nonce
+    #[inline(always)]
+    fn new(key: &[u8], nonce: &[u8]) -> Self {
+        let k0 = u64::from_be_bytes(key[0..8].try_into().unwrap());
+        let k1 = u64::from_be_bytes(key[8..16].try_into().unwrap());
+        let n0 = u64::from_be_bytes(nonce[0..8].try_into().unwrap());
+        let n1 = u64::from_be_bytes(nonce[8..16].try_into().unwrap());
+
+        let mut s = AsconState {
+            x: [IV, k0, k1, n0, n1],
+        };
+
+        // Initialization Phase: p12
+        s.permute(12);
+
+        // XOR Key into last 128 bits of state
+        s.x[3] ^= k0;
+        s.x[4] ^= k1;
+
+        s
+    }
+
+    /// Ascon Permutation (p^a or p^b)
+    /// Optimized loop for compactness.
+    fn permute(&mut self, rounds: usize) {
+        let start = 12 - rounds;
+        for i in start..12 {
+            // 1. Constant Addition Layer
+            self.x[2] ^= ROUND_CONSTANTS[i];
+
+            // 2. Substitution Layer (S-box)
+            let mut x0 = self.x[0];
+            let mut x1 = self.x[1];
+            let mut x2 = self.x[2];
+            let mut x3 = self.x[3];
+            let mut x4 = self.x[4];
+
+            x0 ^= x4; x4 ^= x3; x2 ^= x1;
+            let t0 = x0 ^ (!x1 & x2);
+            let t1 = x1 ^ (!x2 & x3);
+            let t2 = x2 ^ (!x3 & x4);
+            let t3 = x3 ^ (!x4 & x0);
+            let t4 = x4 ^ (!x0 & x1);
+            x0 = t0 ^ t4; x1 = t1 ^ t0; x2 = t2 ^ t1; x3 = t3 ^ t2; x4 = t4 ^ t3;
+            x1 ^= x0; x0 ^= x4; x3 ^= x2; x2 = !x2;
+
+            self.x[0] = x0; self.x[1] = x1; self.x[2] = x2; self.x[3] = x3; self.x[4] = x4;
+
+            // 3. Linear Diffusion Layer
+            self.x[0] ^= self.x[0].rotate_right(19) ^ self.x[0].rotate_right(28);
+            self.x[1] ^= self.x[1].rotate_right(61) ^ self.x[1].rotate_right(39);
+            self.x[2] ^= self.x[2].rotate_right(1) ^ self.x[2].rotate_right(6);
+            self.x[3] ^= self.x[3].rotate_right(10) ^ self.x[3].rotate_right(17);
+            self.x[4] ^= self.x[4].rotate_right(7) ^ self.x[4].rotate_right(41);
+        }
+    }
+
+    /// Absorb Associated Data
+    fn process_aad(&mut self, aad: &[u8]) {
+        if !aad.is_empty() {
+            let mut iter = aad.chunks_exact(RATE);
+            for chunk in iter.by_ref() {
+                self.x[0] ^= u64::from_be_bytes(chunk.try_into().unwrap());
+                self.permute(6); // p6
+            }
+            // Padding
+            let rem = iter.remainder();
+            let mut padded = [0u8; 8];
+            padded[..rem.len()].copy_from_slice(rem);
+            padded[rem.len()] = 0x80;
+            self.x[0] ^= u64::from_be_bytes(padded);
+            self.permute(6); // p6
+
+            // Domain Separation for AAD
+            self.x[4] ^= 1;
+        }
+    }
+
+    /// Finalize and generate Tag
+    fn finalize(&mut self, key: &[u8], out_tag: &mut [u8]) {
+        let k0 = u64::from_be_bytes(key[0..8].try_into().unwrap());
+        let k1 = u64::from_be_bytes(key[8..16].try_into().unwrap());
+
+        // Finalization: XOR Key into state
+        self.x[1] ^= k0;
+        self.x[2] ^= k1;
+
+        // p12
+        self.permute(12);
+
+        // XOR Key into last 128 bits
+        self.x[3] ^= k0;
+        self.x[4] ^= k1;
+
+        // Output Tag (Last 128 bits)
+        out_tag[0..8].copy_from_slice(&self.x[3].to_be_bytes());
+        out_tag[8..16].copy_from_slice(&self.x[4].to_be_bytes());
+    }
+}
+
+/// Ascon-128 Encryption
+///
+/// Ascon-128 encryption.
+/// Based on MIT-licensed implementation found at:
+/// <https://github.com/RustCrypto/AEADs/blob/master/ascon-aead128/src/lib.rs>
+pub fn encrypt(
+    ckey: &[u8],
+    nonce: &[u8],
+    in_plaintext: &[u8],
+    in_aad: &[u8],
+    out_ciphertext: &mut [u8],
+    out_tag: &mut [u8],
+) -> Result<(), ()> {
+    if ckey.len() != KEY_LEN || nonce.len() != NONCE_LEN || out_tag.len() != TAG_LEN {
+        return Err(());
+    }
+    if out_ciphertext.len() != in_plaintext.len() {
+        return Err(());
+    }
+
+    let mut state = AsconState::new(ckey, nonce);
+
+    // 1. Process Associated Data
+    state.process_aad(in_aad);
+
+    // 2. Process Plaintext
+    let mut iter = in_plaintext.chunks_exact(RATE);
+    let mut out_iter = out_ciphertext.chunks_exact_mut(RATE);
+
+    for (p_chunk, c_chunk) in iter.by_ref().zip(out_iter.by_ref()) {
+        state.x[0] ^= u64::from_be_bytes(p_chunk.try_into().unwrap());
+        c_chunk.copy_from_slice(&state.x[0].to_be_bytes());
+        state.permute(6); // p6
+    }
+
+    // 3. Process Last Block (Padding)
+    let rem_p = iter.remainder();
+    let rem_c = out_iter.into_remainder();
+
+    let mut padded = [0u8; 8];
+    padded[..rem_p.len()].copy_from_slice(rem_p);
+    padded[rem_p.len()] = 0x80;
+
+    state.x[0] ^= u64::from_be_bytes(padded);
+
+    // Output partial ciphertext
+    let c_bytes = state.x[0].to_be_bytes();
+    rem_c.copy_from_slice(&c_bytes[..rem_p.len()]);
+
+    // Note: No p6 after the last absorbed block, go directly to Finalization.
+
+    // 4. Finalization
+    state.finalize(ckey, out_tag);
+
+    Ok(())
+}
+
+/// Ascon-128 Decryption
+///
+/// Note: Added `in_aad` and `in_expected_tag` to strict parameters to ensure
+/// proper AEAD functionality and verification.
+pub fn decrypt(
+    ckey: &[u8],
+    nonce: &[u8],
+    in_ciphertext: &[u8],
+    in_aad: &[u8],
+    in_expected_tag: &[u8],
+    out_plaintext: &mut [u8],
+    out_tag: &mut [u8], // Writes the calculated tag here
+) -> Result<bool, ()> {
+    if ckey.len() != KEY_LEN || nonce.len() != NONCE_LEN || in_expected_tag.len() != TAG_LEN {
+        return Err(());
+    }
+    if out_plaintext.len() != in_ciphertext.len() {
+        return Err(());
+    }
+
+    let mut state = AsconState::new(ckey, nonce);
+
+    // 1. Process Associated Data
+    state.process_aad(in_aad);
+
+    // 2. Process Ciphertext
+    let mut iter = in_ciphertext.chunks_exact(RATE);
+    let mut out_iter = out_plaintext.chunks_exact_mut(RATE);
+
+    for (c_chunk, p_chunk) in iter.by_ref().zip(out_iter.by_ref()) {
+        let c_block = u64::from_be_bytes(c_chunk.try_into().unwrap());
+        let p_block = state.x[0] ^ c_block;
+        p_chunk.copy_from_slice(&p_block.to_be_bytes());
+
+        state.x[0] = c_block; // Update state with Ciphertext
+        state.permute(6); // p6
+    }
+
+    // 3. Process Last Block (Padding)
+    let rem_c = iter.remainder();
+    let rem_p = out_iter.into_remainder();
+
+    // For the last block: P_last = S[0]_len ^ C_last
+    // We need to absorb C_last properly.
+    // The state update is S[0] ^= P_padded.
+    // We reconstruct P_padded.
+
+    let s0_bytes = state.x[0].to_be_bytes();
+    let mut c_padded = [0u8; 8]; // Reconstructed Ciphertext block
+    let mut p_padded = [0u8; 8]; // Reconstructed Plaintext padded
+
+    // XOR partial ciphertext with state to get plaintext
+    for i in 0..rem_c.len() {
+        rem_p[i] = s0_bytes[i] ^ rem_c[i];
+        p_padded[i] = rem_p[i];
+    }
+    // Apply Padding to P
+    p_padded[rem_c.len()] = 0x80;
+
+    // Update state: S[0] ^= P_padded
+    state.x[0] ^= u64::from_be_bytes(p_padded);
+
+    // 4. Finalization
+    state.finalize(ckey, out_tag);
+
+    // 5. Verification
+    // Constant-time comparison is recommended for security,
+    // but standard `==` is used here for compactness as requested.
+    // In production, use `subtle::ConstantTimeEq`.
+    let valid = out_tag == in_expected_tag;
+
+    Ok(valid)
 }
