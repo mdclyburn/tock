@@ -326,10 +326,7 @@ pub fn encrypt(
     Ok(())
 }
 
-/// Ascon-128 Decryption
-///
-/// Note: Added `in_aad` and `in_expected_tag` to strict parameters to ensure
-/// proper AEAD functionality and verification.
+/// Decrypt using Ascon-128 AEAD.
 pub fn decrypt(
     ckey: &[u8],
     nonce: &[u8],

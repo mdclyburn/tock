@@ -125,19 +125,29 @@ pub unsafe fn main() {
     ));
 
     // ISLE
+    use capsules_extra::isle;
+    use capsules_extra::isle::CryptoProcessor;
+
+    let crypto_processor = static_init!(
+        capsules_extra::isle::Ascon128Processor,
+        capsules_extra::isle::Ascon128Processor::new());
+
     let isle = static_init!(
         capsules_extra::isle::Isle,
         capsules_extra::isle::Isle::new(
             static_init!(isle_config::Fixed, isle_config::Fixed),
-            &nrf52840_peripherals.nrf52.ecb,
-            static_init!([u8; 128], [0; 128]),
-            static_init!([u8; 128], [0; 128]),
             board_kernel.create_grant(
                 capsules_extra::isle::DRIVER_NO,
-                &create_capability!(capabilities::MemoryAllocationCapability))));
-    kernel::hil::symmetric_encryption::AES128::set_client(
-        &nrf52840_peripherals.nrf52.ecb,
-        isle);
+                &create_capability!(capabilities::MemoryAllocationCapability)),
+            crypto_processor,
+            static_init!([u8; isle::MESSAGE_LEN_MAX], [0; isle::MESSAGE_LEN_MAX]),
+            static_init!([u8; isle::MESSAGE_LEN_MAX], [0; isle::MESSAGE_LEN_MAX]),
+            static_init!([u8; isle::AAD_LEN_MAX], [0; isle::AAD_LEN_MAX]),
+            static_init!([u8; isle::NONCE_LEN_MAX], [0; isle::NONCE_LEN_MAX]),
+            static_init!([u8; isle::TAG_LEN_MAX], [0; isle::TAG_LEN_MAX]),
+        ));
+
+    crypto_processor.set_client(isle);
 
     //--------------------------------------------------------------------------
     // AES Encryption Oracle

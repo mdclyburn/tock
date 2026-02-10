@@ -111,42 +111,58 @@ const UPCALL_OUT_MESSAGE_READY: usize = 0;
 
 const HMAC_TAG_LEN: usize = 8;
 
+pub const CKEY_LEN_MAX: usize = 16;
+pub const MESSAGE_LEN_MAX: usize = 128;
+pub const AAD_LEN_MAX: usize = 48;
+pub const TAG_LEN_MAX: usize = 16;
+pub const NONCE_LEN_MAX: usize = 16;
+
 pub trait Crypto: AES128<'static> + AES128CBC {  }
 impl<T: AES128<'static> + AES128CBC> Crypto for T {  }
 
 pub trait CryptoProcessorClient {
     fn encrypt_done(
         &self,
-        plaintext_buffer: &mut [u8],
-        ciphertext_buffer: &mut [u8],
-        tag_buffer: &mut [u8],
-        nonce_buffer: &mut [u8],
+        nonce_buffer: &'static mut [u8; NONCE_LEN_MAX],
+        plaintext_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
+        ciphertext_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
+        aad_buffer: &'static mut [u8; AAD_LEN_MAX],
+        tag_buffer: &'static mut [u8; TAG_LEN_MAX],
     );
 
     fn decrypt_done(
-        &self,
-        ciphertext_buffer: &mut [u8],
-        plaintext_buffer: &mut [u8],
-        tag_buffer: &mut [u8],
-        nonce_buffer: &mut [u8],
+        &'static self,
+        nonce_buffer: &'static mut [u8; NONCE_LEN_MAX],
+        ciphertext_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
+        plaintext_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
+        tag_buffer: &'static mut [u8; TAG_LEN_MAX],
+        aad_buffer: &'static mut [u8; AAD_LEN_MAX],
     );
 }
 
 pub trait CryptoProcessor {
     fn encrypt(
         &self,
-        ckey: &[u8],
-        nonce: &[u8],
-        in_plaintext: &[u8],
-        out_ciphertext: &mut [u8],
-    ) -> Result<(), ErrorCode>;
+        ckey: &[u8; CKEY_LEN_MAX],
+        nonce: &'static mut [u8; NONCE_LEN_MAX],
+        in_plaintext: &'static mut [u8; MESSAGE_LEN_MAX],
+        in_aad: &'static mut [u8; AAD_LEN_MAX],
+        out_ciphertext: &'static mut [u8; MESSAGE_LEN_MAX],
+        out_tag: &'static mut [u8; TAG_LEN_MAX],
+    ) -> Result<(), (ErrorCode, (&'static mut [u8; NONCE_LEN_MAX],
+                                 &'static mut [u8; MESSAGE_LEN_MAX],
+                                 &'static mut [u8; AAD_LEN_MAX],
+                                 &'static mut [u8; MESSAGE_LEN_MAX],
+                                 &'static mut [u8; TAG_LEN_MAX]))>;
 
     fn decrypt(
         &self,
-        ckey: &[u8],
-        nonce: &[u8],
-        in_ciphertext: &[u8],
-        out_plaintext: &mut [u8],
+        ckey: &[u8; CKEY_LEN_MAX],
+        nonce: &'static mut [u8; NONCE_LEN_MAX],
+        in_ciphertext: &'static mut [u8; MESSAGE_LEN_MAX],
+        in_aad: &'static mut [u8; AAD_LEN_MAX],
+        expected_tag: &'static [u8; TAG_LEN_MAX],
+        out_plaintext: &'static mut [u8; MESSAGE_LEN_MAX],
     ) -> Result<bool, ErrorCode>;
 
     fn set_client(
@@ -155,35 +171,115 @@ pub trait CryptoProcessor {
     );
 }
 
+pub struct Ascon128Processor {
+    client: OptionalCell<&'static dyn CryptoProcessorClient>,
+}
+
+impl Ascon128Processor {
+    pub fn new() -> Ascon128Processor {
+        Ascon128Processor {
+            client: OptionalCell::empty(),
+        }
+    }
+}
+
+impl CryptoProcessor for Ascon128Processor {
+    fn encrypt(
+        &self,
+        ckey: &[u8; CKEY_LEN_MAX],
+        nonce: &'static mut [u8; NONCE_LEN_MAX],
+        in_plaintext: &'static mut [u8; MESSAGE_LEN_MAX],
+        in_aad: &'static mut [u8; AAD_LEN_MAX],
+        out_ciphertext: &'static mut [u8; MESSAGE_LEN_MAX],
+        out_tag: &'static mut [u8; TAG_LEN_MAX],
+    ) -> Result<(), (ErrorCode, (&'static mut [u8; NONCE_LEN_MAX],
+                                 &'static mut [u8; MESSAGE_LEN_MAX],
+                                 &'static mut [u8; AAD_LEN_MAX],
+                                 &'static mut [u8; MESSAGE_LEN_MAX],
+                                 &'static mut [u8; TAG_LEN_MAX]))>
+    {
+        use kernel::crypto_sw::ascon;
+
+        let encrypt_result = ascon::encrypt(
+            ckey,
+            nonce,
+            in_plaintext,
+            in_aad,
+            out_ciphertext,
+            out_tag);
+
+        if encrypt_result.is_err() {
+            Err((ErrorCode::FAIL, (nonce, in_plaintext, in_aad, out_ciphertext, out_tag)))
+        } else {
+            self.client.map(|client| client.encrypt_done(nonce, in_plaintext, out_ciphertext, in_aad, out_tag));
+            Ok(())
+        }
+    }
+
+    fn decrypt(
+        &self,
+        ckey: &[u8; CKEY_LEN_MAX],
+        nonce: &'static mut [u8; NONCE_LEN_MAX],
+        in_ciphertext: &'static mut [u8; MESSAGE_LEN_MAX],
+        in_aad: &'static mut [u8; AAD_LEN_MAX],
+        expected_tag: &'static [u8; TAG_LEN_MAX],
+        out_plaintext: &'static mut [u8; MESSAGE_LEN_MAX],
+    ) -> Result<bool, ErrorCode>
+    {
+        unimplemented!()
+    }
+
+    fn set_client(
+        &self,
+        client: &'static dyn CryptoProcessorClient
+    )
+    {
+        self.client.set(client);
+    }
+}
+
 /// Network-level isolation packet filter for applications.
 pub struct Isle {
     config_provider: &'static dyn ISLEConfigurationProvider,
-
-    crypt: &'static dyn Crypto,
-    crypt_buffer: TakeCell<'static, [u8]>,
-    crypt_buffer2: TakeCell<'static, [u8]>,
+    crypt_proc: &'static dyn CryptoProcessor,
     app_data: Grant<AppData, UpcallCount<1>, AllowRoCount<1>, AllowRwCount<1>>,
+    // TODO: move this to the application's grant data.
+    // Initialize this in allocate_grant() with the application's IP6 address.
     mleid_address: MapCell<[u8; IP6_ADDR_LEN]>,
     pending_for: OptionalCell<PendingState>,
+
+    // AEAD buffers.
+    pt_buffer: TakeCell<'static, [u8; MESSAGE_LEN_MAX]>,
+    ct_buffer: TakeCell<'static, [u8; MESSAGE_LEN_MAX]>,
+    aad_buffer: TakeCell<'static, [u8; AAD_LEN_MAX]>,
+    tag_buffer: TakeCell<'static, [u8; TAG_LEN_MAX]>,
+    nonce_buffer: TakeCell<'static, [u8; NONCE_LEN_MAX]>,
 }
 
 impl Isle {
     /// Create a new instance.
     pub fn new(
         config_provider: &'static dyn ISLEConfigurationProvider,
-        crypt: &'static dyn Crypto,
-        crypt_buffer: &'static mut [u8; 128],
-        crypt_buffer2: &'static mut [u8; 128],
         grant_data: Grant<AppData, UpcallCount<1>, AllowRoCount<1>, AllowRwCount<1>>,
+        crypt_proc: &'static dyn CryptoProcessor,
+        pt_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
+        ct_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
+        aad_buffer: &'static mut [u8; AAD_LEN_MAX],
+        tag_buffer: &'static mut [u8; TAG_LEN_MAX],
+        nonce_buffer: &'static mut [u8; NONCE_LEN_MAX],
     ) -> Isle {
         Isle {
             config_provider,
-            crypt,
-            crypt_buffer: TakeCell::new(crypt_buffer),
-            crypt_buffer2: TakeCell::new(crypt_buffer2),
+            crypt_proc,
             app_data: grant_data,
             mleid_address: MapCell::new([0; 16]),
             pending_for: OptionalCell::empty(),
+
+            pt_buffer: TakeCell::new(pt_buffer),
+            ct_buffer: TakeCell::new(ct_buffer),
+            aad_buffer: TakeCell::new(aad_buffer),
+            tag_buffer: TakeCell::new(tag_buffer),
+            nonce_buffer: TakeCell::new(nonce_buffer),
         }
     }
 
@@ -201,11 +297,11 @@ impl Isle {
     ) -> Result<(), ErrorCode>
     {
         // Set the mode, key, and IV encryption parameters.
-        debug!("[isle] configuring cryptoprocessor");
-        self.crypt.set_mode_aes128cbc(is_send)?;
-        self.crypt.set_key(&group_oscore_context.message_key)?;
-        self.crypt_buffer.map_or(Err(ErrorCode::BUSY), |buf| {
-            debug!("[isle] crypt buffer <-");
+        // debug!("[isle] configuring cryptoprocessor");
+        // self.crypt.set_mode_aes128cbc(is_send)?;
+        // self.crypt.set_key(&group_oscore_context.message_key)?;
+        self.nonce_buffer.map_or(Err(ErrorCode::BUSY), |buf| {
+            debug!("[isle] nonce buffer <-");
             self.mleid_address.map(|addr| {
                 debug!("[isle] <- addr");
                 buf[0..8].copy_from_slice(&addr[0..8]);
@@ -227,32 +323,34 @@ impl Isle {
                         .unwrap();
                 }
                 buf[12..16].copy_from_slice(&[0u8; 4]);
-                debug!("[isle] setting IV");
-                self.crypt.set_iv(&buf[0..16])
+
+                Ok(())
             }).unwrap() // We always initialize the address to zero.
         })?;
 
         // Copy the message into the capsule buffer.
         debug!("[isle] copying message to internal buffer");
-        self.crypt_buffer.map(|buf| {
-            payload_buffer.enter(|pbuf| {
-                // The message first.
-                (&pbuf[0..message_len])
-                    .copy_to_slice(&mut buf[0..message_len]);
-                // AAD starts right after the message.
-                // We move it to the end of the capsule's buffer and do not encrypt it.
-                // It will later be used for HMAC tag calculation.
-                //
-                // This assumes that the AAD won't be overwritten between now and the HMAC calculation.
-                // The padding and encryption are the only intermediate operations on the buffer.
-                // Messages will be less than 64 bytes due to application layer payload size constraints.
-                let crypt_buffer_len = buf.len();
-                (&pbuf[message_len..message_len+aad_len])
-                    .copy_to_slice(&mut buf[crypt_buffer_len - aad_len..]);
-            })
-        });
+        self.pt_buffer.map_or(
+            Err(ErrorCode::BUSY),
+            |pt_buf| {
+                payload_buffer.enter(|pbuf| {
+                    (&pbuf[0..message_len])
+                        .copy_to_slice(&mut pt_buf[0..message_len])
+                })
+                    .map_err(|_perr| ErrorCode::FAIL)
+            })?;
 
-        Ok(())
+        // Copy the AAD into the capsule buffer.
+        debug!("[isle] copying AAD to internal buffer");
+        self.aad_buffer.map_or(
+            Err(ErrorCode::BUSY),
+            |aad_buf| {
+                payload_buffer.enter(|pbuf| {
+                    (&pbuf[message_len..message_len+aad_len])
+                        .copy_to_slice(&mut aad_buf[0..aad_len])
+                })
+                    .map_err(|_perr| ErrorCode::FAIL)
+            })
     }
 
     /// Encrypt a message for transmission over the network.
@@ -263,42 +361,48 @@ impl Isle {
         aad_len: usize,
     ) -> Result<usize, ErrorCode>
     {
-        // Pad the message to length.
-        debug!("[isle] padding plaintext");
-        let padded_len = self.crypt_buffer.map_or(
-            Err(ErrorCode::BUSY),
-            |buf| {
-                pad_plaintext(
-                    buf,
-                    message_len,
-                    symmetric_encryption::AES128_BLOCK_SIZE)
-            })?;
-
         // Encrypt the payload.
-        debug!("[isle] initiating encryption of {} B", padded_len);
+        debug!("[isle] initiating encryption of {} B", message_len);
+
         // Set up pending state here so that there cannot be a race between
         // setting up the pending state and completing the encryption operation.
         self.pending_for.set(PendingState {
             pid,
             aad_len: aad_len as u8,
-            ciphertext_len: padded_len as u8,
+            ciphertext_len: message_len as u8,
             is_send: true,
         });
 
+        // Get the key from the application's grant data.
+        let mut ckey = [0u8; CKEY_LEN_MAX];
+        let _enter_result = self.app_data.enter(
+            pid,
+            |ad, kad| {
+                ckey.copy_from_slice(&ad.group_oscore_ctxs[0].message_key);
+            });
+
         // Perform the encryption.
-        if let Some((ec, src_buf, dst_buf)) = self.crypt.crypt(
-            Some(self.crypt_buffer.take().unwrap()),
-            self.crypt_buffer2.take().unwrap(),
-            0,
-            padded_len)
-        {
-            self.crypt_buffer.put(src_buf);
-            self.crypt_buffer2.put(Some(dst_buf));
+        let encrypt_result = self.crypt_proc.encrypt(
+            &ckey,
+            self.nonce_buffer.take().ok_or(ErrorCode::BUSY)?,
+            self.pt_buffer.take().ok_or(ErrorCode::BUSY)?,
+            self.aad_buffer.take().ok_or(ErrorCode::BUSY)?,
+            self.ct_buffer.take().ok_or(ErrorCode::BUSY)?,
+            self.tag_buffer.take().ok_or(ErrorCode::BUSY)?);
+
+        if let Err((ec, (nonce_buf, pt_buf, aad_buf, ct_buf, tag_buf))) = encrypt_result {
+            self.nonce_buffer.put(Some(nonce_buf));
+            self.pt_buffer.put(Some(pt_buf));
+            self.aad_buffer.put(Some(aad_buf));
+            self.ct_buffer.put(Some(ct_buf));
+            self.tag_buffer.put(Some(tag_buf));
+
             self.pending_for.clear();
-            ec.map(|_x| 0)
+
+            Err(ErrorCode::FAIL)
         } else {
-            debug!("[isle] started encrypting payload.");
-            Ok(padded_len)
+            debug!("[isle] started encryption payload");
+            Ok(message_len)
         }
     }
 
@@ -313,69 +417,7 @@ impl Isle {
         aad_len: usize,
     ) -> Result<(), ErrorCode>
     {
-        // First need to verify that the contents of the payload are authentic.
-        // Current state of crypt_buffer: CIPHERTEXT + HMAC + AAD.
-        // So the buffer is already ready for the HMAC computation.
-
-        // Compute the HMAC.
-        debug!("[isle] computing HMAC");
-        use kernel::crypto_sw::ascon;
-        let mut hmac = [0u8; 32];
-        let dummy_hkey = [0u8; 8];
-        self.app_data.enter(
-            pid,
-            |ad, kad| {
-                self.crypt_buffer.map(|cbuf| {
-                    ascon::hash256(
-                        &ad.group_oscore_ctxs[0].hash_key,
-                        &cbuf[0..message_len as usize + aad_len as usize],
-                        &mut hmac)
-                        .unwrap();
-                });
-            })
-            .map_err(|_e| ErrorCode::BUSY)?;
-
-        // Compare the HMAC tag up to the const length.
-        debug!("[isle] comparing HMAC");
-        let _res = self.crypt_buffer.map(|cbuf| {
-            for i in 0..HMAC_TAG_LEN {
-                if hmac[i] != cbuf[i] {
-                    return Err(ErrorCode::NOACK);
-                }
-            }
-
-            Ok(())
-        }).unwrap();
-        // if let Err(_ec) = res {
-        //     debug!("[isle] HMAC tag check failed");
-        //     return res;
-        // }
-
-        let ciphertext_len: usize = message_len - HMAC_TAG_LEN;
-        debug!("[isle] ciphertext len = {}", ciphertext_len);
-        // Set up pending state here so that there cannot be a race between
-        // setting up the pending state and completing the decryption operation.
-        self.pending_for.set(PendingState {
-            pid,
-            aad_len: aad_len as u8,
-            ciphertext_len: ciphertext_len as u8,
-            is_send: false,
-        });
-        if let Some((err, _src_buf, dst_buf)) = self.crypt.crypt(
-            // TODO: get rid of unwrap.
-            // It missing means we are already busy with a TX or RX.
-            self.crypt_buffer2.take(),
-            self.crypt_buffer.take().unwrap(),
-            0,
-            ciphertext_len) // HACK: to get the message length for testing
-        {
-            self.pending_for.clear();
-            self.crypt_buffer.put(Some(dst_buf));
-            err.map(|_x| ())
-        } else {
-            debug!("[isle] decryption started.");
-            Ok(())
-        }
+        unimplemented!()
     }
 }
 
@@ -552,128 +594,69 @@ impl SyscallDriver for Isle {
     }
 }
 
-impl symmetric_encryption::Client<'static> for Isle {
-    fn crypt_done(
+impl CryptoProcessorClient for Isle {
+    fn encrypt_done(
         &self,
-        plaintext_buffer: Option<&'static mut [u8]>,
-        ciphertext_buffer: &'static mut [u8],
+        nonce_buffer: &'static mut [u8; NONCE_LEN_MAX],
+        plaintext_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
+        ciphertext_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
+        aad_buffer: &'static mut [u8; AAD_LEN_MAX],
+        tag_buffer: &'static mut [u8; TAG_LEN_MAX],
     )
     {
-        debug!("[isle] payload cryptographic operation done.");
-        self.pending_for.map(|pending_state| {
-            self.app_data.enter(pending_state.pid, |ad, kad| {
-                if pending_state.is_send {
-                    // The encryption operation is complete.
-                    // Now we must construct the tag and send the final message (ciphertext + aad tag)
-                    // back to the network stack which will complete the transmission of the message.
-                    debug!("[isle] operation was for encrypt/send");
-
-                    // Build the input to the HMAC by reusing the ciphertext in the capsule's buffer.
-                    let (mut aad_src_offset, mut aad_dst_offset) = (
-                        pending_state.ciphertext_len as usize,
-                        ciphertext_buffer.len() - pending_state.aad_len as usize,
-                    );
-                    let mut ssn_marker_run = 0;
-                    while aad_dst_offset < ciphertext_buffer.len() {
-                        // Fill in the SSN if we just finished copying its space.
-                        if ssn_marker_run == 4 {
-                            let ssn = ad.group_oscore_ctxs[0usize].sender_seq_no;
-                            ciphertext_buffer[aad_dst_offset-4] = (ssn & 0xFF) as u8;
-                            ciphertext_buffer[aad_dst_offset-3] = (ssn >> 1) as u8;
-                            ciphertext_buffer[aad_dst_offset-2] = (ssn >> 2) as u8;
-                            ciphertext_buffer[aad_dst_offset-1] = (ssn >> 3) as u8;
-                            ad.group_oscore_ctxs[0usize].sender_seq_no += 1;
-                        }
-
-                        ciphertext_buffer[aad_src_offset] = ciphertext_buffer[aad_dst_offset];
-
-                        // Check for the SSN marker.
-                        if ciphertext_buffer[aad_src_offset] == 0xFE {
-                            ssn_marker_run += 1;
-                        }
-
-                        aad_src_offset += 1;
-                        aad_dst_offset += 1;
-                    }
-
-                    // Compute the HMAC.
-                    use kernel::crypto_sw::ascon;
-                    let mut hmac = [0u8; 32];
-                    ascon::hash256(
-                        &ad.group_oscore_ctxs[0usize].hash_key,
-                        &ciphertext_buffer[0..pending_state.ciphertext_len as usize + pending_state.aad_len as usize],
-                        &mut hmac)
-                        .unwrap();
-
-                    // Copy the ciphertext and HMAC tag back to the application's buffer.
+        self.pending_for.map(|current_state| {
+            let _enter_result = self.app_data.enter(
+                current_state.pid,
+                |ad, kad| {
+                    // Copy the ciphertext and tag to the application's buffer.
                     // Use the const-defined HMAC tag length.
                     let write_res = kad.get_readwrite_processbuffer(ALLOW_NO_OUT_BUFFER)
-                        .map(|out_pbuf| {
-                            out_pbuf.mut_enter(|out_buf| {
-                                out_buf.get(0..pending_state.ciphertext_len as usize)
+                        .map(|out_procbuf| {
+                            out_procbuf.mut_enter(|out_buf| {
+                                out_buf.get(0..current_state.ciphertext_len as usize)
                                     .unwrap()
-                                    .copy_from_slice(&ciphertext_buffer[0..pending_state.ciphertext_len as usize]);
-                                out_buf.get(pending_state.ciphertext_len as usize..(pending_state.ciphertext_len + 8) as usize)
+                                    .copy_from_slice(&ciphertext_buffer[0..current_state.ciphertext_len as usize]);
+                                out_buf.get(current_state.ciphertext_len as usize..(current_state.ciphertext_len as usize + HMAC_TAG_LEN))
                                     .unwrap()
-                                    .copy_from_slice(&hmac[0..HMAC_TAG_LEN]);
+                                    .copy_from_slice(&tag_buffer[0..HMAC_TAG_LEN]);
                             })
                         }).flatten();
 
-                    // Notify the application layer that this payload is ready to send.
-                    // The total length includes the length of the HMAC tag.
-                    let total_len = pending_state.ciphertext_len as usize + HMAC_TAG_LEN;
-                    let _ = kad.schedule_upcall(
-                        UPCALL_OUT_MESSAGE_READY,
-                        (if write_res.is_ok() { 0 } else { 1 }, total_len as usize, 0))
-                        .map_err(|e| debug!("[isle] message ready upcall error: {:?}", e));
-
-                    // Reset capsule state.
-                    // This buffer belongs back with the capsule.
-                    self.crypt_buffer.put(Some(ciphertext_buffer));
-                    self.crypt_buffer2.put(plaintext_buffer);
-                    self.pending_for.clear();
-
-                    if let Err(e) = write_res {
-                        debug!("[isle] error completing message protection: {:?}", e);
+                    if write_res.is_ok() {
+                        // Notify the application layer that this payload is ready to send.
+                        // The total length includes the length of the HMAC tag.
+                        let total_len = current_state.ciphertext_len as usize + HMAC_TAG_LEN;
+                        let _upcall_result = kad.schedule_upcall(
+                            UPCALL_OUT_MESSAGE_READY,
+                            (if write_res.is_ok() { 0 } else { 1 }, total_len as usize, 0))
+                            .map_err(|e| debug!("[isle] message ready upcall error: {:?}", e));
+                    } else {
+                        debug!("[isle] failed to write data back to application buffer");
                     }
-                } else {
-                    // The decryption operation is complete.
-                    // We must now only copy the plaintext back to the application's buffer
-                    // and notify the network stack that the payload is ready
-                    // to be provided to the application.
-                    debug!("[isle] operation was for decrypt/recv");
-
-                    let plaintext_buffer = plaintext_buffer.unwrap();
-
-                    // Write the decrypted data to the application's buffer.
-                    let write_res = kad.get_readwrite_processbuffer(ALLOW_NO_OUT_BUFFER)
-                        .map(|out_pbuf| {
-                            out_pbuf.mut_enter(|out_buf| {
-                                out_buf.get(0..(pending_state.ciphertext_len & 0b1111_0000) as usize)
-                                    .unwrap()
-                                    .copy_from_slice(&plaintext_buffer[0..(pending_state.ciphertext_len & 0b1111_0000) as usize]);
-                            })
-                        }).flatten();
-
-                    // Notify the application layer that this payload is ready to receive.
-                    let total_len = pending_state.ciphertext_len as usize + HMAC_TAG_LEN;
-                    let _ = kad.schedule_upcall(
-                        UPCALL_OUT_MESSAGE_READY,
-                        (if write_res.is_ok() { 0 } else { 1 }, total_len as usize, 0))
-                        .map_err(|e| debug!("[isle] message ready upcall error: {:?}", e));
-
-                    // Reset capsule state.
-                    // This buffer belongs back with the capsule.
-                    self.crypt_buffer.put(Some(ciphertext_buffer));
-                    self.crypt_buffer2.put(Some(plaintext_buffer));
-                    self.pending_for.clear();
-
-                    if let Err(e) = write_res {
-                        debug!("[isle] error completing message protection: {:?}", e);
-                    }
-                }
-            }).unwrap();
+                });
         });
+
+        // Reset capsule state.
+        // These buffers belongs back with the capsule.
+        self.nonce_buffer.put(Some(nonce_buffer));
+        self.pt_buffer.put(Some(plaintext_buffer));
+        self.aad_buffer.put(Some(aad_buffer));
+        self.ct_buffer.put(Some(ciphertext_buffer));
+        self.tag_buffer.put(Some(tag_buffer));
+
+        self.pending_for.clear();
+    }
+
+    fn decrypt_done(
+        &self,
+        nonce_buffer: &'static mut [u8; NONCE_LEN_MAX],
+        ciphertext_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
+        plaintext_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
+        tag_buffer: &'static mut [u8; TAG_LEN_MAX],
+        aad_buffer: &'static mut [u8; AAD_LEN_MAX],
+    )
+    {
+        unimplemented!()
     }
 }
 
