@@ -3,8 +3,20 @@
 
 use core::convert::TryInto;
 
+use crate::crypto::config::{
+    AAD_LEN_MAX,
+    CKEY_LEN_MAX,
+    MESSAGE_LEN_MAX,
+    NONCE_LEN_MAX,
+    TAG_LEN_MAX,
+};
+use crate::crypto::provider::{
+    AEADProvider,
+    AEADProviderClient,
+};
 use crate::errorcode::ErrorCode;
 use crate::hil::hasher::CryptographicHasher;
+use crate::utilities::cells::OptionalCell;
 
 pub struct AsconHash256;
 
@@ -395,4 +407,83 @@ pub fn decrypt(
     let valid = out_tag == in_expected_tag;
 
     Ok(valid)
+}
+
+pub struct Ascon128 {
+    client: OptionalCell<&'static dyn AEADProviderClient>,
+}
+
+impl Ascon128 {
+    pub fn new() -> Ascon128 {
+        Ascon128 {
+            client: OptionalCell::empty(),
+        }
+    }
+}
+
+impl AEADProvider for Ascon128 {
+    /// Encrypt a message.
+    fn encrypt(
+        &self,
+        ckey: &[u8; CKEY_LEN_MAX],
+        nonce: &'static mut [u8; NONCE_LEN_MAX],
+        in_plaintext: &'static mut [u8; MESSAGE_LEN_MAX],
+        in_aad: &'static mut [u8; AAD_LEN_MAX],
+        out_ciphertext: &'static mut [u8; MESSAGE_LEN_MAX],
+        out_tag: &'static mut [u8; TAG_LEN_MAX],
+    ) -> Result<(), (ErrorCode, (&'static mut [u8; NONCE_LEN_MAX],
+                                 &'static mut [u8; MESSAGE_LEN_MAX],
+                                 &'static mut [u8; AAD_LEN_MAX],
+                                 &'static mut [u8; MESSAGE_LEN_MAX],
+                                 &'static mut [u8; TAG_LEN_MAX]))>
+    {
+        if self.client.is_none() {
+            Err((ErrorCode::INVAL,
+                 (nonce,
+                  in_plaintext,
+                  in_aad,
+                  out_ciphertext,
+                  out_tag)))
+        } else {
+            let encrypt_result = encrypt(ckey, nonce, in_plaintext, in_aad, out_ciphertext, out_tag);
+            if encrypt_result.is_ok() {
+                self.client.map(|client| {
+                    client.encrypt_done(
+                        nonce,
+                        in_plaintext,
+                        out_ciphertext,
+                        in_aad,
+                        out_tag);
+                });
+
+                Ok(())
+            } else {
+                Err((ErrorCode::FAIL,
+                         (nonce,
+                          in_plaintext,
+                          in_aad,
+                          out_ciphertext,
+                          out_tag)))
+            }
+        }
+    }
+
+    /// Decrypt a message.
+    fn decrypt(
+        &self,
+        ckey: &[u8; CKEY_LEN_MAX],
+        nonce: &'static mut [u8; NONCE_LEN_MAX],
+        in_ciphertext: &'static mut [u8; MESSAGE_LEN_MAX],
+        in_aad: &'static mut [u8; AAD_LEN_MAX],
+        expected_tag: &'static [u8; TAG_LEN_MAX],
+        out_plaintext: &'static mut [u8; MESSAGE_LEN_MAX],
+    ) -> Result<bool, ErrorCode>
+    {
+        unimplemented!();
+    }
+
+    /// Set the client.
+    fn set_client(&self, client: &'static dyn AEADProviderClient) {
+        self.client.set(client)
+    }
 }

@@ -158,7 +158,7 @@ static TOCK_ATTRIBUTES_KERNEL_VERSION: TockAttributesKernelVersion = TockAttribu
 pub mod capabilities;
 pub mod collections;
 pub mod component;
-pub mod crypto_sw;
+pub mod crypto;
 pub mod debug;
 pub mod deferred_call;
 pub mod dynamic_binary_storage;

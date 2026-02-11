@@ -126,11 +126,11 @@ pub unsafe fn main() {
 
     // ISLE
     use capsules_extra::isle;
-    use capsules_extra::isle::CryptoProcessor;
+    use kernel::crypto::provider::AEADProvider;
 
-    let crypto_processor = static_init!(
-        capsules_extra::isle::Ascon128Processor,
-        capsules_extra::isle::Ascon128Processor::new());
+    let aead_provider = static_init!(
+        kernel::crypto::alg::ascon::Ascon128,
+        kernel::crypto::alg::ascon::Ascon128::new());
 
     let isle = static_init!(
         capsules_extra::isle::Isle,
@@ -139,7 +139,7 @@ pub unsafe fn main() {
             board_kernel.create_grant(
                 capsules_extra::isle::DRIVER_NO,
                 &create_capability!(capabilities::MemoryAllocationCapability)),
-            crypto_processor,
+            aead_provider,
             static_init!([u8; isle::MESSAGE_LEN_MAX], [0; isle::MESSAGE_LEN_MAX]),
             static_init!([u8; isle::MESSAGE_LEN_MAX], [0; isle::MESSAGE_LEN_MAX]),
             static_init!([u8; isle::AAD_LEN_MAX], [0; isle::AAD_LEN_MAX]),
@@ -147,7 +147,7 @@ pub unsafe fn main() {
             static_init!([u8; isle::TAG_LEN_MAX], [0; isle::TAG_LEN_MAX]),
         ));
 
-    crypto_processor.set_client(isle);
+    aead_provider.set_client(isle);
 
     //--------------------------------------------------------------------------
     // AES Encryption Oracle

@@ -3,6 +3,10 @@
 
 use core::default::Default;
 
+use kernel::crypto::provider::{
+    AEADProvider,
+    AEADProviderClient,
+};
 use kernel::debug;
 use kernel::errorcode::ErrorCode;
 use kernel::grant::{
@@ -33,6 +37,14 @@ use kernel::utilities::cells::{
     MapCell,
     OptionalCell,
     TakeCell,
+};
+
+pub use kernel::crypto::config::{
+    AAD_LEN_MAX,
+    CKEY_LEN_MAX,
+    MESSAGE_LEN_MAX,
+    NONCE_LEN_MAX,
+    TAG_LEN_MAX,
 };
 
 pub const DRIVER_NO: usize = capsules_core::driver::NUM::Isle as usize;
@@ -111,139 +123,13 @@ const UPCALL_OUT_MESSAGE_READY: usize = 0;
 
 const HMAC_TAG_LEN: usize = 8;
 
-pub const CKEY_LEN_MAX: usize = 16;
-pub const MESSAGE_LEN_MAX: usize = 128;
-pub const AAD_LEN_MAX: usize = 48;
-pub const TAG_LEN_MAX: usize = 16;
-pub const NONCE_LEN_MAX: usize = 16;
-
 pub trait Crypto: AES128<'static> + AES128CBC {  }
 impl<T: AES128<'static> + AES128CBC> Crypto for T {  }
-
-pub trait CryptoProcessorClient {
-    fn encrypt_done(
-        &self,
-        nonce_buffer: &'static mut [u8; NONCE_LEN_MAX],
-        plaintext_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
-        ciphertext_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
-        aad_buffer: &'static mut [u8; AAD_LEN_MAX],
-        tag_buffer: &'static mut [u8; TAG_LEN_MAX],
-    );
-
-    fn decrypt_done(
-        &'static self,
-        nonce_buffer: &'static mut [u8; NONCE_LEN_MAX],
-        ciphertext_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
-        plaintext_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
-        tag_buffer: &'static mut [u8; TAG_LEN_MAX],
-        aad_buffer: &'static mut [u8; AAD_LEN_MAX],
-    );
-}
-
-pub trait CryptoProcessor {
-    fn encrypt(
-        &self,
-        ckey: &[u8; CKEY_LEN_MAX],
-        nonce: &'static mut [u8; NONCE_LEN_MAX],
-        in_plaintext: &'static mut [u8; MESSAGE_LEN_MAX],
-        in_aad: &'static mut [u8; AAD_LEN_MAX],
-        out_ciphertext: &'static mut [u8; MESSAGE_LEN_MAX],
-        out_tag: &'static mut [u8; TAG_LEN_MAX],
-    ) -> Result<(), (ErrorCode, (&'static mut [u8; NONCE_LEN_MAX],
-                                 &'static mut [u8; MESSAGE_LEN_MAX],
-                                 &'static mut [u8; AAD_LEN_MAX],
-                                 &'static mut [u8; MESSAGE_LEN_MAX],
-                                 &'static mut [u8; TAG_LEN_MAX]))>;
-
-    fn decrypt(
-        &self,
-        ckey: &[u8; CKEY_LEN_MAX],
-        nonce: &'static mut [u8; NONCE_LEN_MAX],
-        in_ciphertext: &'static mut [u8; MESSAGE_LEN_MAX],
-        in_aad: &'static mut [u8; AAD_LEN_MAX],
-        expected_tag: &'static [u8; TAG_LEN_MAX],
-        out_plaintext: &'static mut [u8; MESSAGE_LEN_MAX],
-    ) -> Result<bool, ErrorCode>;
-
-    fn set_client(
-        &self,
-        client: &'static dyn CryptoProcessorClient
-    );
-}
-
-pub struct Ascon128Processor {
-    client: OptionalCell<&'static dyn CryptoProcessorClient>,
-}
-
-impl Ascon128Processor {
-    pub fn new() -> Ascon128Processor {
-        Ascon128Processor {
-            client: OptionalCell::empty(),
-        }
-    }
-}
-
-impl CryptoProcessor for Ascon128Processor {
-    fn encrypt(
-        &self,
-        ckey: &[u8; CKEY_LEN_MAX],
-        nonce: &'static mut [u8; NONCE_LEN_MAX],
-        in_plaintext: &'static mut [u8; MESSAGE_LEN_MAX],
-        in_aad: &'static mut [u8; AAD_LEN_MAX],
-        out_ciphertext: &'static mut [u8; MESSAGE_LEN_MAX],
-        out_tag: &'static mut [u8; TAG_LEN_MAX],
-    ) -> Result<(), (ErrorCode, (&'static mut [u8; NONCE_LEN_MAX],
-                                 &'static mut [u8; MESSAGE_LEN_MAX],
-                                 &'static mut [u8; AAD_LEN_MAX],
-                                 &'static mut [u8; MESSAGE_LEN_MAX],
-                                 &'static mut [u8; TAG_LEN_MAX]))>
-    {
-        use kernel::crypto_sw::ascon;
-
-        let encrypt_result = ascon::encrypt(
-            ckey,
-            nonce,
-            in_plaintext,
-            in_aad,
-            out_ciphertext,
-            out_tag);
-
-        if encrypt_result.is_err() {
-            debug!("[isle] Ascon128 encryption failed");
-            Err((ErrorCode::FAIL, (nonce, in_plaintext, in_aad, out_ciphertext, out_tag)))
-        } else {
-            debug!("[isle] Ascon128 encryption complete");
-            self.client.map(|client| client.encrypt_done(nonce, in_plaintext, out_ciphertext, in_aad, out_tag));
-            Ok(())
-        }
-    }
-
-    fn decrypt(
-        &self,
-        ckey: &[u8; CKEY_LEN_MAX],
-        nonce: &'static mut [u8; NONCE_LEN_MAX],
-        in_ciphertext: &'static mut [u8; MESSAGE_LEN_MAX],
-        in_aad: &'static mut [u8; AAD_LEN_MAX],
-        expected_tag: &'static [u8; TAG_LEN_MAX],
-        out_plaintext: &'static mut [u8; MESSAGE_LEN_MAX],
-    ) -> Result<bool, ErrorCode>
-    {
-        unimplemented!()
-    }
-
-    fn set_client(
-        &self,
-        client: &'static dyn CryptoProcessorClient
-    )
-    {
-        self.client.set(client);
-    }
-}
 
 /// Network-level isolation packet filter for applications.
 pub struct Isle {
     config_provider: &'static dyn ISLEConfigurationProvider,
-    crypt_proc: &'static dyn CryptoProcessor,
+    aead: &'static dyn AEADProvider,
     app_data: Grant<AppData, UpcallCount<1>, AllowRoCount<1>, AllowRwCount<1>>,
     // TODO: move this to the application's grant data.
     // Initialize this in allocate_grant() with the application's IP6 address.
@@ -263,7 +149,7 @@ impl Isle {
     pub fn new(
         config_provider: &'static dyn ISLEConfigurationProvider,
         grant_data: Grant<AppData, UpcallCount<1>, AllowRoCount<1>, AllowRwCount<1>>,
-        crypt_proc: &'static dyn CryptoProcessor,
+        aead: &'static dyn AEADProvider,
         pt_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
         ct_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
         aad_buffer: &'static mut [u8; AAD_LEN_MAX],
@@ -272,7 +158,7 @@ impl Isle {
     ) -> Isle {
         Isle {
             config_provider,
-            crypt_proc,
+            aead,
             app_data: grant_data,
             mleid_address: MapCell::new([0; 16]),
             pending_for: OptionalCell::empty(),
@@ -384,7 +270,7 @@ impl Isle {
             });
 
         // Perform the encryption.
-        let encrypt_result = self.crypt_proc.encrypt(
+        let encrypt_result = self.aead.encrypt(
             &ckey,
             self.nonce_buffer.take().ok_or(ErrorCode::BUSY)?,
             self.pt_buffer.take().ok_or(ErrorCode::BUSY)?,
@@ -581,7 +467,7 @@ impl SyscallDriver for Isle {
                 kd_input[41..43].copy_from_slice(&[(KEY_SIZE & 0xFF) as u8, (KEY_SIZE >> 8) as u8]);
 
                 // Derive the encryption key.
-                use kernel::crypto_sw::ascon;
+                use kernel::crypto::alg::ascon;
                 let mut crypt_buffer: [u8; 32] = [0; 32];
                 ascon::hash256(&[], &kd_input, &mut crypt_buffer).unwrap();
                 // Save it in the application's grant.
@@ -596,7 +482,7 @@ impl SyscallDriver for Isle {
     }
 }
 
-impl CryptoProcessorClient for Isle {
+impl AEADProviderClient for Isle {
     fn encrypt_done(
         &self,
         nonce_buffer: &'static mut [u8; NONCE_LEN_MAX],
