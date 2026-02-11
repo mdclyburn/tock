@@ -275,9 +275,19 @@ impl AsconState {
         self.x[3] ^= k0;
         self.x[4] ^= k1;
 
-        // Output Tag (Last 128 bits)
-        out_tag[0..8].copy_from_slice(&self.x[3].to_be_bytes());
-        out_tag[8..16].copy_from_slice(&self.x[4].to_be_bytes());
+        // Output Tag
+        let mut i = 0;
+        while i < out_tag.len() {
+            let xb = if i < 8 {
+                self.x[3]
+            } else {
+                self.x[4]
+            };
+
+            out_tag[i] = ((xb >> (8 * i)) & 0xFF) as u8;
+
+            i += 1;
+        }
     }
 }
 
@@ -294,7 +304,7 @@ pub fn encrypt(
     out_ciphertext: &mut [u8],
     out_tag: &mut [u8],
 ) -> Result<(), ()> {
-    if ckey.len() != KEY_LEN || nonce.len() != NONCE_LEN || out_tag.len() != TAG_LEN {
+    if ckey.len() != KEY_LEN || nonce.len() != NONCE_LEN {
         return Err(());
     }
     if out_ciphertext.len() != in_plaintext.len() {
@@ -348,7 +358,7 @@ pub fn decrypt(
     out_plaintext: &mut [u8],
     out_tag: &mut [u8], // Writes the calculated tag here
 ) -> Result<bool, ()> {
-    if ckey.len() != KEY_LEN || nonce.len() != NONCE_LEN || in_expected_tag.len() != TAG_LEN {
+    if ckey.len() != KEY_LEN || nonce.len() != NONCE_LEN {
         return Err(());
     }
     if out_plaintext.len() != in_ciphertext.len() {
@@ -404,7 +414,7 @@ pub fn decrypt(
     // Constant-time comparison is recommended for security,
     // but standard `==` is used here for compactness as requested.
     // In production, use `subtle::ConstantTimeEq`.
-    let valid = out_tag == in_expected_tag;
+    let valid = &out_tag[0..in_expected_tag.len()] == in_expected_tag;
 
     Ok(valid)
 }
