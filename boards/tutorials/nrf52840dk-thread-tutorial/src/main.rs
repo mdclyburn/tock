@@ -143,8 +143,8 @@ pub unsafe fn main() {
             static_init!([u8; isle::MESSAGE_LEN_MAX], [0; isle::MESSAGE_LEN_MAX]),
             static_init!([u8; isle::MESSAGE_LEN_MAX], [0; isle::MESSAGE_LEN_MAX]),
             static_init!([u8; isle::AAD_LEN_MAX], [0; isle::AAD_LEN_MAX]),
-            static_init!([u8; isle::NONCE_LEN_MAX], [0; isle::NONCE_LEN_MAX]),
             static_init!([u8; isle::TAG_LEN_MAX], [0; isle::TAG_LEN_MAX]),
+            static_init!([u8; isle::NONCE_LEN_MAX], [0; isle::NONCE_LEN_MAX]),
         ));
 
     aead_provider.set_client(isle);
