@@ -209,8 +209,10 @@ impl CryptoProcessor for Ascon128Processor {
             out_tag);
 
         if encrypt_result.is_err() {
+            debug!("[isle] Ascon128 encryption failed");
             Err((ErrorCode::FAIL, (nonce, in_plaintext, in_aad, out_ciphertext, out_tag)))
         } else {
+            debug!("[isle] Ascon128 encryption complete");
             self.client.map(|client| client.encrypt_done(nonce, in_plaintext, out_ciphertext, in_aad, out_tag));
             Ok(())
         }
@@ -401,7 +403,7 @@ impl Isle {
 
             Err(ErrorCode::FAIL)
         } else {
-            debug!("[isle] started encryption payload");
+            debug!("[isle] started encrypting payload");
             Ok(message_len)
         }
     }
@@ -608,6 +610,7 @@ impl CryptoProcessorClient for Isle {
             let _enter_result = self.app_data.enter(
                 current_state.pid,
                 |ad, kad| {
+                    debug!("[isle] writing result back to application buffers");
                     // Copy the ciphertext and tag to the application's buffer.
                     // Use the const-defined HMAC tag length.
                     let write_res = kad.get_readwrite_processbuffer(ALLOW_NO_OUT_BUFFER)
