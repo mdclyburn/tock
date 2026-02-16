@@ -216,14 +216,20 @@ impl Isle {
             }).unwrap() // We always initialize the address to zero.
         })?;
 
-        // Copy the message into the capsule buffer.
         debug!("[isle] copying message to internal buffer");
-        self.pt_buffer.map_or(
+        // Copy the message into the capsule buffer.
+        // Assign the right buffer depending on if this is a send or receive.
+        let (src_buffer, dst_buffer) = if is_send {
+            (&self.pt_buffer, &self.ct_buffer)
+        } else {
+            (&self.ct_buffer, &self.pt_buffer)
+        };
+        src_buffer.map_or(
             Err(ErrorCode::BUSY),
-            |pt_buf| {
+            |src_buf| {
                 payload_buffer.enter(|pbuf| {
                     (&pbuf[0..message_len])
-                        .copy_to_slice(&mut pt_buf[0..message_len])
+                        .copy_to_slice(&mut src_buf[0..message_len])
                 })
                     .map_err(|_perr| ErrorCode::FAIL)
             })?;
@@ -267,7 +273,8 @@ impl Isle {
             pid,
             |ad, kad| {
                 ckey.copy_from_slice(&ad.group_oscore_ctxs[0].message_key);
-            });
+            })
+            .map_err(|_kerr| ErrorCode::OFF)?;
 
         // Perform the encryption.
         let encrypt_result = self.aead.encrypt(
