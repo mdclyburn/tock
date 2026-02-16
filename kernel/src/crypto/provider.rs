@@ -43,9 +43,13 @@ pub trait AEADProvider {
         nonce: &'static mut [u8; NONCE_LEN_MAX],
         in_ciphertext: &'static mut [u8; MESSAGE_LEN_MAX],
         in_aad: &'static mut [u8; AAD_LEN_MAX],
-        expected_tag: &'static [u8; TAG_LEN_MAX],
+        expected_tag: &'static mut [u8; TAG_LEN_MAX],
         out_plaintext: &'static mut [u8; MESSAGE_LEN_MAX],
-    ) -> Result<bool, ErrorCode>;
+    ) -> Result<(), (ErrorCode, (&'static mut [u8; NONCE_LEN_MAX],
+                                 &'static mut [u8; MESSAGE_LEN_MAX],
+                                 &'static mut [u8; AAD_LEN_MAX],
+                                 &'static mut [u8; MESSAGE_LEN_MAX],
+                                 &'static mut [u8; TAG_LEN_MAX]))>;
 
     /// Set the client.
     fn set_client(
@@ -67,9 +71,10 @@ pub trait AEADProviderClient {
     fn decrypt_done(
         &'static self,
         nonce_buffer: &'static mut [u8; NONCE_LEN_MAX],
-        ciphertext_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
         plaintext_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
-        tag_buffer: &'static mut [u8; TAG_LEN_MAX],
+        ciphertext_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
         aad_buffer: &'static mut [u8; AAD_LEN_MAX],
+        tag_buffer: &'static mut [u8; TAG_LEN_MAX],
+        tag_matches: bool,
     );
 }

@@ -356,7 +356,6 @@ pub fn decrypt(
     in_aad: &[u8],
     in_expected_tag: &[u8],
     out_plaintext: &mut [u8],
-    out_tag: &mut [u8], // Writes the calculated tag here
 ) -> Result<bool, ()> {
     if ckey.len() != KEY_LEN || nonce.len() != NONCE_LEN {
         return Err(());
@@ -408,7 +407,8 @@ pub fn decrypt(
     state.x[0] ^= u64::from_be_bytes(p_padded);
 
     // 4. Finalization
-    state.finalize(ckey, out_tag);
+    let mut out_tag = [0u8; TAG_LEN_MAX];
+    state.finalize(ckey, &mut out_tag);
 
     // 5. Verification
     // Constant-time comparison is recommended for security,
@@ -485,11 +485,44 @@ impl AEADProvider for Ascon128 {
         nonce: &'static mut [u8; NONCE_LEN_MAX],
         in_ciphertext: &'static mut [u8; MESSAGE_LEN_MAX],
         in_aad: &'static mut [u8; AAD_LEN_MAX],
-        expected_tag: &'static [u8; TAG_LEN_MAX],
+        expected_tag: &'static mut [u8; TAG_LEN_MAX],
         out_plaintext: &'static mut [u8; MESSAGE_LEN_MAX],
-    ) -> Result<bool, ErrorCode>
+    ) -> Result<(), (ErrorCode, (&'static mut [u8; NONCE_LEN_MAX],
+                                 &'static mut [u8; MESSAGE_LEN_MAX],
+                                 &'static mut [u8; AAD_LEN_MAX],
+                                 &'static mut [u8; MESSAGE_LEN_MAX],
+                                 &'static mut [u8; TAG_LEN_MAX]))>
     {
-        unimplemented!();
+        if self.client.is_none() {
+            Err((ErrorCode::INVAL,
+                 (nonce,
+                  out_plaintext,
+                  in_aad,
+                  in_ciphertext,
+                  expected_tag)))
+        } else {
+            let decrypt_result = decrypt(ckey, nonce, in_ciphertext, in_aad, expected_tag, out_plaintext);
+            if let Ok(tag_matches) = decrypt_result {
+                self.client.map(|client| {
+                    client.decrypt_done(
+                        nonce,
+                        out_plaintext,
+                        in_ciphertext,
+                        in_aad,
+                        expected_tag,
+                        tag_matches);
+                });
+
+                Ok(())
+            } else {
+                Err((ErrorCode::FAIL,
+                         (nonce,
+                          out_plaintext,
+                          in_aad,
+                          in_ciphertext,
+                          expected_tag)))
+            }
+        }
     }
 
     /// Set the client.

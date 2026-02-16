@@ -312,7 +312,49 @@ impl Isle {
         aad_len: usize,
     ) -> Result<(), ErrorCode>
     {
-        unimplemented!()
+        debug!("[isle] initiating decryption of {} B", message_len);
+
+        // Set up the pending state.
+        // See the note in encrypt_send().
+        self.pending_for.set(PendingState {
+            pid,
+            aad_len: aad_len as u8,
+            ciphertext_len: message_len as u8,
+            is_send: false,
+        });
+
+        // Get the key from the application's grant data.
+        let mut ckey = [0u8; CKEY_LEN_MAX];
+        self.app_data.enter(
+            pid,
+            |ad, kad| {
+                ckey.copy_from_slice(&ad.group_oscore_ctxs[0].message_key);
+            })
+            .map_err(|_kerr| ErrorCode::OFF)?;
+
+        // Perform the decryption.
+        let decrypt_result = self.aead.decrypt(
+            &ckey,
+            self.nonce_buffer.take().ok_or(ErrorCode::BUSY)?,
+            self.pt_buffer.take().ok_or(ErrorCode::BUSY)?,
+            self.aad_buffer.take().ok_or(ErrorCode::BUSY)?,
+            self.tag_buffer.take().ok_or(ErrorCode::BUSY)?,
+            self.ct_buffer.take().ok_or(ErrorCode::BUSY)?);
+
+        if let Err((ec, (nonce_buf, pt_buf, aad_buf, ct_buf, tag_buf))) = decrypt_result {
+            self.nonce_buffer.put(Some(nonce_buf));
+            self.pt_buffer.put(Some(pt_buf));
+            self.aad_buffer.put(Some(aad_buf));
+            self.ct_buffer.put(Some(ct_buf));
+            self.tag_buffer.put(Some(tag_buf));
+
+            self.pending_for.clear();
+
+            Err(ec)
+        } else {
+            debug!("[isle] started decrypting payload");
+            Ok(())
+        }
     }
 }
 
@@ -548,8 +590,9 @@ impl AEADProviderClient for Isle {
         nonce_buffer: &'static mut [u8; NONCE_LEN_MAX],
         ciphertext_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
         plaintext_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
-        tag_buffer: &'static mut [u8; TAG_LEN_MAX],
         aad_buffer: &'static mut [u8; AAD_LEN_MAX],
+        tag_buffer: &'static mut [u8; TAG_LEN_MAX],
+        tag_matches: bool,
     )
     {
         unimplemented!()
