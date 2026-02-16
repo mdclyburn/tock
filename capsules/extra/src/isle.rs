@@ -61,6 +61,7 @@ pub struct GroupOSCOREContext {
     master_salt: [u8; 8],
     message_key: [u8; 16],
     hash_key: [u8; 16],
+    host_number: [u8; 8],
     sender_seq_no: u32,
 }
 
@@ -87,6 +88,7 @@ impl Default for GroupOSCOREContext {
             master_salt: [0x00; 8],
             message_key: [0x00; 16],
             hash_key: [0x00; 16],
+            host_number: [0x00; 8],
             sender_seq_no: 0,
         }
     }
@@ -115,16 +117,52 @@ struct PendingState {
     is_send: bool,
 }
 
+/// Length of the IP6 address in bytes.
 const IP6_ADDR_LEN: usize = 16;
 
-const ALLOW_NO_IN_BUFFER: usize = 0;
-const ALLOW_NO_OUT_BUFFER: usize = 0;
+/// Length of the sender ID; lower 64 bits of the IP address.
+const SENDER_ID_LEN: usize = 8;
+/// Length of the partial IV in bytes; uses the sender sequence no.
+const PARTIAL_IV_LEN: usize = 4;
+
+/// Allow buffer number for input messages.
+const ALLOW_RO_NO_IN_BUFFER: usize = 0;
+/// Allow buffer number for the partial IV.
+const ALLOW_RO_NO_RECV_PARTIAL_IV: usize = 1;
+/// Host number of the received message.
+const ALLOW_RO_NO_RECV_SRC_HOST: usize = 2;
+/// Allow buffer number for output message.
+const ALLOW_RW_NO_OUT_BUFFER: usize = 0;
+
+/// Upcall number for indicating completed processing of a message.
 const UPCALL_OUT_MESSAGE_READY: usize = 0;
 
 const HMAC_TAG_LEN: usize = 8;
 
 pub trait Crypto: AES128<'static> + AES128CBC {  }
 impl<T: AES128<'static> + AES128CBC> Crypto for T {  }
+
+
+// Fixed AAD data.
+// Excludes the sender ID (address) and the partial IV (pIV).
+const AAD_PREFIX: [u8; 11] = [
+    // Array, 4 items.
+    0b1000_0000 | 0b0000_0100,
+    // Item 1, OSCORE version.
+	1,
+	// Item 2, Algorithms, array, 4 items.
+    0b0100_0000 | 4,
+    0b0000_0000 | 10,  // AEAD alg.: AES-CCM-16-64-128 => integer, 10.
+    0b0000_0000 | 10,  // Group enc. alg.: AES-CCM-16-64-128 => integer, 10.
+    0b0011_1001,       // Sig. alg.: EdDSA => -8 -> 2-byte unsigned integer extension, 7.
+    0,
+    7,
+    0b0011_1001, // Pairwise key agreement: ECDG-SS + HKDF-256 => -27 -> 2-byte unsigned integer extension, 26.
+    0,
+    26,
+];
+const AAD_SENDER_ID_OFFSET: usize = AAD_PREFIX.len();
+const AAD_PARTIAL_IV_OFFSET: usize = AAD_SENDER_ID_OFFSET + SENDER_ID_LEN;
 
 /// Network-level isolation packet filter for applications.
 pub struct Isle {
@@ -177,44 +215,33 @@ impl Isle {
     /// Perform prerequisite setup for encryption or decryption of ISLE message.
     fn prepare_crypt_op(
         &self,
-        group_oscore_context: &GroupOSCOREContext,
-        payload_buffer: &ReadOnlyProcessBufferRef,
-        message_len: usize,
-        aad_len: usize,
+        pid: ProcessId,
         is_send: bool,
     ) -> Result<(), ErrorCode>
     {
-        // Set the mode, key, and IV encryption parameters.
-        // debug!("[isle] configuring cryptoprocessor");
-        // self.crypt.set_mode_aes128cbc(is_send)?;
-        // self.crypt.set_key(&group_oscore_context.message_key)?;
-        self.nonce_buffer.map_or(Err(ErrorCode::BUSY), |buf| {
-            debug!("[isle] nonce buffer <-");
-            self.mleid_address.map(|addr| {
-                debug!("[isle] <- addr");
-                buf[0..8].copy_from_slice(&addr[0..8]);
-                // On a send, this capsule will provide the sequence no. from the grant data.
-                // On a receive, the partial IV from the message will be present in the AAD.
-                if is_send {
-                    debug!("[isle] <- SSN");
-                    buf[8..12].copy_from_slice(&[
-                        (group_oscore_context.sender_seq_no & 0xFF) as u8,
-                        ((group_oscore_context.sender_seq_no >> 8) & 0xFF) as u8,
-                        ((group_oscore_context.sender_seq_no >> 16) & 0xFF) as u8,
-                        ((group_oscore_context.sender_seq_no >> 24) & 0xFF) as u8]);
-                } else {
-                    // The network stack has provided the received value in the AAD.
-                    payload_buffer.enter(|pbuf| {
-                        (&pbuf[Self::AAD_PIV_BYTE_OFFSET..Self::AAD_PIV_BYTE_OFFSET+4])
-                            .copy_to_slice(&mut buf[8..12]);
-                    })
-                        .unwrap();
-                }
-                buf[12..16].copy_from_slice(&[0u8; 4]);
+        // Construct the AAD.
+        self.build_aad(pid, is_send)?;
 
-                Ok(())
-            }).unwrap() // We always initialize the address to zero.
-        })?;
+        // Construct the nonce.
+        self.app_data.enter(
+            pid,
+            |ad, kad| {
+                self.nonce_buffer.map_or(Err(ErrorCode::BUSY), |buf| {
+                    debug!("[isle] nonce buffer <-");
+                    buf[0..SENDER_ID_LEN]
+                        .copy_from_slice(&ad.group_oscore_ctxs[0].host_number);
+                    buf[SENDER_ID_LEN..SENDER_ID_LEN+PARTIAL_IV_LEN]
+                        .copy_from_slice(&[
+                            (ad.group_oscore_ctxs[0].sender_seq_no & 0xFF) as u8,
+                            ((ad.group_oscore_ctxs[0].sender_seq_no >> 8) & 0xFF) as u8,
+                            ((ad.group_oscore_ctxs[0].sender_seq_no >> 16) & 0xFF) as u8,
+                            ((ad.group_oscore_ctxs[0].sender_seq_no >> 24) & 0xFF) as u8
+                        ]);
+
+                    Ok(())
+                })
+            })
+            .map_err(|_kerr| ErrorCode::OFF)?;
 
         debug!("[isle] copying message to internal buffer");
         // Copy the message into the capsule buffer.
@@ -227,23 +254,70 @@ impl Isle {
         src_buffer.map_or(
             Err(ErrorCode::BUSY),
             |src_buf| {
-                payload_buffer.enter(|pbuf| {
-                    (&pbuf[0..message_len])
-                        .copy_to_slice(&mut src_buf[0..message_len])
-                })
-                    .map_err(|_perr| ErrorCode::FAIL)
-            })?;
+                self.app_data.enter(
+                    pid,
+                    |ad, kad| {
+                        kad.get_readonly_processbuffer(ALLOW_RO_NO_IN_BUFFER)?
+                            .enter(|pbuf| pbuf.copy_to_slice(&mut src_buf[0..pbuf.len()]))?;
 
-        // Copy the AAD into the capsule buffer.
-        debug!("[isle] copying AAD to internal buffer");
+                        Ok::<(), kernel::process::Error>(())
+                    })
+                    .flatten()
+                    .map_err(|_kperr| ErrorCode::OFF)
+            })
+    }
+
+    /// Construct the AAD in the internal AAD buffer.
+    fn build_aad(
+        &self,
+        pid: ProcessId,
+        is_send: bool
+    ) -> Result<(), ErrorCode>
+    {
         self.aad_buffer.map_or(
             Err(ErrorCode::BUSY),
-            |aad_buf| {
-                payload_buffer.enter(|pbuf| {
-                    (&pbuf[message_len..message_len+aad_len])
-                        .copy_to_slice(&mut aad_buf[0..aad_len])
-                })
-                    .map_err(|_perr| ErrorCode::FAIL)
+            |aad_buffer| {
+                // Get this into the AAD buffer.
+                aad_buffer[0..AAD_PREFIX.len()].copy_from_slice(&AAD_PREFIX);
+
+                // Copy the...
+                // - sender ID (in this implementation, the host number).
+                // - partial IV (i.e., the sender sequence no.).
+                if is_send {
+                    // These values come from this device.
+                    self.app_data.enter(
+                        pid,
+                        |ad, kad| {
+                            aad_buffer[AAD_SENDER_ID_OFFSET..AAD_SENDER_ID_OFFSET+SENDER_ID_LEN]
+                                .copy_from_slice(&ad.group_oscore_ctxs[0].host_number);
+                            let ssn = &ad.group_oscore_ctxs[0].sender_seq_no;
+                            let piv_buffer = [
+                                (ssn >>  24) as u8,
+                                (ssn >>  16) as u8,
+                                (ssn >>   8) as u8,
+                                (ssn & 0xFF) as u8,
+                            ];
+                            aad_buffer[AAD_PARTIAL_IV_OFFSET..AAD_PARTIAL_IV_OFFSET+PARTIAL_IV_LEN]
+                                .copy_from_slice(&piv_buffer);
+                        })
+                        .map_err(|_kerr| ErrorCode::OFF)
+                } else {
+                    // These values come from the sender.
+                    // The Isle layer in the network stack will provide this value.
+                    self.app_data.enter(
+                        pid,
+                        |_ad, kad| {
+                            kad.get_readonly_processbuffer(ALLOW_RO_NO_RECV_PARTIAL_IV)?
+                                .enter(|b| b.copy_to_slice(&mut aad_buffer[AAD_PARTIAL_IV_OFFSET..AAD_PARTIAL_IV_OFFSET+PARTIAL_IV_LEN]))?;
+
+                            kad.get_readonly_processbuffer(ALLOW_RO_NO_RECV_SRC_HOST)?
+                                .enter(|b| b.copy_to_slice(&mut aad_buffer[AAD_SENDER_ID_OFFSET..AAD_SENDER_ID_OFFSET+SENDER_ID_LEN]))?;
+
+                            Ok::<(), kernel::process::Error>(())
+                        })
+                        .flatten()
+                        .map_err(|_kerr| ErrorCode::OFF)
+                }
             })
     }
 
@@ -382,10 +456,10 @@ impl SyscallDriver for Isle {
                         // Ensure that both the application's input and output buffers are available
                         // before starting the operation.
                         let app_buffers = (
-                            kad.get_readonly_processbuffer(ALLOW_NO_IN_BUFFER),
-                            kad.get_readwrite_processbuffer(ALLOW_NO_OUT_BUFFER));
+                            kad.get_readonly_processbuffer(ALLOW_RO_NO_IN_BUFFER),
+                            kad.get_readwrite_processbuffer(ALLOW_RW_NO_OUT_BUFFER));
                         if let (Ok(app_in_buffer), Ok(_app_out_buffer)) = app_buffers {
-                            self.prepare_crypt_op(group_oscore_ctx, &app_in_buffer, msg_len, aad_len, true)
+                            self.prepare_crypt_op(pid, true)
                         } else {
                             debug!("[isle] application has not provided both buffers for send");
                             Err(ErrorCode::NOMEM)
@@ -407,23 +481,21 @@ impl SyscallDriver for Isle {
             },
 
             // Translate a received message from Group OSCORE to CoAP.
-            (2, msg_len, aad_len) => {
-                debug!("Mapping {} B Group OSCORE message to CoAP.", msg_len);
+            (2, src_host_lower, src_host_upper) => {
+                debug!("Mapping Group OSCORE message to CoAP.");
+                let mut msg_len = 0;
+                let mut aad_len = 0;
                 let operation_res = self.app_data.enter(pid, |ad, kad| {
                     let group_oscore_ctx = &ad.group_oscore_ctxs[0usize];
 
-                    self.pending_for.set(PendingState {
-                        pid,
-                        aad_len: aad_len as u8,
-                        ciphertext_len: msg_len as u8,
-                        is_send: false,
-                    });
-
                     let app_buffers = (
-                        kad.get_readonly_processbuffer(ALLOW_NO_IN_BUFFER),
-                        kad.get_readwrite_processbuffer(ALLOW_NO_OUT_BUFFER));
+                        kad.get_readonly_processbuffer(ALLOW_RO_NO_IN_BUFFER),
+                        kad.get_readwrite_processbuffer(ALLOW_RW_NO_OUT_BUFFER));
                     if let (Ok(in_buffer), Ok(_out_buffer)) = app_buffers {
-                        self.prepare_crypt_op(group_oscore_ctx, &in_buffer, msg_len, aad_len, false)
+                        msg_len = in_buffer.len();
+                        aad_len = 0;
+                        debug!("[isle] message is {} B", msg_len);
+                        self.prepare_crypt_op(pid, false)
                     } else {
                         debug!("[isle] application has not provided both buffers for recv");
                         Err(ErrorCode::FAIL)
@@ -548,7 +620,7 @@ impl AEADProviderClient for Isle {
                     debug!("[isle] writing result back to application buffers");
                     // Copy the ciphertext and tag to the application's buffer.
                     // Use the const-defined HMAC tag length.
-                    let write_res = kad.get_readwrite_processbuffer(ALLOW_NO_OUT_BUFFER)
+                    let write_res = kad.get_readwrite_processbuffer(ALLOW_RW_NO_OUT_BUFFER)
                         .map(|out_procbuf| {
                             out_procbuf.mut_enter(|out_buf| {
                                 out_buf.get(0..current_state.ciphertext_len as usize)
@@ -595,7 +667,23 @@ impl AEADProviderClient for Isle {
         tag_matches: bool,
     )
     {
-        unimplemented!()
+        self.pending_for.map(|current_state| {
+            if !tag_matches {
+                // The tag does not match.
+                // The message is malformed or an intermediary has tampered with it.
+            } else {
+                // Give the application the payload data in the plaintext buffer.
+            }
+        });
+
+        // Put buffers back.
+        self.nonce_buffer.put(Some(nonce_buffer));
+        self.pt_buffer.put(Some(plaintext_buffer));
+        self.aad_buffer.put(Some(aad_buffer));
+        self.ct_buffer.put(Some(ciphertext_buffer));
+        self.tag_buffer.put(Some(tag_buffer));
+
+        self.pending_for.clear();
     }
 }
 
