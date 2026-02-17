@@ -667,14 +667,30 @@ impl AEADProviderClient for Isle {
         tag_matches: bool,
     )
     {
-        self.pending_for.map(|current_state| {
-            if !tag_matches {
-                // The tag does not match.
-                // The message is malformed or an intermediary has tampered with it.
-            } else {
-                // Give the application the payload data in the plaintext buffer.
+        if !tag_matches {
+            // The tag does not match.
+            // The message is malformed or an intermediary has tampered with it.
+            debug!("[isle] message not authenticated; dropping");
+        } else {
+            // The tag matches, so the plaintext is authentic.
+            // Give the application the payload data in the plaintext buffer.
+            let (pid, msg_len) = self.pending_for.map(|p| (p.pid, p.message_len as usize))
+                .unwrap();
+            let copy_result: Result<_, _> = self.app_data.enter(
+                pid,
+                |ad, kad| {
+                    kad.get_readwrite_processbuffer(ALLOW_RW_NO_OUT_BUFFER)?
+                        .mut_enter(
+                            |app_out_buffer| {
+                                app_out_buffer.get(0..msg_len)
+                                    .map(|s| s.copy_from_slice(&plaintext_buffer[0..msg_len]))
+                                    .ok_or(kernel::process::Error::AddressOutOfBounds)
+                            })
+                });
+            if copy_result.is_err() {
+                debug!("[isle] error copying back to application buffer");
             }
-        });
+        }
 
         // Put buffers back.
         self.nonce_buffer.put(Some(nonce_buffer));
