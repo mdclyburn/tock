@@ -162,7 +162,6 @@ fn permute_12(x: &mut [u64; 5]) {
 /// Ascon-128 Constants (Ascon v1.2 / NIST SP 800-232)
 const KEY_LEN: usize = 16;
 const NONCE_LEN: usize = 16;
-const TAG_LEN: usize = 16;
 const RATE: usize = 8; // 64 bits (8 bytes)
 
 // Initialization Vector for Ascon-128:
@@ -291,6 +290,8 @@ impl AsconState {
     }
 }
 
+const CT_BLOCK_SIZE: usize = 8;
+
 /// Ascon-128 Encryption
 ///
 /// Ascon-128 encryption.
@@ -303,13 +304,23 @@ pub fn encrypt(
     in_aad: &[u8],
     out_ciphertext: &mut [u8],
     out_tag: &mut [u8],
+    msg_len: usize,
+    aad_len: usize,
 ) -> Result<(), ()> {
     if ckey.len() != KEY_LEN || nonce.len() != NONCE_LEN {
         return Err(());
     }
-    if out_ciphertext.len() != in_plaintext.len() {
+
+    if in_plaintext.len() % CT_BLOCK_SIZE != 0 {
         return Err(());
     }
+
+    if out_ciphertext.len() < msg_len {
+        return Err(());
+    }
+
+    let in_plaintext = &in_plaintext[0..msg_len];
+    let in_aad = &in_aad[0..aad_len];
 
     let mut state = AsconState::new(ckey, nonce);
 
@@ -342,6 +353,7 @@ pub fn encrypt(
 
     // Note: No p6 after the last absorbed block, go directly to Finalization.
 
+    // 4. Final
     // 4. Finalization
     state.finalize(ckey, out_tag);
 
@@ -356,11 +368,16 @@ pub fn decrypt(
     in_aad: &[u8],
     in_expected_tag: &[u8],
     out_plaintext: &mut [u8],
+    msg_len: usize,
+    aad_len: usize,
 ) -> Result<bool, ()> {
     if ckey.len() != KEY_LEN || nonce.len() != NONCE_LEN {
         return Err(());
     }
-    if out_plaintext.len() != in_ciphertext.len() {
+
+    let in_ciphertext = &in_ciphertext[0..msg_len];
+    let in_aad = &in_aad[0..aad_len];
+    if out_plaintext.len() < in_ciphertext.len() {
         return Err(());
     }
 
@@ -432,6 +449,8 @@ impl Ascon128 {
 }
 
 impl AEADProvider for Ascon128 {
+    fn padding_size(&self) -> usize { CT_BLOCK_SIZE }
+
     /// Encrypt a message.
     fn encrypt(
         &self,
@@ -441,6 +460,8 @@ impl AEADProvider for Ascon128 {
         in_aad: &'static mut [u8; AAD_LEN_MAX],
         out_ciphertext: &'static mut [u8; MESSAGE_LEN_MAX],
         out_tag: &'static mut [u8; TAG_LEN_MAX],
+        message_len: usize,
+        aad_len: usize,
     ) -> Result<(), (ErrorCode, (&'static mut [u8; NONCE_LEN_MAX],
                                  &'static mut [u8; MESSAGE_LEN_MAX],
                                  &'static mut [u8; AAD_LEN_MAX],
@@ -455,7 +476,15 @@ impl AEADProvider for Ascon128 {
                   out_ciphertext,
                   out_tag)))
         } else {
-            let encrypt_result = encrypt(ckey, nonce, in_plaintext, in_aad, out_ciphertext, out_tag);
+            let encrypt_result = encrypt(
+                ckey,
+                nonce,
+                in_plaintext,
+                in_aad,
+                out_ciphertext,
+                out_tag,
+                message_len,
+                aad_len);
             if encrypt_result.is_ok() {
                 self.client.map(|client| {
                     client.encrypt_done(
@@ -487,6 +516,8 @@ impl AEADProvider for Ascon128 {
         in_aad: &'static mut [u8; AAD_LEN_MAX],
         expected_tag: &'static mut [u8; TAG_LEN_MAX],
         out_plaintext: &'static mut [u8; MESSAGE_LEN_MAX],
+        message_len: usize,
+        aad_len: usize
     ) -> Result<(), (ErrorCode, (&'static mut [u8; NONCE_LEN_MAX],
                                  &'static mut [u8; MESSAGE_LEN_MAX],
                                  &'static mut [u8; AAD_LEN_MAX],
@@ -501,7 +532,15 @@ impl AEADProvider for Ascon128 {
                   in_ciphertext,
                   expected_tag)))
         } else {
-            let decrypt_result = decrypt(ckey, nonce, in_ciphertext, in_aad, expected_tag, out_plaintext);
+            let decrypt_result = decrypt(
+                ckey,
+                nonce,
+                in_ciphertext,
+                in_aad,
+                expected_tag,
+                out_plaintext,
+                message_len,
+                aad_len);
             if let Ok(tag_matches) = decrypt_result {
                 self.client.map(|client| {
                     client.decrypt_done(

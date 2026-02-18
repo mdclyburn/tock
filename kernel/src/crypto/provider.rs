@@ -21,6 +21,9 @@ use crate::errorcode::ErrorCode;
 
 /// Provider of authenticated encryption with authenticated additional data.
 pub trait AEADProvider {
+    /// Returns the block size the provider requires in plaintext.
+    fn padding_size(&self) -> usize;
+
     /// Encrypt a message.
     fn encrypt(
         &self,
@@ -30,6 +33,8 @@ pub trait AEADProvider {
         in_aad: &'static mut [u8; AAD_LEN_MAX],
         out_ciphertext: &'static mut [u8; MESSAGE_LEN_MAX],
         out_tag: &'static mut [u8; TAG_LEN_MAX],
+        message_len: usize,
+        aad_len: usize,
     ) -> Result<(), (ErrorCode, (&'static mut [u8; NONCE_LEN_MAX],
                                  &'static mut [u8; MESSAGE_LEN_MAX],
                                  &'static mut [u8; AAD_LEN_MAX],
@@ -45,6 +50,8 @@ pub trait AEADProvider {
         in_aad: &'static mut [u8; AAD_LEN_MAX],
         expected_tag: &'static mut [u8; TAG_LEN_MAX],
         out_plaintext: &'static mut [u8; MESSAGE_LEN_MAX],
+        message_len: usize,
+        aad_len: usize,
     ) -> Result<(), (ErrorCode, (&'static mut [u8; NONCE_LEN_MAX],
                                  &'static mut [u8; MESSAGE_LEN_MAX],
                                  &'static mut [u8; AAD_LEN_MAX],

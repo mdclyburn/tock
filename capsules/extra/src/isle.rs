@@ -227,7 +227,6 @@ impl Isle {
             pid,
             |ad, kad| {
                 self.nonce_buffer.map_or(Err(Error::AlreadyInUse), |buf| {
-                    debug!("[isle] nonce buffer <-");
                     buf[0..SENDER_ID_LEN]
                         .copy_from_slice(&ad.group_oscore_ctxs[0].host_number);
                     buf[SENDER_ID_LEN..SENDER_ID_LEN+PARTIAL_IV_LEN]
@@ -242,7 +241,6 @@ impl Isle {
                 })
             })?;
 
-        debug!("[isle] copying message to internal buffer");
         // Copy the message into the capsule buffer.
         // Assign the right buffer depending on if this is a send or receive.
         let (src_buffer, _dst_buffer) = if is_send {
@@ -263,6 +261,8 @@ impl Isle {
                     })
                     .flatten()
             })?;
+
+        debug!("[isle] prepare_crypt_op() done (AAD len.: {} B)", aad_len);
 
         Ok(aad_len)
     }
@@ -333,13 +333,15 @@ impl Isle {
     {
         // Set up pending state here so that there cannot be a race between
         // setting up the pending state and completing the encryption operation.
-        let message_len = self.app_data.enter(
+        let (raw_message_len, message_len) = self.app_data.enter(
             pid,
             |_ad, kad| {
+                let padding_size = self.aead.padding_size();
                 kad.get_readonly_processbuffer(ALLOW_RO_NO_IN_BUFFER)
-                    .map(|b| b.len())
+                    .map(|b| (b.len(), b.len() + (padding_size - b.len() % padding_size)))
             })
             .flatten()?;
+        debug!("[isle] encrypting {} B message ({} B padded)", raw_message_len, message_len);
         self.pending_for.set(PendingState {
             pid,
             aad_len: aad_len as u8,
@@ -362,9 +364,12 @@ impl Isle {
             self.pt_buffer.take().ok_or(Error::AlreadyInUse)?,
             self.aad_buffer.take().ok_or(Error::AlreadyInUse)?,
             self.ct_buffer.take().ok_or(Error::AlreadyInUse)?,
-            self.tag_buffer.take().ok_or(Error::AlreadyInUse)?);
+            self.tag_buffer.take().ok_or(Error::AlreadyInUse)?,
+            message_len,
+            aad_len);
 
         if let Err((ec, (nonce_buf, pt_buf, aad_buf, ct_buf, tag_buf))) = encrypt_result {
+            debug!("[isle] encryption provider failed");
             self.nonce_buffer.put(Some(nonce_buf));
             self.pt_buffer.put(Some(pt_buf));
             self.aad_buffer.put(Some(aad_buf));
@@ -375,7 +380,6 @@ impl Isle {
 
             Err(Error::KernelError)
         } else {
-            debug!("[isle] started encrypting payload");
             Ok(message_len)
         }
     }
@@ -422,7 +426,9 @@ impl Isle {
             self.pt_buffer.take().ok_or(Error::AlreadyInUse)?,
             self.aad_buffer.take().ok_or(Error::AlreadyInUse)?,
             self.tag_buffer.take().ok_or(Error::AlreadyInUse)?,
-            self.ct_buffer.take().ok_or(Error::AlreadyInUse)?);
+            self.ct_buffer.take().ok_or(Error::AlreadyInUse)?,
+            message_len,
+            aad_len);
 
         if let Err((ec, (nonce_buf, pt_buf, aad_buf, ct_buf, tag_buf))) = decrypt_result {
             self.nonce_buffer.put(Some(nonce_buf));
@@ -454,15 +460,46 @@ impl SyscallDriver for Isle {
 
             // Translate CoAP message to Group OSCORE.
             (1, dst_host_lower, dst_host_upper) => {
-                let operation_res = self.prepare_crypt_op(pid, true)
-                    .and_then(|aad_len| self.encrypt_send(pid, aad_len));
-                match operation_res {
-                    Ok(msg_len) => {
-                        debug!("[isle] mapping {} B CoAP message to Group OSCORE", msg_len);
-                        CommandReturn::success()
+                // Get the application's provided buffers' lengths.
+                let app_buffer_lens_res = self.app_data.enter(
+                    pid,
+                    |_ad, kad| {
+                        (kad.get_readonly_processbuffer(ALLOW_RO_NO_IN_BUFFER).map(|b| b.len()),
+                         kad.get_readwrite_processbuffer(ALLOW_RW_NO_OUT_BUFFER).map(|b| b.len()))
+                });
+
+                match app_buffer_lens_res {
+                    // Check that the buffers are appropriately sized.
+                    // The application's ciphertext buffer must both
+                    // be at least as long as the plaintext buffer
+                    // and fit the AEAD provider's padding requirements.
+                    Ok((Ok(pt_buffer_len), Ok(ct_buffer_len))) => {
+                        let pad = self.aead.padding_size();
+                        let padding_byte_count = pad - (pt_buffer_len % pad);
+
+                        // debug!("[isle] {} >= {} + {} ?",
+                        //        ct_buffer_len,
+                        //        pt_buffer_len,
+                        //        padding_byte_count);
+                        if ct_buffer_len >= pt_buffer_len + padding_byte_count {
+                            let operation_res = self.prepare_crypt_op(pid, true)
+                                .and_then(|aad_len| self.encrypt_send(pid, aad_len));
+                            match operation_res {
+                                Ok(msg_len) => {
+                                    CommandReturn::success()
+                                },
+
+                                Err(kerr) => CommandReturn::failure(ErrorCode::from(kerr)),
+                            }
+                        } else {
+                            CommandReturn::failure(ErrorCode::NOMEM)
+                        }
                     },
 
-                    Err(kerr) => CommandReturn::failure(ErrorCode::from(kerr)),
+                    // Either or both of the buffers were inaccessible from the grant operation.
+                    // It does not matter why the operation could not get the buffer lengths,
+                    // if the application is around, we will return NOMEM.
+                    _ => CommandReturn::failure(ErrorCode::NOMEM),
                 }
             },
 
@@ -592,19 +629,21 @@ impl AEADProviderClient for Isle {
                                 out_buf.get(0..current_state.message_len as usize)
                                     .unwrap()
                                     .copy_from_slice(&ciphertext_buffer[0..current_state.message_len as usize]);
-                                out_buf.get(current_state.message_len as usize..(current_state.message_len as usize + HMAC_TAG_LEN))
+                                out_buf.get(current_state.message_len as usize..(current_state.message_len as usize + TAG_LEN_MAX))
                                     .unwrap()
-                                    .copy_from_slice(&tag_buffer[0..HMAC_TAG_LEN]);
+                                    .copy_from_slice(&tag_buffer[0..TAG_LEN_MAX]);
                             })
                         }).flatten();
 
                     if write_res.is_ok() {
+                        // Increment the SSN.
+                        ad.group_oscore_ctxs[0].sender_seq_no += 1;
                         // Notify the application layer that this payload is ready to send.
                         // The total length includes the length of the HMAC tag.
-                        let total_len = current_state.message_len as usize + HMAC_TAG_LEN;
+                        let total_len = current_state.message_len as usize + TAG_LEN_MAX;
                         let _upcall_result = kad.schedule_upcall(
                             UPCALL_OUT_MESSAGE_READY,
-                            (if write_res.is_ok() { 0 } else { 1 }, total_len as usize, 0))
+                            (0, total_len as usize, 0))
                             .map_err(|e| debug!("[isle] message ready upcall error: {:?}", e));
                     } else {
                         debug!("[isle] failed to write data back to application buffer");
