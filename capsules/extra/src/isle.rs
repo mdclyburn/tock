@@ -387,11 +387,16 @@ impl Isle {
     fn decrypt_recv(
         &self,
         pid: ProcessId,
-        message_len: usize,
         aad_len: usize,
     ) -> Result<(), Error>
     {
-        debug!("[isle] initiating decryption of {} B", message_len);
+        let message_len = self.app_data.enter(
+            pid,
+            |_ad, kad| {
+                kad.get_readonly_processbuffer(ALLOW_RO_NO_IN_BUFFER)
+                    .map(|b| b.len())
+            })
+            .flatten()?;
 
         // Set up the pending state.
         // See the note in encrypt_send().
@@ -463,31 +468,15 @@ impl SyscallDriver for Isle {
 
             // Translate a received message from Group OSCORE to CoAP.
             (2, src_host_lower, src_host_upper) => {
-                debug!("Mapping Group OSCORE message to CoAP.");
-                let mut msg_len = 0;
-                let mut aad_len = 0;
-                let operation_res = self.app_data.enter(pid, |ad, kad| {
-                    let group_oscore_ctx = &ad.group_oscore_ctxs[0usize];
+                let operation_res = self.prepare_crypt_op(pid, false)
+                    .and_then(|aad_len| self.decrypt_recv(pid, aad_len));
+                match operation_res {
+                    Ok(()) => {
+                        debug!("[isle] decrypting message");
+                        CommandReturn::success()
+                    },
 
-                    let app_buffers = (
-                        kad.get_readonly_processbuffer(ALLOW_RO_NO_IN_BUFFER),
-                        kad.get_readwrite_processbuffer(ALLOW_RW_NO_OUT_BUFFER));
-                    if let (Ok(in_buffer), Ok(_out_buffer)) = app_buffers {
-                        msg_len = in_buffer.len();
-                        aad_len = 0;
-                        debug!("[isle] message is {} B", msg_len);
-                        self.prepare_crypt_op(pid, false)
-                    } else {
-                        debug!("[isle] application has not provided both buffers for recv");
-                        Err(Error::OutOfMemory)
-                    }
-                })
-                    .and_then(|_empty| self.decrypt_recv(pid, msg_len, aad_len));
-
-                if let Err(kerr) = operation_res {
-                    CommandReturn::failure(ErrorCode::from(kerr))
-                } else {
-                    CommandReturn::success()
+                    Err(kerr) => CommandReturn::failure(ErrorCode::from(kerr)),
                 }
             },
 
