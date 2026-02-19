@@ -707,24 +707,3 @@ impl AEADProviderClient for Isle {
         self.pending_for.clear();
     }
 }
-
-fn pad_plaintext(
-    buffer: &mut [u8],
-    payload_len: usize,
-    block_size: usize
-) -> Result<usize, ErrorCode>
-{
-    let mut padded_len = 0;
-    while padded_len < payload_len {
-        padded_len += block_size;
-        if block_size > buffer.len() {
-            return Err(ErrorCode::NOMEM)
-        }
-    }
-
-    for b in &mut buffer[payload_len..] {
-        *b = 0;
-    }
-
-    Ok(padded_len)
-}
