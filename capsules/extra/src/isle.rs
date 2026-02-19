@@ -45,6 +45,23 @@ pub const DRIVER_NO: usize = capsules_core::driver::NUM::Isle as usize;
 
 const KEY_SIZE: u16 = 256;
 
+/// Length of the sender ID; lower 64 bits of the IP address.
+const SENDER_ID_LEN: usize = 8;
+/// Length of the partial IV in bytes; uses the sender sequence no.
+const PARTIAL_IV_LEN: usize = 4;
+
+/// Allow buffer number for input messages.
+const ALLOW_RO_NO_IN_BUFFER: usize = 0;
+/// Allow buffer number for the partial IV.
+const ALLOW_RO_NO_RECV_PARTIAL_IV: usize = 1;
+/// Host number of the received message.
+const ALLOW_RO_NO_RECV_SRC_HOST: usize = 2;
+/// Allow buffer number for output message.
+const ALLOW_RW_NO_OUT_BUFFER: usize = 0;
+
+/// Upcall number for indicating completed processing of a message.
+const UPCALL_OUT_MESSAGE_READY: usize = 0;
+
 pub trait ISLEConfigurationProvider {
     fn init_context(&self, context: &mut [GroupOSCOREContext]);
 }
@@ -55,7 +72,7 @@ pub struct GroupOSCOREContext {
     master_salt: [u8; 8],
     message_key: [u8; 16],
     hash_key: [u8; 16],
-    host_number: [u8; 8],
+    host_number: [u8; 6],
     sender_seq_no: u32,
 }
 
@@ -82,7 +99,7 @@ impl Default for GroupOSCOREContext {
             master_salt: [0x00; 8],
             message_key: [0x00; 16],
             hash_key: [0x00; 16],
-            host_number: [0x00; 8],
+            host_number: [0x00; 6],
             sender_seq_no: 0,
         }
     }
@@ -108,26 +125,6 @@ struct PendingState {
     pid: ProcessId,
     message_len: u8,
 }
-
-/// Length of the IP6 address in bytes.
-const IP6_ADDR_LEN: usize = 16;
-
-/// Length of the sender ID; lower 64 bits of the IP address.
-const SENDER_ID_LEN: usize = 8;
-/// Length of the partial IV in bytes; uses the sender sequence no.
-const PARTIAL_IV_LEN: usize = 4;
-
-/// Allow buffer number for input messages.
-const ALLOW_RO_NO_IN_BUFFER: usize = 0;
-/// Allow buffer number for the partial IV.
-const ALLOW_RO_NO_RECV_PARTIAL_IV: usize = 1;
-/// Host number of the received message.
-const ALLOW_RO_NO_RECV_SRC_HOST: usize = 2;
-/// Allow buffer number for output message.
-const ALLOW_RW_NO_OUT_BUFFER: usize = 0;
-
-/// Upcall number for indicating completed processing of a message.
-const UPCALL_OUT_MESSAGE_READY: usize = 0;
 
 // Fixed AAD data.
 // Excludes the sender ID (address) and the partial IV (pIV).
@@ -157,7 +154,6 @@ pub struct Isle {
     app_data: Grant<AppData, UpcallCount<1>, AllowRoCount<3>, AllowRwCount<1>>,
     // TODO: move this to the application's grant data.
     // Initialize this in allocate_grant() with the application's IP6 address.
-    mleid_address: MapCell<[u8; IP6_ADDR_LEN]>,
     pending_for: OptionalCell<PendingState>,
 
     // AEAD buffers.
@@ -184,7 +180,6 @@ impl Isle {
             config_provider,
             aead,
             app_data: grant_data,
-            mleid_address: MapCell::new([0; 16]),
             pending_for: OptionalCell::empty(),
 
             pt_buffer: TakeCell::new(pt_buffer),
@@ -210,7 +205,10 @@ impl Isle {
             pid,
             |ad, _kad| {
                 self.nonce_buffer.map_or(Err(Error::AlreadyInUse), |buf| {
-                    buf[0..SENDER_ID_LEN]
+                    let host_number_bytes = &ad.group_oscore_ctxs[0].host_number;
+                    buf[0..host_number_bytes.len()]
+                        .copy_from_slice(host_number_bytes);
+                    buf[host_number_bytes.len()..SENDER_ID_LEN]
                         .copy_from_slice(&ad.group_oscore_ctxs[0].host_number);
                     buf[SENDER_ID_LEN..SENDER_ID_LEN+PARTIAL_IV_LEN]
                         .copy_from_slice(&[
@@ -546,11 +544,9 @@ impl SyscallDriver for Isle {
                 kd_input[0..8].copy_from_slice(&ctx.master_salt);
                 kd_input[8..24].copy_from_slice(&ctx.master_secret);
                 kd_input[24..26].copy_from_slice(&[(KEY_SIZE & 0xFF) as u8, (KEY_SIZE >> 8) as u8]);
-                self.mleid_address.map(|addr| kd_input[26..34].copy_from_slice(&addr[8..16]));
-                kd_input[34..36].copy_from_slice(&[
-                    (ctx.group_id & 0xFF) as u8,
-                    (ctx.group_id >> 8) as u8,
-                ]);
+                kd_input[26..28].copy_from_slice(&ctx.group_id.to_be_bytes());
+                kd_input[28..34].copy_from_slice(&ctx.host_number);
+                kd_input[34..36].copy_from_slice(&ctx.group_id.to_be_bytes());
                 // ENG: specific encryption algorithm ID intentionally not filled in.
                 kd_input[36..38].copy_from_slice(&[00, 00]);
                 kd_input[38..41].copy_from_slice(&['k' as u8, 'e' as u8, 'y' as u8]);
