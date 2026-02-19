@@ -37,7 +37,6 @@
 
 use core::cell::Cell;
 use core::ptr::addr_of;
-use kernel::debug;
 use kernel::hil::symmetric_encryption;
 use kernel::utilities::cells::OptionalCell;
 use kernel::utilities::cells::TakeCell;
@@ -170,7 +169,6 @@ impl<'a> AesECB<'a> {
     /// Verify that the provided start and stop indices work with the given
     /// buffers.
     fn try_set_indices(&self, start_index: usize, stop_index: usize) -> bool {
-        // debug!("setting indices {} -> {}", start_index, stop_index);
         let is_sized_correctly = stop_index.checked_sub(start_index).is_some_and(|sublen| {
             sublen % symmetric_encryption::AES128_BLOCK_SIZE == 0
         });
@@ -390,7 +388,6 @@ impl<'a> AesECB<'a> {
             self.current_idx.set(current_idx + take);
 
             // Check if we are done or if we need to crypt another block.
-            // kernel::debug!("[aes] crypted bytes {} to {} (end = {})", start, start + take, end);
             if start + take < end {
                 // More to do.
                 self.crypt();
@@ -480,7 +477,6 @@ impl<'a> kernel::hil::symmetric_encryption::AES128<'a> for AesECB<'a> {
         self.output.replace(dest);
 
         if self.try_set_indices(start_index, stop_index) {
-            // debug!("indices set");
             if self.encrypt.get() {
                 self.crypt();
                 None

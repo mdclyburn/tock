@@ -409,7 +409,6 @@ pub fn decrypt(
     // We reconstruct P_padded.
 
     let s0_bytes = state.x[0].to_be_bytes();
-    let mut c_padded = [0u8; 8]; // Reconstructed Ciphertext block
     let mut p_padded = [0u8; 8]; // Reconstructed Plaintext padded
 
     // XOR partial ciphertext with state to get plaintext

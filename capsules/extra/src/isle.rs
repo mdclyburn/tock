@@ -15,17 +15,11 @@ use kernel::grant::{
     Grant,
     UpcallCount,
 };
-use kernel::hil::symmetric_encryption;
-use kernel::hil::symmetric_encryption::{
-    AES128,
-    AES128CBC,
-};
 use kernel::process::{
     Error,
     ProcessId,
 };
 use kernel::processbuffer::{
-    ReadOnlyProcessBufferRef,
     ReadableProcessBuffer,
     WriteableProcessBuffer,
 };
@@ -137,12 +131,6 @@ const ALLOW_RW_NO_OUT_BUFFER: usize = 0;
 /// Upcall number for indicating completed processing of a message.
 const UPCALL_OUT_MESSAGE_READY: usize = 0;
 
-const HMAC_TAG_LEN: usize = 8;
-
-pub trait Crypto: AES128<'static> + AES128CBC {  }
-impl<T: AES128<'static> + AES128CBC> Crypto for T {  }
-
-
 // Fixed AAD data.
 // Excludes the sender ID (address) and the partial IV (pIV).
 const AAD_PREFIX: [u8; 11] = [
@@ -209,9 +197,6 @@ impl Isle {
         }
     }
 
-    /// Location of the partial IV in the AAD.
-    const AAD_PIV_BYTE_OFFSET: usize = 19;
-
     /// Perform prerequisite setup for encryption or decryption of ISLE message.
     fn prepare_crypt_op(
         &self,
@@ -225,7 +210,7 @@ impl Isle {
         // Construct the nonce.
         self.app_data.enter(
             pid,
-            |ad, kad| {
+            |ad, _kad| {
                 self.nonce_buffer.map_or(Err(Error::AlreadyInUse), |buf| {
                     buf[0..SENDER_ID_LEN]
                         .copy_from_slice(&ad.group_oscore_ctxs[0].host_number);
@@ -239,7 +224,7 @@ impl Isle {
 
                     Ok(())
                 })
-            })?;
+            })??;
 
         // Copy the message into the capsule buffer.
         // Assign the right buffer depending on if this is a send or receive.
@@ -253,7 +238,7 @@ impl Isle {
             |src_buf| {
                 self.app_data.enter(
                     pid,
-                    |ad, kad| {
+                    |_ad, kad| {
                         kad.get_readonly_processbuffer(ALLOW_RO_NO_IN_BUFFER)?
                             .enter(|pbuf| pbuf.copy_to_slice(&mut src_buf[0..pbuf.len()]))?;
 
@@ -287,7 +272,7 @@ impl Isle {
                     // These values come from this device.
                     self.app_data.enter(
                         pid,
-                        |ad, kad| {
+                        |ad, _kad| {
                             aad_buffer[AAD_SENDER_ID_OFFSET..AAD_SENDER_ID_OFFSET+SENDER_ID_LEN]
                                 .copy_from_slice(&ad.group_oscore_ctxs[0].host_number);
                             let ssn = &ad.group_oscore_ctxs[0].sender_seq_no;
@@ -353,7 +338,7 @@ impl Isle {
         let mut ckey = [0u8; CKEY_LEN_MAX];
         self.app_data.enter(
             pid,
-            |ad, kad| {
+            |ad, _kad| {
                 ckey.copy_from_slice(&ad.group_oscore_ctxs[0].message_key);
             })?;
 
@@ -368,7 +353,7 @@ impl Isle {
             message_len,
             aad_len);
 
-        if let Err((ec, (nonce_buf, pt_buf, aad_buf, ct_buf, tag_buf))) = encrypt_result {
+        if let Err((_ec, (nonce_buf, pt_buf, aad_buf, ct_buf, tag_buf))) = encrypt_result {
             debug!("[isle] encryption provider failed");
             self.nonce_buffer.put(Some(nonce_buf));
             self.pt_buffer.put(Some(pt_buf));
@@ -415,7 +400,7 @@ impl Isle {
         let mut ckey = [0u8; CKEY_LEN_MAX];
         self.app_data.enter(
             pid,
-            |ad, kad| {
+            |ad, _kad| {
                 ckey.copy_from_slice(&ad.group_oscore_ctxs[0].message_key);
             })?;
 
@@ -430,7 +415,7 @@ impl Isle {
             message_len,
             aad_len);
 
-        if let Err((ec, (nonce_buf, pt_buf, aad_buf, ct_buf, tag_buf))) = decrypt_result {
+        if let Err((_ec, (nonce_buf, pt_buf, aad_buf, ct_buf, tag_buf))) = decrypt_result {
             self.nonce_buffer.put(Some(nonce_buf));
             self.pt_buffer.put(Some(pt_buf));
             self.aad_buffer.put(Some(aad_buf));
@@ -459,7 +444,8 @@ impl SyscallDriver for Isle {
             (0, _r2, _r3) => CommandReturn::success(),
 
             // Translate CoAP message to Group OSCORE.
-            (1, dst_host_lower, dst_host_upper) => {
+            // TODO: use the source host network number in processing the packet.
+            (1, _dst_host_lower, _dst_host_upper) => {
                 // Get the application's provided buffers' lengths.
                 let app_buffer_lens_res = self.app_data.enter(
                     pid,
@@ -485,7 +471,7 @@ impl SyscallDriver for Isle {
                             let operation_res = self.prepare_crypt_op(pid, true)
                                 .and_then(|aad_len| self.encrypt_send(pid, aad_len));
                             match operation_res {
-                                Ok(msg_len) => {
+                                Ok(_msg_len) => {
                                     CommandReturn::success()
                                 },
 
@@ -504,7 +490,8 @@ impl SyscallDriver for Isle {
             },
 
             // Translate a received message from Group OSCORE to CoAP.
-            (2, src_host_lower, src_host_upper) => {
+            // TODO: use the source host network number in processing the packet.
+            (2, _src_host_lower, _src_host_upper) => {
                 // Get the application's buffers' lengths.
                 let app_buffer_lens_res = self.app_data.enter(
                     pid,
@@ -702,7 +689,7 @@ impl AEADProviderClient for Isle {
                 .unwrap();
             let copy_result: Result<_, _> = self.app_data.enter(
                 pid,
-                |ad, kad| {
+                |_ad, kad| {
                     kad.get_readwrite_processbuffer(ALLOW_RW_NO_OUT_BUFFER)?
                         .mut_enter(
                             |app_out_buffer| {

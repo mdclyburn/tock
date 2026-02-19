@@ -543,7 +543,7 @@ impl Kernel {
                     // to the kernel, we must first run `disable_app_mpu` before
                     // attempting to access any userspace memory.
                     process.setup_mpu();
-                    // chip.mpu().enable_app_mpu();
+                    chip.mpu().enable_app_mpu();
 
                     scheduler_timer.arm();
                     let context_switch_reason = process.switch_to();
