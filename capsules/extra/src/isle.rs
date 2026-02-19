@@ -43,7 +43,8 @@ pub use kernel::crypto::config::{
 
 pub const DRIVER_NO: usize = capsules_core::driver::NUM::Isle as usize;
 
-const KEY_SIZE: u16 = 256;
+/// Length of the AEAD provider's ciphertext key in bits.
+const CKEY_LEN_BITS: u16 = CKEY_LEN_MAX as u16 * 8;
 
 /// Length of the sender ID; lower 64 bits of the IP address.
 const SENDER_ID_LEN: usize = 8;
@@ -543,14 +544,14 @@ impl SyscallDriver for Isle {
                 let mut kd_input: [u8; 43] = [0; 43];
                 kd_input[0..8].copy_from_slice(&ctx.master_salt);
                 kd_input[8..24].copy_from_slice(&ctx.master_secret);
-                kd_input[24..26].copy_from_slice(&[(KEY_SIZE & 0xFF) as u8, (KEY_SIZE >> 8) as u8]);
+                kd_input[24..26].copy_from_slice(&CKEY_LEN_BITS.to_be_bytes());
                 kd_input[26..28].copy_from_slice(&ctx.group_id.to_be_bytes());
                 kd_input[28..34].copy_from_slice(&ctx.host_number);
                 kd_input[34..36].copy_from_slice(&ctx.group_id.to_be_bytes());
                 // ENG: specific encryption algorithm ID intentionally not filled in.
                 kd_input[36..38].copy_from_slice(&[00, 00]);
                 kd_input[38..41].copy_from_slice(&['k' as u8, 'e' as u8, 'y' as u8]);
-                kd_input[41..43].copy_from_slice(&[(KEY_SIZE & 0xFF) as u8, (KEY_SIZE >> 8) as u8]);
+                kd_input[41..43].copy_from_slice(&CKEY_LEN_BITS.to_be_bytes());
 
                 // Derive the encryption key.
                 use kernel::crypto::alg::ascon;
