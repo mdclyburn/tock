@@ -168,7 +168,7 @@ const AAD_PARTIAL_IV_OFFSET: usize = AAD_SENDER_ID_OFFSET + SENDER_ID_LEN;
 pub struct Isle {
     config_provider: &'static dyn ISLEConfigurationProvider,
     aead: &'static dyn AEADProvider,
-    app_data: Grant<AppData, UpcallCount<1>, AllowRoCount<1>, AllowRwCount<1>>,
+    app_data: Grant<AppData, UpcallCount<1>, AllowRoCount<3>, AllowRwCount<1>>,
     // TODO: move this to the application's grant data.
     // Initialize this in allocate_grant() with the application's IP6 address.
     mleid_address: MapCell<[u8; IP6_ADDR_LEN]>,
@@ -186,7 +186,7 @@ impl Isle {
     /// Create a new instance.
     pub fn new(
         config_provider: &'static dyn ISLEConfigurationProvider,
-        grant_data: Grant<AppData, UpcallCount<1>, AllowRoCount<1>, AllowRwCount<1>>,
+        grant_data: Grant<AppData, UpcallCount<1>, AllowRoCount<3>, AllowRwCount<1>>,
         aead: &'static dyn AEADProvider,
         pt_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
         ct_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
