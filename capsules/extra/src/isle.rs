@@ -106,9 +106,7 @@ impl Default for AppData {
 #[derive(Clone, Copy)]
 struct PendingState {
     pid: ProcessId,
-    aad_len: u8,
     message_len: u8,
-    is_send: bool,
 }
 
 /// Length of the IP6 address in bytes.
@@ -329,9 +327,7 @@ impl Isle {
         debug!("[isle] encrypting {} B message ({} B padded)", raw_message_len, message_len);
         self.pending_for.set(PendingState {
             pid,
-            aad_len: aad_len as u8,
             message_len: message_len as u8,
-            is_send: true,
         });
 
         // Get the key from the application's grant data.
@@ -391,9 +387,7 @@ impl Isle {
         // See the note in encrypt_send().
         self.pending_for.set(PendingState {
             pid,
-            aad_len: aad_len as u8,
             message_len: message_len as u8,
-            is_send: false,
         });
 
         // Get the key from the application's grant data.
