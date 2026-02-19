@@ -505,15 +505,34 @@ impl SyscallDriver for Isle {
 
             // Translate a received message from Group OSCORE to CoAP.
             (2, src_host_lower, src_host_upper) => {
-                let operation_res = self.prepare_crypt_op(pid, false)
-                    .and_then(|aad_len| self.decrypt_recv(pid, aad_len));
-                match operation_res {
-                    Ok(()) => {
-                        debug!("[isle] decrypting message");
-                        CommandReturn::success()
+                // Get the application's buffers' lengths.
+                let app_buffer_lens_res = self.app_data.enter(
+                    pid,
+                    |_ad, kad| {
+                        (kad.get_readonly_processbuffer(ALLOW_RO_NO_IN_BUFFER).map(|b| b.len()),
+                         kad.get_readwrite_processbuffer(ALLOW_RW_NO_OUT_BUFFER).map(|b| b.len()))
+                    });
+
+                // Check that buffers are appropriately sized.
+                // The application's plaintext buffer must be at least the size of the ciphertext buffer.
+                match app_buffer_lens_res {
+                    Ok((Ok(ct_buffer_len), Ok(pt_buffer_len))) => {
+                        if pt_buffer_len < ct_buffer_len {
+                            CommandReturn::failure(ErrorCode::NOMEM)
+                        } else {
+                            let operation_res = self.prepare_crypt_op(pid, false)
+                                .and_then(|aad_len| self.decrypt_recv(pid, aad_len));
+                            match operation_res {
+                                Ok(()) => CommandReturn::success(),
+                                Err(kerr) => CommandReturn::failure(ErrorCode::from(kerr)),
+                            }
+                        }
                     },
 
-                    Err(kerr) => CommandReturn::failure(ErrorCode::from(kerr)),
+                    _ => {
+                        debug!("[isle] application did not provide buffers");
+                        CommandReturn::failure(ErrorCode::NOMEM)
+                    },
                 }
             },
 
