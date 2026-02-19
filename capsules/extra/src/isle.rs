@@ -517,40 +517,6 @@ impl SyscallDriver for Isle {
                 }
             },
 
-            // Set lower half of IP address.
-            (10, block01, block23) => {
-                debug!("[isle] set lower half of IP6 address.");
-                self.mleid_address.map(|addr| {
-                    addr[00] = ((block01 >> 00) & 0xFF) as u8;
-                    addr[01] = ((block01 >> 08) & 0xFF) as u8;
-                    addr[02] = ((block01 >> 16) & 0xFF) as u8;
-                    addr[03] = ((block01 >> 24) & 0xFF) as u8;
-
-                    addr[04] = ((block23 >> 00) & 0xFF) as u8;
-                    addr[05] = ((block23 >> 08) & 0xFF) as u8;
-                    addr[06] = ((block23 >> 16) & 0xFF) as u8;
-                    addr[07] = ((block23 >> 24) & 0xFF) as u8;
-                });
-                CommandReturn::success()
-            },
-
-            // Set upper half of IP address.
-            (20, block45, block67) => {
-                debug!("[isle] set upper half of IP6 address.");
-                self.mleid_address.map(|addr| {
-                    addr[08] = ((block45 >> 00) & 0xFF) as u8;
-                    addr[09] = ((block45 >> 08) & 0xFF) as u8;
-                    addr[10] = ((block45 >> 16) & 0xFF) as u8;
-                    addr[11] = ((block45 >> 24) & 0xFF) as u8;
-
-                    addr[12] = ((block67 >> 00) & 0xFF) as u8;
-                    addr[13] = ((block67 >> 08) & 0xFF) as u8;
-                    addr[14] = ((block67 >> 16) & 0xFF) as u8;
-                    addr[15] = ((block67 >> 24) & 0xFF) as u8;
-                });
-                CommandReturn::success()
-            },
-
             _ => CommandReturn::failure(ErrorCode::INVAL),
         }
     }
