@@ -28,7 +28,6 @@ use kernel::syscall::{
     SyscallDriver,
 };
 use kernel::utilities::cells::{
-    MapCell,
     OptionalCell,
     TakeCell,
 };
@@ -106,8 +105,32 @@ impl Default for GroupOSCOREContext {
     }
 }
 
+pub const ISLE_REALMS_MAX: usize = 2;
+
 pub struct AppData {
-    group_oscore_ctxs: [GroupOSCOREContext; 2],
+    group_oscore_ctxs: [GroupOSCOREContext; ISLE_REALMS_MAX],
+}
+
+impl AppData {
+    fn get_realm(&self, realm_id: u16) -> Result<&GroupOSCOREContext, Error> {
+        for realm in &self.group_oscore_ctxs {
+            if realm.group_id == realm_id {
+                return Ok(realm);
+            }
+        }
+
+        Err(Error::AddressOutOfBounds)
+    }
+
+    fn get_realm_mut(&mut self, realm_id: u16) -> Result<&mut GroupOSCOREContext, Error> {
+        for realm in &mut self.group_oscore_ctxs {
+            if realm.group_id == realm_id {
+                return Ok(realm);
+            }
+        }
+
+        Err(Error::AddressOutOfBounds)
+    }
 }
 
 impl Default for AppData {
@@ -195,29 +218,27 @@ impl Isle {
     fn prepare_crypt_op(
         &self,
         pid: ProcessId,
+        realm_id: u16,
         is_send: bool,
     ) -> Result<usize, Error>
     {
         // Construct the AAD.
-        let aad_len = self.build_aad(pid, is_send)?;
+        let aad_len = self.build_aad(pid, realm_id, is_send)?;
 
         // Construct the nonce.
         self.app_data.enter(
             pid,
             |ad, _kad| {
                 self.nonce_buffer.map_or(Err(Error::AlreadyInUse), |buf| {
-                    let host_number_bytes = &ad.group_oscore_ctxs[0].host_number;
+                    let realm = ad.get_realm(realm_id)?;
+                    let host_number_bytes = &realm.host_number;
+
                     buf[0..host_number_bytes.len()]
                         .copy_from_slice(host_number_bytes);
                     buf[host_number_bytes.len()..SENDER_ID_LEN]
-                        .copy_from_slice(&ad.group_oscore_ctxs[0].host_number);
+                        .copy_from_slice(&realm.host_number);
                     buf[SENDER_ID_LEN..SENDER_ID_LEN+PARTIAL_IV_LEN]
-                        .copy_from_slice(&[
-                            (ad.group_oscore_ctxs[0].sender_seq_no & 0xFF) as u8,
-                            ((ad.group_oscore_ctxs[0].sender_seq_no >> 8) & 0xFF) as u8,
-                            ((ad.group_oscore_ctxs[0].sender_seq_no >> 16) & 0xFF) as u8,
-                            ((ad.group_oscore_ctxs[0].sender_seq_no >> 24) & 0xFF) as u8
-                        ]);
+                        .copy_from_slice(&realm.sender_seq_no.to_be_bytes());
 
                     Ok(())
                 })
@@ -253,6 +274,7 @@ impl Isle {
     fn build_aad(
         &self,
         pid: ProcessId,
+        realm_id: u16,
         is_send: bool
     ) -> Result<usize, Error>
     {
@@ -270,9 +292,10 @@ impl Isle {
                     self.app_data.enter(
                         pid,
                         |ad, _kad| {
+                            let realm = ad.get_realm(realm_id)?;
                             aad_buffer[AAD_SENDER_ID_OFFSET..AAD_SENDER_ID_OFFSET+SENDER_ID_LEN]
-                                .copy_from_slice(&ad.group_oscore_ctxs[0].host_number);
-                            let ssn = &ad.group_oscore_ctxs[0].sender_seq_no;
+                                .copy_from_slice(&realm.host_number);
+                            let ssn = &realm.sender_seq_no;
                             let piv_buffer = [
                                 (ssn >>  24) as u8,
                                 (ssn >>  16) as u8,
@@ -310,6 +333,7 @@ impl Isle {
     fn encrypt_send(
         &self,
         pid: ProcessId,
+        realm_id: u16,
         aad_len: usize,
     ) -> Result<usize, Error>
     {
@@ -334,8 +358,11 @@ impl Isle {
         self.app_data.enter(
             pid,
             |ad, _kad| {
-                ckey.copy_from_slice(&ad.group_oscore_ctxs[0].message_key);
-            })?;
+                let realm = ad.get_realm(realm_id)?;
+                ckey.copy_from_slice(&realm.message_key);
+
+                Ok(())
+            })??;
 
         // Perform the encryption.
         let encrypt_result = self.aead.encrypt(
@@ -360,6 +387,16 @@ impl Isle {
 
             Err(Error::KernelError)
         } else {
+            // Increment the SSN.
+            self.app_data.enter(
+                pid,
+                |ad, _kad| {
+                    let realm = ad.get_realm_mut(realm_id)?;
+                    realm.sender_seq_no += 1;
+
+                    Ok(())
+                })??;
+
             Ok(message_len)
         }
     }
@@ -371,6 +408,7 @@ impl Isle {
     fn decrypt_recv(
         &self,
         pid: ProcessId,
+        realm_id: u16,
         aad_len: usize,
     ) -> Result<(), Error>
     {
@@ -394,8 +432,11 @@ impl Isle {
         self.app_data.enter(
             pid,
             |ad, _kad| {
-                ckey.copy_from_slice(&ad.group_oscore_ctxs[0].message_key);
-            })?;
+                let realm = ad.get_realm(realm_id)?;
+                ckey.copy_from_slice(&realm.message_key);
+
+                Ok::<_, Error>(())
+            })??;
 
         // Perform the decryption.
         let decrypt_result = self.aead.decrypt(
@@ -438,7 +479,7 @@ impl SyscallDriver for Isle {
 
             // Translate CoAP message to Group OSCORE.
             // TODO: use the source host network number in processing the packet.
-            (1, _dst_host_lower, _dst_host_upper) => {
+            (1, _dst_host_lower, dst_host_upper) => {
                 // Get the application's provided buffers' lengths.
                 let app_buffer_lens_res = self.app_data.enter(
                     pid,
@@ -461,8 +502,9 @@ impl SyscallDriver for Isle {
                         //        pt_buffer_len,
                         //        padding_byte_count);
                         if ct_buffer_len >= pt_buffer_len + padding_byte_count {
-                            let operation_res = self.prepare_crypt_op(pid, true)
-                                .and_then(|aad_len| self.encrypt_send(pid, aad_len));
+                            let realm_id = (dst_host_upper >> 16) as u16;
+                            let operation_res = self.prepare_crypt_op(pid, realm_id, true)
+                                .and_then(|aad_len| self.encrypt_send(pid, realm_id, aad_len));
                             match operation_res {
                                 Ok(_msg_len) => {
                                     CommandReturn::success()
@@ -484,7 +526,7 @@ impl SyscallDriver for Isle {
 
             // Translate a received message from Group OSCORE to CoAP.
             // TODO: use the source host network number in processing the packet.
-            (2, _src_host_lower, _src_host_upper) => {
+            (2, _src_host_lower, src_host_upper) => {
                 // Get the application's buffers' lengths.
                 let app_buffer_lens_res = self.app_data.enter(
                     pid,
@@ -500,8 +542,9 @@ impl SyscallDriver for Isle {
                         if pt_buffer_len < ct_buffer_len {
                             CommandReturn::failure(ErrorCode::NOMEM)
                         } else {
-                            let operation_res = self.prepare_crypt_op(pid, false)
-                                .and_then(|aad_len| self.decrypt_recv(pid, aad_len));
+                            let realm_id = (src_host_upper >> 16) as u16;
+                            let operation_res = self.prepare_crypt_op(pid, realm_id, false)
+                                .and_then(|aad_len| self.decrypt_recv(pid, realm_id, aad_len));
                             match operation_res {
                                 Ok(()) => CommandReturn::success(),
                                 Err(kerr) => CommandReturn::failure(ErrorCode::from(kerr)),
@@ -582,7 +625,7 @@ impl AEADProviderClient for Isle {
         self.pending_for.map(|current_state| {
             let _enter_result = self.app_data.enter(
                 current_state.pid,
-                |ad, kad| {
+                |_ad, kad| {
                     debug!("[isle] writing result back to application buffers");
                     // Copy the ciphertext and tag to the application's buffer.
                     // Use the const-defined HMAC tag length.
@@ -599,8 +642,6 @@ impl AEADProviderClient for Isle {
                         }).flatten();
 
                     if write_res.is_ok() {
-                        // Increment the SSN.
-                        ad.group_oscore_ctxs[0].sender_seq_no += 1;
                         // Notify the application layer that this payload is ready to send.
                         // The total length includes the length of the HMAC tag.
                         let total_len = current_state.message_len as usize + TAG_LEN_MAX;
