@@ -559,6 +559,33 @@ impl SyscallDriver for Isle {
                 }
             },
 
+            // Retrieve application-accessible realm data.
+            (10, realm_idx, data_id) => {
+                const REALM_ID: usize = 0;
+                const HOST_NETWORK_NO: usize = 1;
+
+                self.app_data.enter(
+                    pid,
+                    |ad, _kad| {
+                        if let Some(realm) = ad.group_oscore_ctxs.get(realm_idx) {
+                            match data_id {
+                                REALM_ID => CommandReturn::success_u32(realm.group_id as u32),
+                                HOST_NETWORK_NO => CommandReturn::success_u64(
+                                        (realm.host_number[0] as u64)
+                                        | (realm.host_number[1] as u64) <<  8
+                                        | (realm.host_number[2] as u64) << 16
+                                        | (realm.host_number[3] as u64) << 24
+                                        | (realm.host_number[4] as u64) << 32
+                                        | (realm.host_number[5] as u64) << 40),
+                                _ => CommandReturn::failure(ErrorCode::INVAL),
+                            }
+                        } else {
+                            CommandReturn::failure(ErrorCode::NODEVICE)
+                        }
+                    })
+                    .unwrap_or(CommandReturn::failure(ErrorCode::FAIL))
+            },
+
             _ => CommandReturn::failure(ErrorCode::INVAL),
         }
     }
