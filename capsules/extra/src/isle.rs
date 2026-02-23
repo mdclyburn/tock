@@ -89,6 +89,20 @@ impl GroupOSCOREContext {
         self.master_secret.copy_from_slice(master_secret);
         self.master_salt.copy_from_slice(master_salt);
     }
+
+    pub fn set_realm_id(
+        &mut self,
+        realm_id: u16)
+    {
+        self.group_id = realm_id
+    }
+
+    pub fn set_host_network_no(
+        &mut self,
+        host_network_no: &[u8; 6])
+    {
+        self.host_number.copy_from_slice(host_network_no)
+    }
 }
 
 impl Default for GroupOSCOREContext {
@@ -108,6 +122,7 @@ impl Default for GroupOSCOREContext {
 pub const ISLE_REALMS_MAX: usize = 2;
 
 pub struct AppData {
+    initialized: bool,
     group_oscore_ctxs: [GroupOSCOREContext; ISLE_REALMS_MAX],
 }
 
@@ -136,6 +151,7 @@ impl AppData {
 impl Default for AppData {
     fn default() -> AppData {
         AppData {
+            initialized: false,
             group_oscore_ctxs: [
                 GroupOSCOREContext::default(),
                 GroupOSCOREContext::default(),
@@ -211,6 +227,15 @@ impl Isle {
             aad_buffer: TakeCell::new(aad_buffer),
             tag_buffer: TakeCell::new(tag_buffer),
             nonce_buffer: TakeCell::new(nonce_buffer),
+        }
+    }
+
+    /// Ensure the application's realm data in its grant is set up.
+    fn check_init_realms(&self, pid: ProcessId) -> Result<(), Error> {
+        if !self.app_data.enter(pid, |ad, _kad| ad.initialized)? {
+            self.allocate_grant(pid)
+        } else {
+            Ok(())
         }
     }
 
@@ -474,119 +499,128 @@ impl SyscallDriver for Isle {
         r3: usize,
         pid: ProcessId,
     ) -> CommandReturn {
-        match (command_no, r2, r3) {
-            (0, _r2, _r3) => CommandReturn::success(),
+        // Make sure the application's Isle grant is initialized.
+        if let Err(_kerr) = self.check_init_realms(pid) {
+            CommandReturn::failure(ErrorCode::FAIL)
+        } else {
+            match (command_no, r2, r3) {
+                (0, _r2, _r3) => CommandReturn::success(),
 
-            // Translate CoAP message to Group OSCORE.
-            // TODO: use the source host network number in processing the packet.
-            (1, _dst_host_lower, dst_host_upper) => {
-                // Get the application's provided buffers' lengths.
-                let app_buffer_lens_res = self.app_data.enter(
-                    pid,
-                    |_ad, kad| {
-                        (kad.get_readonly_processbuffer(ALLOW_RO_NO_IN_BUFFER).map(|b| b.len()),
-                         kad.get_readwrite_processbuffer(ALLOW_RW_NO_OUT_BUFFER).map(|b| b.len()))
-                });
+                // Translate CoAP message to Group OSCORE.
+                // TODO: use the source host network number in processing the packet.
+                (1, _dst_host_lower, dst_host_upper) => {
+                    // Get the application's provided buffers' lengths.
+                    let app_buffer_lens_res = self.app_data.enter(
+                        pid,
+                        |_ad, kad| {
+                            (kad.get_readonly_processbuffer(ALLOW_RO_NO_IN_BUFFER).map(|b| b.len()),
+                             kad.get_readwrite_processbuffer(ALLOW_RW_NO_OUT_BUFFER).map(|b| b.len()))
+                        });
 
-                match app_buffer_lens_res {
-                    // Check that the buffers are appropriately sized.
-                    // The application's ciphertext buffer must both
-                    // be at least as long as the plaintext buffer
-                    // and fit the AEAD provider's padding requirements.
-                    Ok((Ok(pt_buffer_len), Ok(ct_buffer_len))) => {
-                        let pad = self.aead.padding_size();
-                        let padding_byte_count = pad - (pt_buffer_len % pad);
+                    match app_buffer_lens_res {
+                        // Check that the buffers are appropriately sized.
+                        // The application's ciphertext buffer must both
+                        // be at least as long as the plaintext buffer
+                        // and fit the AEAD provider's padding requirements.
+                        Ok((Ok(pt_buffer_len), Ok(ct_buffer_len))) => {
+                            let pad = self.aead.padding_size();
+                            let padding_byte_count = pad - (pt_buffer_len % pad);
 
-                        // debug!("[isle] {} >= {} + {} ?",
-                        //        ct_buffer_len,
-                        //        pt_buffer_len,
-                        //        padding_byte_count);
-                        if ct_buffer_len >= pt_buffer_len + padding_byte_count {
-                            let realm_id = (dst_host_upper >> 16) as u16;
-                            let operation_res = self.prepare_crypt_op(pid, realm_id, true)
-                                .and_then(|aad_len| self.encrypt_send(pid, realm_id, aad_len));
-                            match operation_res {
-                                Ok(_msg_len) => {
-                                    CommandReturn::success()
-                                },
+                            // debug!("[isle] {} >= {} + {} ?",
+                            //        ct_buffer_len,
+                            //        pt_buffer_len,
+                            //        padding_byte_count);
+                            if ct_buffer_len >= pt_buffer_len + padding_byte_count {
+                                let realm_id = (dst_host_upper >> 16) as u16;
+                                let operation_res = self.prepare_crypt_op(pid, realm_id, true)
+                                    .and_then(|aad_len| self.encrypt_send(pid, realm_id, aad_len));
+                                match operation_res {
+                                    Ok(_msg_len) => {
+                                        CommandReturn::success()
+                                    },
 
-                                Err(kerr) => CommandReturn::failure(ErrorCode::from(kerr)),
+                                    Err(kerr) => CommandReturn::failure(ErrorCode::from(kerr)),
+                                }
+                            } else {
+                                CommandReturn::failure(ErrorCode::NOMEM)
                             }
-                        } else {
+                        },
+
+                        // Either or both of the buffers were inaccessible from the grant operation.
+                        // It does not matter why the operation could not get the buffer lengths,
+                        // if the application is around, we will return NOMEM.
+                        _ => CommandReturn::failure(ErrorCode::NOMEM),
+                    }
+                },
+
+                // Translate a received message from Group OSCORE to CoAP.
+                // TODO: use the source host network number in processing the packet.
+                (2, _src_host_lower, src_host_upper) => {
+                    // Get the application's buffers' lengths.
+                    let app_buffer_lens_res = self.app_data.enter(
+                        pid,
+                        |_ad, kad| {
+                            (kad.get_readonly_processbuffer(ALLOW_RO_NO_IN_BUFFER).map(|b| b.len()),
+                             kad.get_readwrite_processbuffer(ALLOW_RW_NO_OUT_BUFFER).map(|b| b.len()))
+                        });
+
+                    // Check that buffers are appropriately sized.
+                    // The application's plaintext buffer must be at least the size of the ciphertext buffer.
+                    match app_buffer_lens_res {
+                        Ok((Ok(ct_buffer_len), Ok(pt_buffer_len))) => {
+                            if pt_buffer_len < ct_buffer_len {
+                                CommandReturn::failure(ErrorCode::NOMEM)
+                            } else {
+                                let realm_id = (src_host_upper >> 16) as u16;
+                                let operation_res = self.prepare_crypt_op(pid, realm_id, false)
+                                    .and_then(|aad_len| self.decrypt_recv(pid, realm_id, aad_len));
+                                match operation_res {
+                                    Ok(()) => CommandReturn::success(),
+                                    Err(kerr) => CommandReturn::failure(ErrorCode::from(kerr)),
+                                }
+                            }
+                        },
+
+                        _ => {
+                            debug!("[isle] application did not provide buffers");
                             CommandReturn::failure(ErrorCode::NOMEM)
-                        }
-                    },
+                        },
+                    }
+                },
 
-                    // Either or both of the buffers were inaccessible from the grant operation.
-                    // It does not matter why the operation could not get the buffer lengths,
-                    // if the application is around, we will return NOMEM.
-                    _ => CommandReturn::failure(ErrorCode::NOMEM),
-                }
-            },
+                // Retrieve application-accessible realm data.
+                (10, realm_idx, data_id) => {
+                    const REALM_ID: usize = 0;
+                    const HOST_NETWORK_NO: usize = 1;
 
-            // Translate a received message from Group OSCORE to CoAP.
-            // TODO: use the source host network number in processing the packet.
-            (2, _src_host_lower, src_host_upper) => {
-                // Get the application's buffers' lengths.
-                let app_buffer_lens_res = self.app_data.enter(
-                    pid,
-                    |_ad, kad| {
-                        (kad.get_readonly_processbuffer(ALLOW_RO_NO_IN_BUFFER).map(|b| b.len()),
-                         kad.get_readwrite_processbuffer(ALLOW_RW_NO_OUT_BUFFER).map(|b| b.len()))
-                    });
-
-                // Check that buffers are appropriately sized.
-                // The application's plaintext buffer must be at least the size of the ciphertext buffer.
-                match app_buffer_lens_res {
-                    Ok((Ok(ct_buffer_len), Ok(pt_buffer_len))) => {
-                        if pt_buffer_len < ct_buffer_len {
-                            CommandReturn::failure(ErrorCode::NOMEM)
-                        } else {
-                            let realm_id = (src_host_upper >> 16) as u16;
-                            let operation_res = self.prepare_crypt_op(pid, realm_id, false)
-                                .and_then(|aad_len| self.decrypt_recv(pid, realm_id, aad_len));
-                            match operation_res {
-                                Ok(()) => CommandReturn::success(),
-                                Err(kerr) => CommandReturn::failure(ErrorCode::from(kerr)),
+                    self.app_data.enter(
+                        pid,
+                        |ad, _kad| {
+                            if let Some(realm) = ad.group_oscore_ctxs.get(realm_idx) {
+                                if realm.group_id == 0xFFFF {
+                                    CommandReturn::failure(ErrorCode::NODEVICE)
+                                } else {
+                                    match data_id {
+                                        REALM_ID => CommandReturn::success_u32(realm.group_id as u32),
+                                        HOST_NETWORK_NO => CommandReturn::success_u64(
+                                            (realm.host_number[0] as u64)
+                                                | (realm.host_number[1] as u64) <<  8
+                                                | (realm.host_number[2] as u64) << 16
+                                                | (realm.host_number[3] as u64) << 24
+                                                | (realm.host_number[4] as u64) << 32
+                                                | (realm.host_number[5] as u64) << 40),
+                                        _ => CommandReturn::failure(ErrorCode::INVAL),
+                                    }
+                                }
+                            } else {
+                                CommandReturn::failure(ErrorCode::NODEVICE)
                             }
-                        }
-                    },
+                        })
+                        .unwrap_or(CommandReturn::failure(ErrorCode::FAIL))
+                },
 
-                    _ => {
-                        debug!("[isle] application did not provide buffers");
-                        CommandReturn::failure(ErrorCode::NOMEM)
-                    },
-                }
-            },
-
-            // Retrieve application-accessible realm data.
-            (10, realm_idx, data_id) => {
-                const REALM_ID: usize = 0;
-                const HOST_NETWORK_NO: usize = 1;
-
-                self.app_data.enter(
-                    pid,
-                    |ad, _kad| {
-                        if let Some(realm) = ad.group_oscore_ctxs.get(realm_idx) {
-                            match data_id {
-                                REALM_ID => CommandReturn::success_u32(realm.group_id as u32),
-                                HOST_NETWORK_NO => CommandReturn::success_u64(
-                                        (realm.host_number[0] as u64)
-                                        | (realm.host_number[1] as u64) <<  8
-                                        | (realm.host_number[2] as u64) << 16
-                                        | (realm.host_number[3] as u64) << 24
-                                        | (realm.host_number[4] as u64) << 32
-                                        | (realm.host_number[5] as u64) << 40),
-                                _ => CommandReturn::failure(ErrorCode::INVAL),
-                            }
-                        } else {
-                            CommandReturn::failure(ErrorCode::NODEVICE)
-                        }
-                    })
-                    .unwrap_or(CommandReturn::failure(ErrorCode::FAIL))
-            },
-
-            _ => CommandReturn::failure(ErrorCode::INVAL),
+                _ => CommandReturn::failure(ErrorCode::INVAL),
+            }
         }
     }
 
