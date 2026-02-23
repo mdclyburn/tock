@@ -251,6 +251,7 @@ impl Isle {
         let aad_len = self.build_aad(pid, realm_id, is_send)?;
 
         // Construct the nonce.
+        // debug!("[isle] constructing nonce");
         self.app_data.enter(
             pid,
             |ad, _kad| {
@@ -271,6 +272,7 @@ impl Isle {
 
         // Copy the message into the capsule buffer.
         // Assign the right buffer depending on if this is a send or receive.
+        // debug!("[isle] copying payload to capsule buffer");
         let (src_buffer, _dst_buffer) = if is_send {
             (&self.pt_buffer, &self.ct_buffer)
         } else {
@@ -303,6 +305,7 @@ impl Isle {
         is_send: bool
     ) -> Result<usize, Error>
     {
+        // debug!("[isle] constructing the AAD");
         self.aad_buffer.map_or(
             Err(Error::AlreadyInUse),
             |aad_buffer| {
@@ -317,7 +320,9 @@ impl Isle {
                     self.app_data.enter(
                         pid,
                         |ad, _kad| {
+                            // debug!("[isle] realm ID = {:x}", realm_id);
                             let realm = ad.get_realm(realm_id)?;
+                            // debug!("[isle] copying host number to capsule AAD buffer");
                             aad_buffer[AAD_SENDER_ID_OFFSET..AAD_SENDER_ID_OFFSET+SENDER_ID_LEN]
                                 .copy_from_slice(&realm.host_number);
                             let ssn = &realm.sender_seq_no;
@@ -331,6 +336,7 @@ impl Isle {
                                 .copy_from_slice(&piv_buffer);
 
                             // Return the length of the AAD.
+                            // debug!("[isle] done copying, length of AAD = {}", AAD_PARTIAL_IV_OFFSET + PARTIAL_IV_LEN);
                             Ok(AAD_PARTIAL_IV_OFFSET + PARTIAL_IV_LEN)
                         })
                 } else {
@@ -364,6 +370,7 @@ impl Isle {
     {
         // Set up pending state here so that there cannot be a race between
         // setting up the pending state and completing the encryption operation.
+        // debug!("[isle] setting up pending state");
         let (raw_message_len, message_len) = self.app_data.enter(
             pid,
             |_ad, kad| {
@@ -372,13 +379,14 @@ impl Isle {
                     .map(|b| (b.len(), b.len() + (padding_size - b.len() % padding_size)))
             })
             .flatten()?;
-        debug!("[isle] encrypting {} B message ({} B padded)", raw_message_len, message_len);
+        // debug!("[isle] encrypting {} B message ({} B padded)", raw_message_len, message_len);
         self.pending_for.set(PendingState {
             pid,
             message_len: message_len as u8,
         });
 
         // Get the key from the application's grant data.
+        // debug!("[isle] fetching ckey");
         let mut ckey = [0u8; CKEY_LEN_MAX];
         self.app_data.enter(
             pid,
@@ -390,6 +398,7 @@ impl Isle {
             })??;
 
         // Perform the encryption.
+        // debug!("[isle] calling encryption provider");
         let encrypt_result = self.aead.encrypt(
             &ckey,
             self.nonce_buffer.take().ok_or(Error::AlreadyInUse)?,
@@ -507,8 +516,8 @@ impl SyscallDriver for Isle {
                 (0, _r2, _r3) => CommandReturn::success(),
 
                 // Translate CoAP message to Group OSCORE.
-                // TODO: use the source host network number in processing the packet.
-                (1, _dst_host_lower, dst_host_upper) => {
+                (1, dst_host_upper, _dst_host_lower) => {
+                    // debug!("[isle] application wants to send to {:x} {:x}", dst_host_lower, dst_host_upper);
                     // Get the application's provided buffers' lengths.
                     let app_buffer_lens_res = self.app_data.enter(
                         pid,
@@ -531,7 +540,8 @@ impl SyscallDriver for Isle {
                             //        pt_buffer_len,
                             //        padding_byte_count);
                             if ct_buffer_len >= pt_buffer_len + padding_byte_count {
-                                let realm_id = (dst_host_upper >> 16) as u16;
+                                let realm_id = (dst_host_upper.to_be_bytes()[3] as u16)
+                                    | ((dst_host_upper.to_be_bytes()[2] as u16) << 8);
                                 let operation_res = self.prepare_crypt_op(pid, realm_id, true)
                                     .and_then(|aad_len| self.encrypt_send(pid, realm_id, aad_len));
                                 match operation_res {
