@@ -669,6 +669,8 @@ impl SyscallDriver for Isle {
                 for b in &mut crypt_buffer[0..16] { *b ^= ctx.master_salt[0]; }
                 ctx.hash_key.copy_from_slice(&crypt_buffer[0..16]);
             }
+
+            ad.initialized = true;
         })
     }
 }
