@@ -259,10 +259,10 @@ impl Isle {
                     let realm = ad.get_realm(realm_id)?;
                     let host_number_bytes = &realm.host_number;
 
-                    buf[0..host_number_bytes.len()]
+                    buf[0..2]
+                        .copy_from_slice(&realm.group_id.to_be_bytes());
+                    buf[2..2+host_number_bytes.len()]
                         .copy_from_slice(host_number_bytes);
-                    buf[host_number_bytes.len()..SENDER_ID_LEN]
-                        .copy_from_slice(&realm.host_number);
                     buf[SENDER_ID_LEN..SENDER_ID_LEN+PARTIAL_IV_LEN]
                         .copy_from_slice(&realm.sender_seq_no.to_be_bytes());
 
@@ -323,7 +323,9 @@ impl Isle {
                             // debug!("[isle] realm ID = {:x}", realm_id);
                             let realm = ad.get_realm(realm_id)?;
                             // debug!("[isle] copying host number to capsule AAD buffer");
-                            aad_buffer[AAD_SENDER_ID_OFFSET..AAD_SENDER_ID_OFFSET+SENDER_ID_LEN]
+                            aad_buffer[AAD_SENDER_ID_OFFSET..AAD_SENDER_ID_OFFSET+2]
+                                .copy_from_slice(&realm.group_id.to_be_bytes());
+                            aad_buffer[AAD_SENDER_ID_OFFSET+2..AAD_SENDER_ID_OFFSET+(realm.host_number.len())+2]
                                 .copy_from_slice(&realm.host_number);
                             let ssn = &realm.sender_seq_no;
                             let piv_buffer = [
@@ -371,7 +373,7 @@ impl Isle {
         // Set up pending state here so that there cannot be a race between
         // setting up the pending state and completing the encryption operation.
         // debug!("[isle] setting up pending state");
-        let (raw_message_len, message_len) = self.app_data.enter(
+        let (_raw_message_len, message_len) = self.app_data.enter(
             pid,
             |_ad, kad| {
                 let padding_size = self.aead.padding_size();
