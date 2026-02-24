@@ -77,6 +77,12 @@ const ISLE_REALMS_MAX: usize = 2;
 const ISLE_NULL_REALM_ID: [u8; ISLE_REALM_ID_LEN] = [0xFF; ISLE_REALM_ID_LEN];
 
 pub struct Realm {
+    // Structure of bytes:
+    // <- LSB -- -- -- -- -- -- -- MSB ->
+    //    [ 0  1  2  3  4  5  7  6   ]
+    //
+    // Ordering for reconstructing address (MSB first):
+    //    [ 7  6  5  4  3  2  1  0   ]
     iid: [u8; IID_LEN],
     master_secret: [u8; 16],
     master_salt: [u8; 8],
@@ -336,8 +342,12 @@ impl Isle {
                             // debug!("[isle] realm ID = {:x}", realm_id);
                             let realm = ad.get_realm(realm_id)?;
                             // debug!("[isle] copying IID to capsule AAD buffer");
+                            let mut sender_id = [0u8; 8];
+                            sender_id[0] = realm.iid[7];
+                            sender_id[1] = realm.iid[6];
+                            sender_id[2..8].copy_from_slice(&realm.iid[0..6]);
                             aad_buffer[AAD_SENDER_ID_OFFSET..AAD_SENDER_ID_OFFSET+realm.iid.len()]
-                                .copy_from_slice(&realm.iid);
+                                .copy_from_slice(&sender_id);
                             let ssn = &realm.sender_seq_no;
                             let piv_buffer = [
                                 (ssn >>  24) as u8,
