@@ -56,7 +56,7 @@ const PARTIAL_IV_LEN: usize = 4;
 const ALLOW_RO_NO_IN_BUFFER: usize = 0;
 /// Allow buffer number for the partial IV.
 const ALLOW_RO_NO_RECV_PARTIAL_IV: usize = 1;
-/// Host number of the received message.
+/// Allow buffer number of the received message.
 const ALLOW_RO_NO_RECV_SRC_HOST: usize = 2;
 /// Allow buffer number for output message.
 const ALLOW_RW_NO_OUT_BUFFER: usize = 0;
@@ -68,15 +68,16 @@ pub trait ISLEConfigurationProvider {
     fn init_context(&self, context: &mut [GroupOSCOREContext]);
 }
 
-pub const ISLE_REALM_ID_OFFSET: usize = 6;
-pub const ISLE_REALM_ID_LEN: usize = 2;
-pub const ISLE_REALM_ADDR_OFFSET: usize = 0;
-pub const ISLE_REALM_ADDR_LEN: usize = 6;
-pub const ISLE_REALMS_MAX: usize = 2;
+const ISLE_REALM_ID_OFFSET: usize = 6;
+const ISLE_REALM_ID_LEN: usize = 2;
+const ISLE_REALM_ADDR_OFFSET: usize = 0;
+const ISLE_REALM_ADDR_LEN: usize = 6;
+const ISLE_REALMS_MAX: usize = 2;
+
 const ISLE_NULL_REALM_ID: [u8; ISLE_REALM_ID_LEN] = [0xFF; ISLE_REALM_ID_LEN];
 
 pub struct GroupOSCOREContext {
-    host_number: [u8; IID_LEN],
+    iid: [u8; IID_LEN],
     master_secret: [u8; 16],
     master_salt: [u8; 8],
     message_key: [u8; 16],
@@ -99,29 +100,29 @@ impl GroupOSCOREContext {
     }
 
     fn is_null(&self) -> bool {
-        self.host_number[ISLE_REALM_ID_OFFSET..ISLE_REALM_ID_OFFSET+ISLE_REALM_ID_LEN]
+        self.iid[ISLE_REALM_ID_OFFSET..ISLE_REALM_ID_OFFSET+ISLE_REALM_ID_LEN]
             == ISLE_NULL_REALM_ID
     }
 
     fn realm_id(&self) -> u16 {
-        self.host_number[ISLE_REALM_ID_OFFSET] as u16
-            | (self.host_number[ISLE_REALM_ID_OFFSET+1] as u16) << 8
+        self.iid[ISLE_REALM_ID_OFFSET] as u16
+            | (self.iid[ISLE_REALM_ID_OFFSET+1] as u16) << 8
     }
 
     pub fn set_realm_id(
         &mut self,
         realm_id: u16)
     {
-        self.host_number[ISLE_REALM_ID_OFFSET..ISLE_REALM_ID_OFFSET+ISLE_REALM_ID_LEN]
+        self.iid[ISLE_REALM_ID_OFFSET..ISLE_REALM_ID_OFFSET+ISLE_REALM_ID_LEN]
             .copy_from_slice(&realm_id.to_be_bytes());
     }
 
-    pub fn set_host_number(
+    pub fn set_network_no(
         &mut self,
-        host_number: &[u8; 6])
+        network_no: &[u8; 6])
     {
-        self.host_number[ISLE_REALM_ADDR_OFFSET..ISLE_REALM_ADDR_OFFSET+ISLE_REALM_ADDR_LEN]
-            .copy_from_slice(host_number)
+        self.iid[ISLE_REALM_ADDR_OFFSET..ISLE_REALM_ADDR_OFFSET+ISLE_REALM_ADDR_LEN]
+            .copy_from_slice(network_no)
     }
 }
 
@@ -132,7 +133,7 @@ impl Default for GroupOSCOREContext {
             master_salt: [0x00; 8],
             message_key: [0x00; 16],
             hash_key: [0x00; 16],
-            host_number: [
+            iid: [
                 0xFF, 0xFF, 0x00, 0x00,
                 0x00, 0x00, 0x00, 0x00,
             ],
@@ -150,7 +151,7 @@ impl AppData {
     fn get_realm(&self, realm_id: u16) -> Result<&GroupOSCOREContext, Error> {
         let realm_id = realm_id.to_be_bytes();
         for realm in &self.group_oscore_ctxs {
-            if realm.host_number[ISLE_REALM_ID_OFFSET..ISLE_REALM_ID_OFFSET+ISLE_REALM_ID_LEN] == realm_id {
+            if realm.iid[ISLE_REALM_ID_OFFSET..ISLE_REALM_ID_OFFSET+ISLE_REALM_ID_LEN] == realm_id {
                 return Ok(realm);
             }
         }
@@ -161,7 +162,7 @@ impl AppData {
     fn get_realm_mut(&mut self, realm_id: u16) -> Result<&mut GroupOSCOREContext, Error> {
         let realm_id = realm_id.to_be_bytes();
         for realm in &mut self.group_oscore_ctxs {
-            if realm.host_number[ISLE_REALM_ID_OFFSET..ISLE_REALM_ID_OFFSET+ISLE_REALM_ID_LEN] == realm_id {
+            if realm.iid[ISLE_REALM_ID_OFFSET..ISLE_REALM_ID_OFFSET+ISLE_REALM_ID_LEN] == realm_id {
                 return Ok(realm);
             }
         }
@@ -279,11 +280,11 @@ impl Isle {
             |ad, _kad| {
                 self.nonce_buffer.map_or(Err(Error::AlreadyInUse), |buf| {
                     let realm = ad.get_realm(realm_id)?;
-                    let host_number_bytes = &realm.host_number;
+                    let iid_bytes = &realm.iid;
 
-                    buf[0..realm.host_number.len()]
-                        .copy_from_slice(host_number_bytes);
-                    buf[host_number_bytes.len()..host_number_bytes.len()+realm.sender_seq_no.to_be_bytes().len()]
+                    buf[0..realm.iid.len()]
+                        .copy_from_slice(iid_bytes);
+                    buf[iid_bytes.len()..iid_bytes.len()+realm.sender_seq_no.to_be_bytes().len()]
                         .copy_from_slice(&realm.sender_seq_no.to_be_bytes());
 
                     Ok(())
@@ -333,7 +334,7 @@ impl Isle {
                 aad_buffer[0..AAD_PREFIX.len()].copy_from_slice(&AAD_PREFIX);
 
                 // Copy the...
-                // - sender ID (in this implementation, the host number).
+                // - sender ID (in this implementation, the IID).
                 // - partial IV (i.e., the sender sequence no.).
                 if is_send {
                     // These values come from this device.
@@ -342,11 +343,9 @@ impl Isle {
                         |ad, _kad| {
                             // debug!("[isle] realm ID = {:x}", realm_id);
                             let realm = ad.get_realm(realm_id)?;
-                            // debug!("[isle] copying host number to capsule AAD buffer");
-                            aad_buffer[AAD_SENDER_ID_OFFSET..AAD_SENDER_ID_OFFSET+2]
-                                .copy_from_slice(&realm.host_number[0..2]);
-                            aad_buffer[AAD_SENDER_ID_OFFSET+2..AAD_SENDER_ID_OFFSET+(realm.host_number.len())+2]
-                                .copy_from_slice(&realm.host_number);
+                            // debug!("[isle] copying IID to capsule AAD buffer");
+                            aad_buffer[AAD_SENDER_ID_OFFSET..AAD_SENDER_ID_OFFSET+realm.iid.len()]
+                                .copy_from_slice(&realm.iid);
                             let ssn = &realm.sender_seq_no;
                             let piv_buffer = [
                                 (ssn >>  24) as u8,
@@ -586,7 +585,7 @@ impl SyscallDriver for Isle {
                 },
 
                 // Translate a received message from Group OSCORE to CoAP.
-                // TODO: use the source host network number in processing the packet.
+                // TODO: use the source IID in processing the packet.
                 (2, _src_host_lower, src_host_upper) => {
                     // Get the application's buffers' lengths.
                     let app_buffer_lens_res = self.app_data.enter(
@@ -623,7 +622,7 @@ impl SyscallDriver for Isle {
                 // Retrieve application-accessible realm data.
                 (10, realm_idx, data_id) => {
                     const REALM_ID: usize = 0;
-                    const HOST_NUMBER: usize = 1;
+                    const IID: usize = 1;
 
                     self.app_data.enter(
                         pid,
@@ -634,13 +633,13 @@ impl SyscallDriver for Isle {
                                 } else {
                                     match data_id {
                                         REALM_ID => CommandReturn::success_u32(realm.realm_id() as u32),
-                                        HOST_NUMBER => CommandReturn::success_u64(
-                                            (realm.host_number[0] as u64)
-                                                | (realm.host_number[1] as u64) <<  8
-                                                | (realm.host_number[2] as u64) << 16
-                                                | (realm.host_number[3] as u64) << 24
-                                                | (realm.host_number[4] as u64) << 32
-                                                | (realm.host_number[5] as u64) << 40),
+                                        IID => CommandReturn::success_u64(
+                                            (realm.iid[0] as u64)
+                                                | (realm.iid[1] as u64) <<  8
+                                                | (realm.iid[2] as u64) << 16
+                                                | (realm.iid[3] as u64) << 24
+                                                | (realm.iid[4] as u64) << 32
+                                                | (realm.iid[5] as u64) << 40),
                                         _ => CommandReturn::failure(ErrorCode::INVAL),
                                     }
                                 }
@@ -672,7 +671,7 @@ impl SyscallDriver for Isle {
                 //  8 B <= salt
                 // 16 B <= secret
                 //  2 B <= key length
-                //  8 B <= sender ID <= IP6 host number
+                //  8 B <= sender ID <= IP6 IID
                 //  2 B <= group ID
                 //  2 B <= encryption algorithm ID
                 //  3 B <= "key"
@@ -681,9 +680,9 @@ impl SyscallDriver for Isle {
                 kd_input[0..8].copy_from_slice(&ctx.master_salt);
                 kd_input[8..24].copy_from_slice(&ctx.master_secret);
                 kd_input[24..26].copy_from_slice(&CKEY_LEN_BITS.to_be_bytes());
-                kd_input[26..28].copy_from_slice(&ctx.host_number[ISLE_REALM_ID_OFFSET..ISLE_REALM_ID_OFFSET+ISLE_REALM_ID_LEN]);
-                kd_input[28..34].copy_from_slice(&ctx.host_number[ISLE_REALM_ADDR_OFFSET..ISLE_REALM_ADDR_OFFSET+ISLE_REALM_ADDR_LEN]);
-                kd_input[34..36].copy_from_slice(&ctx.host_number[ISLE_REALM_ID_OFFSET..ISLE_REALM_ID_OFFSET+ISLE_REALM_ID_LEN]);
+                kd_input[26..28].copy_from_slice(&ctx.iid[ISLE_REALM_ID_OFFSET..ISLE_REALM_ID_OFFSET+ISLE_REALM_ID_LEN]);
+                kd_input[28..34].copy_from_slice(&ctx.iid[ISLE_REALM_ADDR_OFFSET..ISLE_REALM_ADDR_OFFSET+ISLE_REALM_ADDR_LEN]);
+                kd_input[34..36].copy_from_slice(&ctx.iid[ISLE_REALM_ID_OFFSET..ISLE_REALM_ID_OFFSET+ISLE_REALM_ID_LEN]);
                 // ENG: specific encryption algorithm ID intentionally not filled in.
                 kd_input[36..38].copy_from_slice(&[00, 00]);
                 kd_input[38..41].copy_from_slice(&['k' as u8, 'e' as u8, 'y' as u8]);
