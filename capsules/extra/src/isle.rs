@@ -151,7 +151,7 @@ pub struct AppData {
 
 impl AppData {
     fn get_realm(&self, realm_id: u16) -> Result<&Realm, Error> {
-        let realm_id = realm_id.to_be_bytes();
+        let realm_id = realm_id.to_le_bytes();
         for realm in &self.realm_ctxs {
             if realm.iid[ISLE_REALM_ID_OFFSET..ISLE_REALM_ID_OFFSET+ISLE_REALM_ID_LEN] == realm_id {
                 return Ok(realm);
@@ -162,7 +162,7 @@ impl AppData {
     }
 
     fn get_realm_mut(&mut self, realm_id: u16) -> Result<&mut Realm, Error> {
-        let realm_id = realm_id.to_be_bytes();
+        let realm_id = realm_id.to_le_bytes();
         for realm in &mut self.realm_ctxs {
             if realm.iid[ISLE_REALM_ID_OFFSET..ISLE_REALM_ID_OFFSET+ISLE_REALM_ID_LEN] == realm_id {
                 return Ok(realm);
