@@ -124,7 +124,9 @@ pub unsafe fn main() {
         nrf52840::ieee802154_radio::Radio,
     ));
 
+    //--------------------------------------------------------------------------
     // ISLE
+    //--------------------------------------------------------------------------
     use capsules_extra::isle;
     use kernel::crypto::provider::AEADProvider;
 
@@ -135,7 +137,7 @@ pub unsafe fn main() {
     let isle = static_init!(
         capsules_extra::isle::Isle,
         capsules_extra::isle::Isle::new(
-            static_init!(isle_config::Fixed, isle_config::Fixed),
+            static_init!(isle_config::FICRBasedIID, isle_config::FICRBasedIID::new(0x5AFE)),
             board_kernel.create_grant(
                 capsules_extra::isle::DRIVER_NO,
                 &create_capability!(capabilities::MemoryAllocationCapability)),

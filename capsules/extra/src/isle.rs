@@ -109,14 +109,16 @@ impl Realm {
             | (self.iid[ISLE_REALM_ID_OFFSET+1] as u16) << 8
     }
 
+    // TODO: remove from pub visibility
     pub fn set_realm_id(
         &mut self,
         realm_id: u16)
     {
         self.iid[ISLE_REALM_ID_OFFSET..ISLE_REALM_ID_OFFSET+ISLE_REALM_ID_LEN]
-            .copy_from_slice(&realm_id.to_be_bytes());
+            .copy_from_slice(&realm_id.to_le_bytes());
     }
 
+    // TODO: remove from pub visibility, set through init()
     pub fn set_network_no(
         &mut self,
         network_no: &[u8; 6])
