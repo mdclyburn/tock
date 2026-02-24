@@ -27,7 +27,7 @@ impl ISLEConfigurationProvider for Fixed {
             ]);
 
         context[0].set_realm_id(0x5AFE);
-        context[0].set_host_network_no(
+        context[0].set_host_number(
             &[0xEA, 0xA9, 0x34, 0x52, 0x0A, 0x1B]);
     }
 }
