@@ -548,13 +548,14 @@ impl SyscallDriver for Isle {
                             let pad = self.aead.padding_size();
                             let padding_byte_count = pad - (pt_buffer_len % pad);
 
-                            // debug!("[isle] {} >= {} + {} ?",
-                            //        ct_buffer_len,
-                            //        pt_buffer_len,
-                            //        padding_byte_count);
+                            debug!("[isle] {} >= {} + {} ?",
+                                   ct_buffer_len,
+                                   pt_buffer_len,
+                                   padding_byte_count);
                             if ct_buffer_len >= pt_buffer_len + padding_byte_count {
-                                let realm_id = (dst_host_upper.to_be_bytes()[3] as u16)
-                                    | ((dst_host_upper.to_be_bytes()[2] as u16) << 8);
+                                // Numbers from the network stack are big-endian.
+                                // So, the realm ID is actually in the lower two bytes.
+                                let realm_id = ((dst_host_upper & 0xFFFF) as u16).swap_bytes();
                                 let operation_res = self.prepare_crypt_op(pid, realm_id, true)
                                     .and_then(|aad_len| self.encrypt_send(pid, realm_id, aad_len));
                                 match operation_res {
