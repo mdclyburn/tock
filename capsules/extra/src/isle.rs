@@ -54,12 +54,12 @@ const PARTIAL_IV_LEN: usize = 4;
 
 /// Allow buffer number for input messages.
 const ALLOW_RO_NO_IN_BUFFER: usize = 0;
-/// Allow buffer number for the partial IV.
-const ALLOW_RO_NO_RECV_PARTIAL_IV: usize = 1;
 /// Allow buffer number of the received message.
-const ALLOW_RO_NO_RECV_SRC_HOST: usize = 2;
+const ALLOW_RO_NO_RECV_SRC_HOST: usize = 1;
 /// Allow buffer number for output message.
 const ALLOW_RW_NO_OUT_BUFFER: usize = 0;
+/// Allow buffer number for the partial IV.
+const ALLOW_RW_NO_RECV_PARTIAL_IV: usize = 1;
 
 /// Upcall number for indicating completed processing of a message.
 const UPCALL_OUT_MESSAGE_READY: usize = 0;
@@ -212,7 +212,7 @@ const AAD_PARTIAL_IV_OFFSET: usize = AAD_SENDER_ID_OFFSET + SENDER_ID_LEN;
 pub struct Isle {
     config_provider: &'static dyn ISLEConfigurationProvider,
     aead: &'static dyn AEADProvider,
-    app_data: Grant<AppData, UpcallCount<1>, AllowRoCount<3>, AllowRwCount<1>>,
+    app_data: Grant<AppData, UpcallCount<1>, AllowRoCount<2>, AllowRwCount<2>>,
     // TODO: move this to the application's grant data.
     // Initialize this in allocate_grant() with the application's IP6 address.
     pending_for: OptionalCell<PendingState>,
@@ -229,7 +229,7 @@ impl Isle {
     /// Create a new instance.
     pub fn new(
         config_provider: &'static dyn ISLEConfigurationProvider,
-        grant_data: Grant<AppData, UpcallCount<1>, AllowRoCount<3>, AllowRwCount<1>>,
+        grant_data: Grant<AppData, UpcallCount<1>, AllowRoCount<2>, AllowRwCount<2>>,
         aead: &'static dyn AEADProvider,
         pt_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
         ct_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
@@ -338,7 +338,7 @@ impl Isle {
                     // These values come from this device.
                     self.app_data.enter(
                         pid,
-                        |ad, _kad| {
+                        |ad, kad| {
                             // debug!("[isle] realm ID = {:x}", realm_id);
                             let realm = ad.get_realm(realm_id)?;
                             // debug!("[isle] copying IID to capsule AAD buffer");
@@ -357,6 +357,26 @@ impl Isle {
                             ];
                             aad_buffer[AAD_PARTIAL_IV_OFFSET..AAD_PARTIAL_IV_OFFSET+PARTIAL_IV_LEN]
                                 .copy_from_slice(&piv_buffer);
+                            // Give the pIV to the network stack as well, which will place it into the packet.
+                            // kad.get_readwrite_processbuffer(ALLOW_RW_NO_RECV_PARTIAL_IV)?
+                            //     .mut_enter(
+                            //         |b| {
+                            //             debug!("{} vs. {}", b.len(), piv_buffer.len());
+                            //             b.copy_from_slice(&piv_buffer);
+                            //     })?;
+                            kad.get_readwrite_processbuffer(ALLOW_RW_NO_RECV_PARTIAL_IV)?
+                                .mut_enter(|b| b.copy_from_slice(&piv_buffer))?;
+
+                            debug!("AAD:");
+                            let (aad_chunks, aad_rem) = aad_buffer.as_chunks::<4>();
+                            for chunk in aad_chunks {
+                                debug!("{:02x} {:02x} {:02x} {:02x}",
+                                       chunk[0], chunk[1],
+                                       chunk[2], chunk[3]);
+                            }
+                            for x in aad_rem {
+                                debug!("{:02x}", x);
+                            }
 
                             // Return the length of the AAD.
                             // debug!("[isle] done copying, length of AAD = {}", AAD_PARTIAL_IV_OFFSET + PARTIAL_IV_LEN);
@@ -368,11 +388,22 @@ impl Isle {
                     self.app_data.enter(
                         pid,
                         |_ad, kad| {
-                            kad.get_readonly_processbuffer(ALLOW_RO_NO_RECV_PARTIAL_IV)?
-                                .enter(|b| b.copy_to_slice(&mut aad_buffer[AAD_PARTIAL_IV_OFFSET..AAD_PARTIAL_IV_OFFSET+PARTIAL_IV_LEN]))?;
-
                             kad.get_readonly_processbuffer(ALLOW_RO_NO_RECV_SRC_HOST)?
                                 .enter(|b| b.copy_to_slice(&mut aad_buffer[AAD_SENDER_ID_OFFSET..AAD_SENDER_ID_OFFSET+SENDER_ID_LEN]))?;
+
+                            kad.get_readwrite_processbuffer(ALLOW_RW_NO_RECV_PARTIAL_IV)?
+                                .enter(|b| b.copy_to_slice(&mut aad_buffer[AAD_PARTIAL_IV_OFFSET..AAD_PARTIAL_IV_OFFSET+PARTIAL_IV_LEN]))?;
+
+                            debug!("AAD:");
+                            let (aad_chunks, aad_rem) = aad_buffer.as_chunks::<4>();
+                            for chunk in aad_chunks {
+                                debug!("{:02x} {:02x} {:02x} {:02x}",
+                                       chunk[0], chunk[1],
+                                       chunk[2], chunk[3]);
+                            }
+                            for x in aad_rem {
+                                debug!("{:02x}", x);
+                            }
 
 
                             // Return the length of the AAD.
