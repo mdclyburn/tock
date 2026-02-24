@@ -90,11 +90,19 @@ impl Realm {
     pub fn init(
         &mut self,
         realm_id: u16,
+        host_network_no: &[u8; 6],
         master_secret: &[u8; 16],
         master_salt: &[u8; 8],
     )
     {
-        self.set_realm_id(realm_id);
+        // Set the IID, composed of...
+        // ... the realm ID (upper 16 bits)...
+        self.iid[ISLE_REALM_ID_OFFSET..ISLE_REALM_ID_OFFSET+ISLE_REALM_ID_LEN]
+            .copy_from_slice(&realm_id.to_le_bytes());
+        // ... and the host network number (lower 48 bits).
+        self.iid[ISLE_REALM_ADDR_OFFSET..ISLE_REALM_ADDR_OFFSET+ISLE_REALM_ADDR_LEN]
+            .copy_from_slice(host_network_no);
+
         self.master_secret.copy_from_slice(master_secret);
         self.master_salt.copy_from_slice(master_salt);
     }
@@ -107,24 +115,6 @@ impl Realm {
     fn realm_id(&self) -> u16 {
         self.iid[ISLE_REALM_ID_OFFSET] as u16
             | (self.iid[ISLE_REALM_ID_OFFSET+1] as u16) << 8
-    }
-
-    // TODO: remove from pub visibility
-    pub fn set_realm_id(
-        &mut self,
-        realm_id: u16)
-    {
-        self.iid[ISLE_REALM_ID_OFFSET..ISLE_REALM_ID_OFFSET+ISLE_REALM_ID_LEN]
-            .copy_from_slice(&realm_id.to_le_bytes());
-    }
-
-    // TODO: remove from pub visibility, set through init()
-    pub fn set_network_no(
-        &mut self,
-        network_no: &[u8; 6])
-    {
-        self.iid[ISLE_REALM_ADDR_OFFSET..ISLE_REALM_ADDR_OFFSET+ISLE_REALM_ADDR_LEN]
-            .copy_from_slice(network_no)
     }
 }
 
