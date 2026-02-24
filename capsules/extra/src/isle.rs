@@ -65,7 +65,7 @@ const ALLOW_RW_NO_OUT_BUFFER: usize = 0;
 const UPCALL_OUT_MESSAGE_READY: usize = 0;
 
 pub trait ISLEConfigurationProvider {
-    fn init_context(&self, context: &mut [GroupOSCOREContext]);
+    fn init_context(&self, context: &mut [Realm]);
 }
 
 const ISLE_REALM_ID_OFFSET: usize = 6;
@@ -76,7 +76,7 @@ const ISLE_REALMS_MAX: usize = 2;
 
 const ISLE_NULL_REALM_ID: [u8; ISLE_REALM_ID_LEN] = [0xFF; ISLE_REALM_ID_LEN];
 
-pub struct GroupOSCOREContext {
+pub struct Realm {
     iid: [u8; IID_LEN],
     master_secret: [u8; 16],
     master_salt: [u8; 8],
@@ -85,7 +85,7 @@ pub struct GroupOSCOREContext {
     sender_seq_no: u32,
 }
 
-impl GroupOSCOREContext {
+impl Realm {
     /// Initialize Group OSCORE group parameters.
     pub fn init(
         &mut self,
@@ -126,9 +126,9 @@ impl GroupOSCOREContext {
     }
 }
 
-impl Default for GroupOSCOREContext {
-    fn default() -> GroupOSCOREContext {
-        GroupOSCOREContext {
+impl Default for Realm {
+    fn default() -> Realm {
+        Realm {
             master_secret: [0x00; 16],
             master_salt: [0x00; 8],
             message_key: [0x00; 16],
@@ -144,13 +144,13 @@ impl Default for GroupOSCOREContext {
 
 pub struct AppData {
     initialized: bool,
-    group_oscore_ctxs: [GroupOSCOREContext; ISLE_REALMS_MAX],
+    realm_ctxs: [Realm; ISLE_REALMS_MAX],
 }
 
 impl AppData {
-    fn get_realm(&self, realm_id: u16) -> Result<&GroupOSCOREContext, Error> {
+    fn get_realm(&self, realm_id: u16) -> Result<&Realm, Error> {
         let realm_id = realm_id.to_be_bytes();
-        for realm in &self.group_oscore_ctxs {
+        for realm in &self.realm_ctxs {
             if realm.iid[ISLE_REALM_ID_OFFSET..ISLE_REALM_ID_OFFSET+ISLE_REALM_ID_LEN] == realm_id {
                 return Ok(realm);
             }
@@ -159,9 +159,9 @@ impl AppData {
         Err(Error::AddressOutOfBounds)
     }
 
-    fn get_realm_mut(&mut self, realm_id: u16) -> Result<&mut GroupOSCOREContext, Error> {
+    fn get_realm_mut(&mut self, realm_id: u16) -> Result<&mut Realm, Error> {
         let realm_id = realm_id.to_be_bytes();
-        for realm in &mut self.group_oscore_ctxs {
+        for realm in &mut self.realm_ctxs {
             if realm.iid[ISLE_REALM_ID_OFFSET..ISLE_REALM_ID_OFFSET+ISLE_REALM_ID_LEN] == realm_id {
                 return Ok(realm);
             }
@@ -175,9 +175,9 @@ impl Default for AppData {
     fn default() -> AppData {
         AppData {
             initialized: false,
-            group_oscore_ctxs: [
-                GroupOSCOREContext::default(),
-                GroupOSCOREContext::default(),
+            realm_ctxs: [
+                Realm::default(),
+                Realm::default(),
             ],
         }
     }
@@ -627,7 +627,7 @@ impl SyscallDriver for Isle {
                     self.app_data.enter(
                         pid,
                         |ad, _kad| {
-                            if let Some(realm) = ad.group_oscore_ctxs.get(realm_idx) {
+                            if let Some(realm) = ad.realm_ctxs.get(realm_idx) {
                                 if realm.is_null() {
                                     CommandReturn::failure(ErrorCode::NODEVICE)
                                 } else {
@@ -658,9 +658,9 @@ impl SyscallDriver for Isle {
     fn allocate_grant(&self, pid: ProcessId) -> Result<(), Error> {
         self.app_data.enter(pid, |ad, _kad| {
             // Get the context provider to set Group OSCORE parameters.
-            self.config_provider.init_context(&mut ad.group_oscore_ctxs);
+            self.config_provider.init_context(&mut ad.realm_ctxs);
 
-            for ctx in &mut ad.group_oscore_ctxs {
+            for ctx in &mut ad.realm_ctxs {
                 // 0xFFFF means this is not an active context.
                 if ctx.is_null() {
                     continue;
