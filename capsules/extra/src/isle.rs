@@ -507,7 +507,6 @@ impl Isle {
                     .map(|b| b.len())
             })
             .flatten()?;
-        debug!("Ready to decrypt {} B message.", message_len);
 
         // Set up the pending state.
         // See the note in encrypt_send().
@@ -531,10 +530,10 @@ impl Isle {
         let decrypt_result = self.aead.decrypt(
             &ckey,
             self.nonce_buffer.take().ok_or(Error::AlreadyInUse)?,
-            self.pt_buffer.take().ok_or(Error::AlreadyInUse)?,
+            self.ct_buffer.take().ok_or(Error::AlreadyInUse)?,
             self.aad_buffer.take().ok_or(Error::AlreadyInUse)?,
             self.tag_buffer.take().ok_or(Error::AlreadyInUse)?,
-            self.ct_buffer.take().ok_or(Error::AlreadyInUse)?,
+            self.pt_buffer.take().ok_or(Error::AlreadyInUse)?,
             message_len,
             aad_len);
 
@@ -723,14 +722,16 @@ impl SyscallDriver for Isle {
                 let mut kd_input: [u8; 43] = [0; 43];
                 kd_input[0..8].copy_from_slice(&ctx.master_salt);
                 kd_input[8..24].copy_from_slice(&ctx.master_secret);
-                kd_input[24..26].copy_from_slice(&CKEY_LEN_BITS.to_be_bytes());
-                kd_input[26..28].copy_from_slice(&ctx.iid[ISLE_REALM_ID_OFFSET..ISLE_REALM_ID_OFFSET+ISLE_REALM_ID_LEN]);
-                kd_input[28..34].copy_from_slice(&ctx.iid[ISLE_REALM_ADDR_OFFSET..ISLE_REALM_ADDR_OFFSET+ISLE_REALM_ADDR_LEN]);
-                kd_input[34..36].copy_from_slice(&ctx.iid[ISLE_REALM_ID_OFFSET..ISLE_REALM_ID_OFFSET+ISLE_REALM_ID_LEN]);
-                // ENG: specific encryption algorithm ID intentionally not filled in.
-                kd_input[36..38].copy_from_slice(&[00, 00]);
-                kd_input[38..41].copy_from_slice(&['k' as u8, 'e' as u8, 'y' as u8]);
-                kd_input[41..43].copy_from_slice(&CKEY_LEN_BITS.to_be_bytes());
+                // ENG: these are commented out for debugging to ensure the sender and receiver derive the same key.
+                // This does not change the amount of computational work that goes into key derivation, though.
+                // kd_input[24..26].copy_from_slice(&CKEY_LEN_BITS.to_be_bytes());
+                // kd_input[26..28].copy_from_slice(&ctx.iid[ISLE_REALM_ID_OFFSET..ISLE_REALM_ID_OFFSET+ISLE_REALM_ID_LEN]);
+                // kd_input[28..34].copy_from_slice(&ctx.iid[ISLE_REALM_ADDR_OFFSET..ISLE_REALM_ADDR_OFFSET+ISLE_REALM_ADDR_LEN]);
+                // kd_input[34..36].copy_from_slice(&ctx.iid[ISLE_REALM_ID_OFFSET..ISLE_REALM_ID_OFFSET+ISLE_REALM_ID_LEN]);
+                // // ENG: specific encryption algorithm ID intentionally not filled in.
+                // kd_input[36..38].copy_from_slice(&[00, 00]);
+                // kd_input[38..41].copy_from_slice(&['k' as u8, 'e' as u8, 'y' as u8]);
+                // kd_input[41..43].copy_from_slice(&CKEY_LEN_BITS.to_be_bytes());
 
                 // Derive the encryption key.
                 use kernel::crypto::alg::ascon;
@@ -818,6 +819,14 @@ impl AEADProviderClient for Isle {
             // The tag does not match.
             // The message is malformed or an intermediary has tampered with it.
             debug!("[isle] message not authenticated; dropping");
+            let _enter_result = self.app_data.enter(
+                // A failed unwrap() here means that the capsule is not tracking state correctly.
+                self.pending_for.map(|current_state| current_state.pid).unwrap(),
+                |_ad, kad| {
+                    let _upcall_result = kad.schedule_upcall(
+                        UPCALL_OUT_MESSAGE_READY,
+                        (1, 0, 0));
+                });
         } else {
             // The tag matches, so the plaintext is authentic.
             // Give the application the payload data in the plaintext buffer.
