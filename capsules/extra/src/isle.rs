@@ -303,8 +303,31 @@ impl Isle {
                 self.app_data.enter(
                     pid,
                     |_ad, kad| {
-                        kad.get_readonly_processbuffer(ALLOW_RO_NO_IN_BUFFER)?
-                            .enter(|pbuf| pbuf.copy_to_slice(&mut src_buf[0..pbuf.len()]))?;
+                        // When sending a message, the entire buffer has the message.
+                        // When receiving a message, the last TAG_LEN_MAX bytes are the authentication tag bytes.
+                        if is_send {
+                            kad.get_readonly_processbuffer(ALLOW_RO_NO_IN_BUFFER)?
+                                .enter(|pbuf| pbuf.copy_to_slice(&mut src_buf[0..pbuf.len()]))?;
+                        } else {
+                            kad.get_readonly_processbuffer(ALLOW_RO_NO_IN_BUFFER)?
+                                .enter(
+                                    |pbuf| {
+                                        pbuf.get(0..(pbuf.len() - TAG_LEN_MAX))
+                                            // ASSUME: the network stack allow'd an amount of bytes > TAG_LEN_MAX.
+                                            // The new size buffer will always be greater with subtraction,
+                                            // and Rust will panic on underflow.
+                                            .unwrap()
+                                            .copy_to_slice(&mut src_buf[0..(pbuf.len() - TAG_LEN_MAX)]);
+
+                                        // Copy the rest of the bytes (tag).
+                                        self.tag_buffer.map(
+                                            |tag_buf| {
+                                                pbuf.get((pbuf.len() - TAG_LEN_MAX)..pbuf.len())
+                                                    .unwrap()
+                                                    .copy_to_slice(tag_buf);
+                                            }).unwrap(); // TODO: a panic here means the capsule is not taking ownership of buffers properly.
+                                    })?;
+                        }
 
                         Ok::<(), kernel::process::Error>(())
                     })
@@ -504,7 +527,7 @@ impl Isle {
             pid,
             |_ad, kad| {
                 kad.get_readonly_processbuffer(ALLOW_RO_NO_IN_BUFFER)
-                    .map(|b| b.len())
+                    .map(|b| b.len() - TAG_LEN_MAX)
             })
             .flatten()?;
 
