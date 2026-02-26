@@ -272,7 +272,7 @@ impl Isle {
         let aad_len = self.build_aad(pid, realm_id, is_send)?;
 
         // Construct the nonce.
-        // debug!("[isle] constructing nonce");
+        debug!("[isle] constructing nonce");
         self.app_data.enter(
             pid,
             |ad, _kad| {
@@ -291,7 +291,7 @@ impl Isle {
 
         // Copy the message into the capsule buffer.
         // Assign the right buffer depending on if this is a send or receive.
-        // debug!("[isle] copying payload to capsule buffer");
+        debug!("[isle] copying payload to capsule buffer");
         let (src_buffer, _dst_buffer) = if is_send {
             (&self.pt_buffer, &self.ct_buffer)
         } else {
@@ -507,6 +507,7 @@ impl Isle {
                     .map(|b| b.len())
             })
             .flatten()?;
+        debug!("Ready to decrypt {} B message.", message_len);
 
         // Set up the pending state.
         // See the note in encrypt_send().
@@ -554,6 +555,11 @@ impl Isle {
     }
 }
 
+const COMMAND_CHECK: usize   = 0x00;
+const COMMAND_ENCRYPT: usize = 0x01;
+const COMMAND_DECRYPT: usize = 0x02;
+const COMMAND_QUERY: usize   = 0x0A;
+
 impl SyscallDriver for Isle {
     fn command(
         &self,
@@ -567,10 +573,10 @@ impl SyscallDriver for Isle {
             CommandReturn::failure(ErrorCode::FAIL)
         } else {
             match (command_no, r2, r3) {
-                (0, _r2, _r3) => CommandReturn::success(),
+                (COMMAND_CHECK, _r2, _r3) => CommandReturn::success(),
 
                 // Translate CoAP message to Group OSCORE.
-                (1, dst_host_upper, _dst_host_lower) => {
+                (COMMAND_ENCRYPT, dst_host_lower, _dst_host_upper) => {
                     // debug!("[isle] application wants to send to {:x} {:x}", dst_host_lower, dst_host_upper);
                     // Get the application's provided buffers' lengths.
                     let app_buffer_lens_res = self.app_data.enter(
@@ -596,7 +602,7 @@ impl SyscallDriver for Isle {
                             if ct_buffer_len >= pt_buffer_len + padding_byte_count {
                                 // Numbers from the network stack are big-endian.
                                 // So, the realm ID is actually in the lower two bytes.
-                                let realm_id = ((dst_host_upper & 0xFFFF) as u16).swap_bytes();
+                                let realm_id = ((dst_host_lower & 0xFFFF) as u16).swap_bytes();
                                 let operation_res = self.prepare_crypt_op(pid, realm_id, true)
                                     .and_then(|aad_len| self.encrypt_send(pid, realm_id, aad_len));
                                 match operation_res {
@@ -620,7 +626,7 @@ impl SyscallDriver for Isle {
 
                 // Translate a received message from Group OSCORE to CoAP.
                 // TODO: use the source IID in processing the packet.
-                (2, _src_host_lower, src_host_upper) => {
+                (COMMAND_DECRYPT, src_host_lower, src_host_upper) => {
                     // Get the application's buffers' lengths.
                     let app_buffer_lens_res = self.app_data.enter(
                         pid,
@@ -636,12 +642,16 @@ impl SyscallDriver for Isle {
                             if pt_buffer_len < ct_buffer_len {
                                 CommandReturn::failure(ErrorCode::NOMEM)
                             } else {
-                                let realm_id = (src_host_upper >> 16) as u16;
+                                let realm_id = ((src_host_lower & 0xFFFF) as u16).swap_bytes();
+                                debug!("Received packet in realm {:X}", realm_id);
                                 let operation_res = self.prepare_crypt_op(pid, realm_id, false)
                                     .and_then(|aad_len| self.decrypt_recv(pid, realm_id, aad_len));
                                 match operation_res {
                                     Ok(()) => CommandReturn::success(),
-                                    Err(kerr) => CommandReturn::failure(ErrorCode::from(kerr)),
+                                    Err(kerr) => {
+                                        debug!("Failed to decrypt: {:?}", kerr);
+                                        CommandReturn::failure(ErrorCode::from(kerr))
+                                    }
                                 }
                             }
                         },
@@ -654,7 +664,7 @@ impl SyscallDriver for Isle {
                 },
 
                 // Retrieve application-accessible realm data.
-                (10, realm_idx, data_id) => {
+                (COMMAND_QUERY, realm_idx, data_id) => {
                     const REALM_ID: usize = 0;
                     const IID: usize = 1;
 
