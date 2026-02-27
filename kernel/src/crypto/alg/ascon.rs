@@ -352,6 +352,32 @@ pub fn encrypt(
     // 4. Finalization
     state.finalize(ckey, out_tag);
 
+    // {
+    //     let (chunks, _rem) = ckey.as_chunks::<8>();
+    //     crate::debug!("Cipher key:");
+    //     for chunk in chunks {
+    //         crate::debug!("{:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}",
+    //                       chunk[0], chunk[1], chunk[2], chunk[3],
+    //                       chunk[4], chunk[5], chunk[6], chunk[7]);
+    //     }
+
+    //     let (chunks, _rem) = nonce.as_chunks::<8>();
+    //     crate::debug!("Nonce:");
+    //     for chunk in chunks {
+    //         crate::debug!("{:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}",
+    //                       chunk[0], chunk[1], chunk[2], chunk[3],
+    //                       chunk[4], chunk[5], chunk[6], chunk[7]);
+    //     }
+
+    //     let (chunks, _rem) = out_ciphertext.as_chunks::<8>();
+    //     crate::debug!("Ciphertext:");
+    //     for chunk in chunks {
+    //         crate::debug!("{:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}",
+    //                       chunk[0], chunk[1], chunk[2], chunk[3],
+    //                       chunk[4], chunk[5], chunk[6], chunk[7]);
+    //     }
+    // }
+
     Ok(())
 }
 
@@ -375,6 +401,32 @@ pub fn decrypt(
     if out_plaintext.len() < in_ciphertext.len() {
         return Err(());
     }
+
+    // {
+    //     let (chunks, _rem) = ckey.as_chunks::<8>();
+    //     crate::debug!("Cipher key:");
+    //     for chunk in chunks {
+    //         crate::debug!("{:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}",
+    //                       chunk[0], chunk[1], chunk[2], chunk[3],
+    //                       chunk[4], chunk[5], chunk[6], chunk[7]);
+    //     }
+
+    //     let (chunks, _rem) = nonce.as_chunks::<8>();
+    //     crate::debug!("Nonce:");
+    //     for chunk in chunks {
+    //         crate::debug!("{:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}",
+    //                       chunk[0], chunk[1], chunk[2], chunk[3],
+    //                       chunk[4], chunk[5], chunk[6], chunk[7]);
+    //     }
+
+    //     let (chunks, _rem) = in_ciphertext.as_chunks::<8>();
+    //     crate::debug!("Ciphertext:");
+    //     for chunk in chunks {
+    //         crate::debug!("{:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}",
+    //                       chunk[0], chunk[1], chunk[2], chunk[3],
+    //                       chunk[4], chunk[5], chunk[6], chunk[7]);
+    //     }
+    // }
 
     let mut state = AsconState::new(ckey, nonce);
 
@@ -426,6 +478,15 @@ pub fn decrypt(
     // but standard `==` is used here for compactness as requested.
     // In production, use `subtle::ConstantTimeEq`.
     let valid = &out_tag[0..in_expected_tag.len()] == in_expected_tag;
+    // crate::debug!("Tag: {:X} {:X} {:X} {:X} {:X} {:X} {:X} {:X}",
+    //                out_tag[0],
+    //                out_tag[1],
+    //                out_tag[2],
+    //                out_tag[3],
+    //                out_tag[4],
+    //                out_tag[5],
+    //                out_tag[6],
+    //                out_tag[7]);
 
     Ok(valid)
 }
@@ -479,6 +540,15 @@ impl AEADProvider for Ascon128 {
                 out_tag,
                 message_len,
                 aad_len);
+            // crate::debug!("Tag: {:X} {:X} {:X} {:X} {:X} {:X} {:X} {:X}",
+            //        out_tag[0],
+            //        out_tag[1],
+            //        out_tag[2],
+            //        out_tag[3],
+            //        out_tag[4],
+            //        out_tag[5],
+            //        out_tag[6],
+            //        out_tag[7]);
             if encrypt_result.is_ok() {
                 self.client.map(|client| {
                     client.encrypt_done(

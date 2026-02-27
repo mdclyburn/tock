@@ -683,7 +683,7 @@ impl SyscallDriver for Isle {
                                 match operation_res {
                                     Ok(()) => CommandReturn::success(),
                                     Err(kerr) => {
-                                        debug!("Failed to decrypt: {:?}", kerr);
+                                        debug!("Failed to start decrypt: {:?}", kerr);
                                         CommandReturn::failure(ErrorCode::from(kerr))
                                     }
                                 }
