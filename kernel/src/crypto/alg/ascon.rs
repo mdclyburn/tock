@@ -275,18 +275,12 @@ impl AsconState {
         self.x[4] ^= k1;
 
         // Output Tag
-        let mut i = 0;
-        while i < out_tag.len() {
-            let xb = if i < 8 {
-                self.x[3]
-            } else {
-                self.x[4]
-            };
+        crate::debug!("Tag: {:X} {:X}", self.x[3], self.x[4]);
+        let mut tag_bytes = [0u8; 16];
+        tag_bytes[0..8].copy_from_slice(&self.x[3].to_be_bytes());
+        tag_bytes[8..16].copy_from_slice(&self.x[4].to_be_bytes());
 
-            out_tag[i] = ((xb >> (8 * i)) & 0xFF) as u8;
-
-            i += 1;
-        }
+        out_tag.copy_from_slice(&tag_bytes[..out_tag.len()]);
     }
 }
 
@@ -321,6 +315,7 @@ pub fn encrypt(
 
     let in_plaintext = &in_plaintext[0..msg_len];
     let in_aad = &in_aad[0..aad_len];
+    let out_ciphertext = &mut out_ciphertext[0..msg_len];
 
     let mut state = AsconState::new(ckey, nonce);
 

@@ -389,13 +389,7 @@ impl Isle {
                             sender_id[2..8].copy_from_slice(&realm.iid[0..6]);
                             aad_buffer[AAD_SENDER_ID_OFFSET..AAD_SENDER_ID_OFFSET+realm.iid.len()]
                                 .copy_from_slice(&sender_id);
-                            let ssn = &realm.sender_seq_no;
-                            let piv_buffer = [
-                                (ssn >>  24) as u8,
-                                (ssn >>  16) as u8,
-                                (ssn >>   8) as u8,
-                                (ssn & 0xFF) as u8,
-                            ];
+                            let piv_buffer = realm.sender_seq_no.to_le_bytes();
                             aad_buffer[AAD_PARTIAL_IV_OFFSET..AAD_PARTIAL_IV_OFFSET+PARTIAL_IV_LEN]
                                 .copy_from_slice(&piv_buffer);
                             // Give the pIV to the network stack as well, which will place it into the packet.
