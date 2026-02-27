@@ -272,18 +272,36 @@ impl Isle {
         let aad_len = self.build_aad(pid, realm_id, is_send)?;
 
         // Construct the nonce.
-        debug!("[isle] constructing nonce");
+        // debug!("[isle] constructing nonce");
         self.app_data.enter(
             pid,
             |ad, _kad| {
                 self.nonce_buffer.map_or(Err(Error::AlreadyInUse), |buf| {
-                    let realm = ad.get_realm(realm_id)?;
-                    let iid_bytes = &realm.iid;
+                    if is_send {
+                        let realm = ad.get_realm(realm_id)?;
+                        let iid_bytes = &realm.iid;
 
-                    buf[0..realm.iid.len()]
-                        .copy_from_slice(iid_bytes);
-                    buf[iid_bytes.len()..iid_bytes.len()+realm.sender_seq_no.to_be_bytes().len()]
-                        .copy_from_slice(&realm.sender_seq_no.to_be_bytes());
+                        // buf[0..realm.iid.len()]
+                        //     .copy_from_slice(iid_bytes);
+                        buf[0..ISLE_REALM_ID_LEN]
+                            .copy_from_slice(&realm.realm_id().to_be_bytes());
+                        buf[ISLE_REALM_ID_LEN..ISLE_REALM_ID_LEN+ISLE_REALM_ADDR_LEN]
+                            .copy_from_slice(&iid_bytes[ISLE_REALM_ADDR_OFFSET..ISLE_REALM_ADDR_OFFSET+ISLE_REALM_ADDR_LEN]);
+
+                        buf[iid_bytes.len()..iid_bytes.len()+realm.sender_seq_no.to_le_bytes().len()]
+                            .copy_from_slice(&realm.sender_seq_no.to_le_bytes());
+                    } else {
+                        self.app_data.enter(
+                            pid,
+                            |_ad, kad| {
+                                kad.get_readonly_processbuffer(ALLOW_RO_NO_RECV_SRC_HOST)?
+                                    .enter(|b| b.copy_to_slice(&mut buf[0..b.len()]))?;
+                                kad.get_readwrite_processbuffer(ALLOW_RW_NO_RECV_PARTIAL_IV)?
+                                    .enter(|b| b.copy_to_slice(&mut buf[IID_LEN..IID_LEN+b.len()]))?;
+
+                                Ok::<_, Error>(())
+                            })?;
+                    }
 
                     Ok(())
                 })
