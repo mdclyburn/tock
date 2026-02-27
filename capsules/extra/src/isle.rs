@@ -660,7 +660,7 @@ impl SyscallDriver for Isle {
 
                 // Translate a received message from Group OSCORE to CoAP.
                 // TODO: use the source IID in processing the packet.
-                (COMMAND_DECRYPT, src_host_lower, src_host_upper) => {
+                (COMMAND_DECRYPT, src_host_lower, _src_host_upper) => {
                     // Get the application's buffers' lengths.
                     let app_buffer_lens_res = self.app_data.enter(
                         pid,
