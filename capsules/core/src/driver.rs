@@ -29,6 +29,9 @@ pub enum NUM {
     AppLoader             = 0x10001,
     ProcessInfo           = 0x10002,
 
+    // userv
+    UservCrypto           = 0x10800,
+
     // HW Buses
     Spi                   = 0x20001,
     SpiPeripheral         = 0x20002,
