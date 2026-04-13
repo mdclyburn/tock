@@ -25,9 +25,17 @@ use kernel::process::{
     Error,
     ProcessId,
 };
+use kernel::processbuffer::{
+    ReadableProcessBuffer,
+};
 use kernel::syscall::{
     CommandReturn,
     SyscallDriver,
+};
+
+use kernel::userv::tl::{
+    Argument,
+    ArgumentBuilder,
 };
 use kernel::utilities::cells::OptionalCell;
 
@@ -50,6 +58,10 @@ pub struct UservCrypto {
     /// The current entity using the userspace service.
     client: OptionalCell<&'static dyn AEADProviderClient>,
 }
+
+const ALLOW_RW_NO_ARG_BUFFER: usize = 0;
+
+const SUBSCRIBE_NO_INVOKE: usize = 0;
 
 impl UservCrypto {
     pub fn new(grant_data: Grant<ServiceData, UpcallCount<1>, AllowRoCount<0>, AllowRwCount<1>>) -> UservCrypto {
@@ -95,6 +107,11 @@ impl AEADProvider for UservCrypto {
         // Make sure no other operation is active and then mark the service busy.
         // There is a "gentleman's agreement" in place here that no entity will call this function
         // unless they have correctly acquire()d the service.
+        //
+        // By altering this interface or providing an entirely new one
+        // that takes the client as an argument, we can avoid this issue.
+        // That client (AEADProviderClient) can be a capsule performing an operation on behalf of an application
+        // or just another kernel entity with an interest in the operation for its own purposes.
         if self.userv_busy.get() {
             Err((ErrorCode::BUSY,
                 (nonce,
@@ -103,7 +120,37 @@ impl AEADProvider for UservCrypto {
                  out_ciphertext,
                  out_tag)))
         } else {
-            unimplemented!()
+            // Mark the service as busy.
+            self.userv_busy.set(true);
+
+            // Build arguments for service call.
+            self.userv_data.enter(
+                self.userv_pid.unwrap_or_panic(),
+                |_ad, kad| {
+                    let pbuf = kad.get_readwrite_processbuffer(ALLOW_RW_NO_ARG_BUFFER)
+                        .unwrap();
+
+                    let mut builder = ArgumentBuilder::new(&pbuf)
+                        .unwrap();
+                    builder.place(Argument::Bytes(ckey));
+                    builder.place(Argument::Bytes(nonce));
+                    builder.place(Argument::U32(message_len as u32)); // ENG: Hmm...
+                    builder.place(Argument::Buffer(in_plaintext));
+                    builder.place(Argument::Buffer(in_aad));
+                    builder.place(Argument::Buffer(out_ciphertext));
+                    builder.place(Argument::Buffer(out_tag));
+                    // Length of the AAD is communicated through slice length.
+
+                    // Make the upcall to the service.
+                    let _upcall_result = kad.schedule_upcall(
+                        SUBSCRIBE_NO_INVOKE,
+                        builder.as_upcall_arguments())
+                        .unwrap();
+                })
+                .unwrap();
+
+
+            Ok(())
         }
     }
 
@@ -137,6 +184,9 @@ impl AEADProvider for UservCrypto {
 
 const COMMAND_CHECK: usize = 0x00;
 
+const COMMAND_USERV_ENCRYPT_SUCCESS: usize = 0x1000_0000;
+const COMMAND_USERV_ENCRYPT_FAIL: usize    = 0x1000_1000;
+
 impl SyscallDriver for UservCrypto {
     fn command(
         &self,
@@ -148,6 +198,10 @@ impl SyscallDriver for UservCrypto {
     {
         match (command_no, r2, r3) {
             (COMMAND_CHECK, _r2, _r3) => CommandReturn::success(),
+
+            (COMMAND_USERV_ENCRYPT_SUCCESS, _r2, _r3) => unimplemented!(),
+
+            (COMMAND_USERV_ENCRYPT_FAIL, _r2, _r3) => unimplemented!(),
 
             (_unrecognized_command_no, _r2, _r3) => CommandReturn::failure(ErrorCode::INVAL),
         }
