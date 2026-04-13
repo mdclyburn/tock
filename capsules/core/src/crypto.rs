@@ -57,6 +57,8 @@ pub struct UservCrypto {
     userv_data: Grant<ServiceData, UpcallCount<1>, AllowRoCount<0>, AllowRwCount<1>>,
     /// The current entity using the userspace service.
     client: OptionalCell<&'static dyn AEADProviderClient>,
+    /// Client-provided buffers.
+    client_buffers: OptionalCell<[&'static mut [u8]; 5]>,
 }
 
 const ALLOW_RW_NO_ARG_BUFFER: usize = 0;
@@ -70,6 +72,7 @@ impl UservCrypto {
             userv_pid: OptionalCell::empty(),
             userv_data: grant_data,
             client: OptionalCell::empty(),
+            client_buffers: OptionalCell::empty(),
         }
     }
 
@@ -149,6 +152,15 @@ impl AEADProvider for UservCrypto {
                 })
                 .unwrap();
 
+            // Take ownership of the buffers.
+            self.client_buffers.set([
+                nonce,
+                in_plaintext,
+                in_aad,
+                out_ciphertext,
+                out_tag,
+            ]);
+
 
             Ok(())
         }
@@ -199,7 +211,13 @@ impl SyscallDriver for UservCrypto {
         match (command_no, r2, r3) {
             (COMMAND_CHECK, _r2, _r3) => CommandReturn::success(),
 
-            (COMMAND_USERV_ENCRYPT_SUCCESS, _r2, _r3) => unimplemented!(),
+            (COMMAND_USERV_ENCRYPT_SUCCESS, _r2, _r3) => {
+                // Copy data back to the client's buffers.
+                // Call client to notify that the encryption operation is complete.
+                unimplemented!();
+
+                CommandReturn::success()
+            },
 
             (COMMAND_USERV_ENCRYPT_FAIL, _r2, _r3) => unimplemented!(),
 
