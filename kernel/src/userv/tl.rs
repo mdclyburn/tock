@@ -22,10 +22,10 @@ pub enum Argument<'a> {
     Bytes(&'a [u8]),
 }
 
-const ARG_MARK_EMPTY: u8  = 0x00;
 const ARG_MARK_U32: u8    = 0x01;
 const ARG_MARK_BYTES: u8  = 0x02;
 const ARG_MARK_BUFFER: u8 = 0x03;
+const ARG_MARK_EMPTY: u8  = 0xFE;
 
 pub struct ArgumentBuilder<'a> {
     arg_count: usize,
@@ -37,7 +37,7 @@ impl<'a> ArgumentBuilder<'a> {
                -> Result<ArgumentBuilder<'a>, Error> {
         // Zero-initialize the buffer.
         let _empty_r = buffer.mut_enter(|b| {
-            for n in b.iter() { n.set(0x00); }
+            for n in b.iter() { n.set(ARG_MARK_EMPTY); }
         })?;
 
         Ok(ArgumentBuilder {
