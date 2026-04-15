@@ -1,4 +1,4 @@
-/*! Cryptographic `userv` capsule.
+/*! Userspace service-kernel intermediation.
  */
 
 use core::cell::Cell;
@@ -63,6 +63,8 @@ struct Service {
 
 const ALLOW_RW_NO_ARGS: usize = 0;
 
+const SUBSCRIBE_NO_INVOKE: usize = 0;
+
 pub struct Registry {
     /// Userspace services running on the system.
     userv_ents: [OptionalCell<Service>; 5],
@@ -120,6 +122,9 @@ impl Registry {
     }
 
     /// Register a userspace service.
+    ///
+    /// Adds a userspace service entry.
+    /// Replaces an existing entry if the application short ID matches.
     fn register(&self, pid: ProcessId, userv_role_id: usize) -> Result<(), Error> {
         let new_service = Service {
             userv_id: userv_role_id,
@@ -149,6 +154,53 @@ impl Registry {
                 .set(new_service);
             Ok(())
         }
+    }
+
+    /// Invoke a userspace service.
+    ///
+    /// Trigger a userspace service operation.
+    /// This operation is an asynchronous process, delivering results to the `caller`
+    /// (most likely to be the caller of this function).
+    pub fn usercall(
+        &self,
+        caller: &'static dyn Client,
+        userv_role_id: usize,
+        args: &[Argument],
+    ) -> Result<(), Error>
+    {
+        self.with_service(
+            userv_role_id,
+            |userv| {
+                self.userv_data.enter(
+                    userv.current_pid,
+                    |ad, kad| {
+                        if !ad.client.is_none() {
+                            return Err(Error::AlreadyInUse);
+                        }
+
+                        // Build the arguments buffer.
+                        let pbuf = kad
+                            .get_readwrite_processbuffer(ALLOW_RW_NO_ARGS)
+                            .unwrap(); // Userspace service should have shared the buffer upon registration.
+                        let mut arg_builder = ArgumentBuilder::new(&pbuf)?;
+                        for arg in args.iter() {
+                            arg_builder.place(arg)?;
+                        }
+
+                        // Send an upcall to the userspace service.
+                        kad.schedule_upcall(
+                            SUBSCRIBE_NO_INVOKE,
+                            arg_builder.as_upcall_arguments())
+                            .map_err(|_upcall_error| Error::KernelError)?;
+
+                        // The caller is now the client of the userspace service.
+                        ad.client.insert(caller);
+
+                        Ok(())
+                    })
+                    .flatten()
+            })
+            .flatten()
     }
 }
 
@@ -220,8 +272,6 @@ pub struct UservCrypto {
 
 const ALLOW_RW_NO_ARG_BUFFER: usize = 0;
 
-const SUBSCRIBE_NO_INVOKE: usize = 0;
-
 impl UservCrypto {
     pub fn new(grant_data: Grant<ServiceData, UpcallCount<1>, AllowRoCount<0>, AllowRwCount<1>>) -> UservCrypto {
         UservCrypto {
@@ -292,13 +342,13 @@ impl AEADProvider for UservCrypto {
 
                     let mut builder = ArgumentBuilder::new(&pbuf)
                         .unwrap();
-                    builder.place(Argument::Bytes(ckey));
-                    builder.place(Argument::Bytes(nonce));
-                    builder.place(Argument::U32(message_len as u32)); // ENG: Hmm...
-                    builder.place(Argument::Buffer(in_plaintext));
-                    builder.place(Argument::Buffer(in_aad));
-                    builder.place(Argument::Buffer(out_ciphertext));
-                    builder.place(Argument::Buffer(out_tag));
+                    // builder.place(Argument::Bytes(ckey));
+                    // builder.place(Argument::Bytes(nonce));
+                    // builder.place(Argument::U32(message_len as u32)); // ENG: Hmm...
+                    // builder.place(Argument::Buffer(in_plaintext));
+                    // builder.place(Argument::Buffer(in_aad));
+                    // builder.place(Argument::Buffer(out_ciphertext));
+                    // builder.place(Argument::Buffer(out_tag));
                     // Length of the AAD is communicated through slice length.
 
                     // Make the upcall to the service.

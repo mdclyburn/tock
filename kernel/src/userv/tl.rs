@@ -12,7 +12,6 @@ use crate::processbuffer::{
     WriteableProcessBuffer,
 };
 
-#[repr(C)]
 pub enum Argument<'a> {
     /// A single 32-bit unsigned integer.
     U32(u32),
@@ -46,7 +45,7 @@ impl<'a> ArgumentBuilder<'a> {
         })
     }
 
-    pub fn place(&mut self, a: Argument) -> Result<(), Error> {
+    pub fn place(&mut self, a: &Argument) -> Result<(), Error> {
         self.buffer.mut_enter(
             |buf| {
                 // Scan for the next available empty space.
