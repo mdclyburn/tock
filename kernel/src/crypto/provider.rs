@@ -19,6 +19,14 @@ use crate::crypto::config::{
 };
 use crate::errorcode::ErrorCode;
 
+pub type AEADTuple = (
+    &'static mut [u8; NONCE_LEN_MAX],
+    &'static mut [u8; MESSAGE_LEN_MAX],
+    &'static mut [u8; AAD_LEN_MAX],
+    &'static mut [u8; MESSAGE_LEN_MAX],
+    &'static mut [u8; TAG_LEN_MAX]
+);
+
 /// Provider of authenticated encryption with authenticated additional data.
 pub trait AEADProvider {
     /// Returns the block size the provider requires in plaintext.

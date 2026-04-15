@@ -245,7 +245,7 @@ impl ProcessId {
 /// ShortIds are assigned to the app as part of the credential checking process.
 /// Specifically, an implementation of the `process_checker::Compress` trait
 /// assigns ShortIds.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum ShortId {
     /// An abstract `ShortId` that is always guaranteed to be unique. As this is
     /// not an actual discrete value, it cannot be used for anything other than
