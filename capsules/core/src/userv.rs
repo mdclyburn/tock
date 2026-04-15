@@ -204,8 +204,9 @@ impl Registry {
     }
 }
 
-const COMMAND_CHECK: usize    = 0x00;
-const COMMAND_REGISTER: usize = 0x10;
+const COMMAND_CHECK: usize        = 0x00;
+const COMMAND_REGISTER: usize     = 0x10;
+const COMMAND_USERV_RETURN: usize = 0x11;
 
 impl SyscallDriver for Registry {
     fn command(
@@ -238,6 +239,28 @@ impl SyscallDriver for Registry {
                 self.register(pid, role_id)
                     .map_err(|err| ErrorCode::ALREADY)
                     .and(res_buffer_check)
+                    .into()
+            },
+
+            // A userspace operation has completed a previously-requested operation.
+            // Retrieve the result and send it to client.
+            (COMMAND_USERV_RETURN, _r2, _r3) => {
+                self.userv_data.enter(
+                    pid,
+                    |ad, kad| {
+                        // Provide the client with the data sent from the userspace service.
+                        let pbuf = kad.get_readwrite_processbuffer(ALLOW_RW_NO_ARGS)?;
+                        let arg_reader = ArgumentReader::new(&pbuf)?;
+                        ad.client.map(|c| c.usercall_done(&arg_reader));
+
+                        // The client is no longer the client,
+                        // even in the event of an unsuccessful operation.
+                        ad.client = None;
+
+                        Ok(())
+                    })
+                    .flatten()
+                    .map_err(|_perr| ErrorCode::FAIL)
                     .into()
             },
 

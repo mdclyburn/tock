@@ -1,8 +1,8 @@
 /*! Kernel-userspace service communication.
  */
 
-use crate::userv::tl::Argument;
+use crate::userv::tl::ArgumentReader;
 
 pub trait Client {
-    fn userv_done(&self, args: &[Argument]);
+    fn usercall_done<'a>(&self, args: &ArgumentReader<'a>);
 }
