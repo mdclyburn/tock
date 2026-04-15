@@ -95,7 +95,7 @@ impl<'a> ArgumentBuilder<'a> {
                                 // a const-interpretation is not possible.
                                 let mut len_bytes: [u8; 4] = [0; 4];
                                 buf[idx..idx+4].copy_to_slice(&mut len_bytes);
-                                4 + usize::from_ne_bytes(len_bytes)
+                                (4 + u32::from_ne_bytes(len_bytes)) as usize
                             },
 
                             _ => unimplemented!(),
@@ -165,7 +165,7 @@ impl<'a> ArgumentReader<'a> {
                                 let mut usize_buf: [u8; 4] = [0; 4];
                                 buf[idx+1..idx+1+4].copy_to_slice(&mut usize_buf);
 
-                                Some(1 + usize::from_ne_bytes(usize_buf))
+                                Some((1 + u32::from_ne_bytes(usize_buf)) as usize)
                             },
 
                             // Unrecognized argument marker.

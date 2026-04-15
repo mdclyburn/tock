@@ -4,18 +4,6 @@
 use core::cell::Cell;
 use core::ptr;
 
-use kernel::crypto::config::{
-    AAD_LEN_MAX,
-    CKEY_LEN_MAX,
-    MESSAGE_LEN_MAX,
-    NONCE_LEN_MAX,
-    TAG_LEN_MAX,
-};
-use kernel::crypto::provider::{
-    AEADProvider,
-    AEADProviderClient,
-    AEADTuple,
-};
 use kernel::errorcode::ErrorCode;
 use kernel::grant::{
     AllowRoCount,
@@ -35,9 +23,8 @@ use kernel::syscall::{
     CommandReturn,
     SyscallDriver,
 };
-use kernel::userv::role;
 use kernel::userv::comm::{
-    Client,
+    UserspaceServiceClient,
 };
 use kernel::userv::tl::{
     Argument,
@@ -50,7 +37,7 @@ pub const DRIVER_NO: usize = crate::driver::NUM::UservRegistry as usize;
 
 #[derive(Default)]
 pub struct UserspaceServiceGrant {
-    client: Option<&'static dyn Client>,
+    client: Option<&'static dyn UserspaceServiceClient>,
 }
 
 /// Userspace service entry.
@@ -164,7 +151,7 @@ impl Registry {
     /// (most likely to be the caller of this function).
     pub fn usercall(
         &self,
-        caller: &'static dyn Client,
+        caller: &'static dyn UserspaceServiceClient,
         userv_role_id: usize,
         operation_id: usize,
         args: &[Argument],
@@ -267,225 +254,6 @@ impl SyscallDriver for Registry {
             },
 
             _unhandled => CommandReturn::failure(ErrorCode::INVAL),
-        }
-    }
-
-    fn allocate_grant(&self, pid: ProcessId) -> Result<(), Error> {
-        self.userv_data.enter(pid, |_ad, _kad| {  })
-    }
-}
-
-#[derive(Copy, Clone, Default)]
-pub struct ServiceData;
-
-/// Cryptograpphy userspace service provider kernel counterpart.
-pub struct UservCrypto {
-    /// Flag indicating idle/busy state of the userspace service.
-    ///
-    /// In this iteration the userspace service handles a single request at a time.
-    /// Subsequent requests that arrive while the userspace service is busy
-    /// will receive the equivalent of a busy error.
-    userv_busy: Cell<bool>,
-    /// Process ID of the application implementing the userspace service.
-    userv_pid: OptionalCell<ProcessId>,
-    userv_data: Grant<ServiceData, UpcallCount<1>, AllowRoCount<0>, AllowRwCount<1>>,
-    /// The current entity using the userspace service.
-    client: OptionalCell<&'static dyn AEADProviderClient>,
-    /// Client-provided buffers.
-    client_buffers: OptionalCell<AEADTuple>,
-}
-
-const ALLOW_RW_NO_ARG_BUFFER: usize = 0;
-
-impl UservCrypto {
-    pub fn new(grant_data: Grant<ServiceData, UpcallCount<1>, AllowRoCount<0>, AllowRwCount<1>>) -> UservCrypto {
-        UservCrypto {
-            userv_busy: Cell::new(false),
-            userv_pid: OptionalCell::empty(),
-            userv_data: grant_data,
-            client: OptionalCell::empty(),
-            client_buffers: OptionalCell::empty(),
-        }
-    }
-
-    pub fn acquire(&self, caller: &'static dyn AEADProviderClient) -> Result<(), ErrorCode> {
-        if self.client.is_some() {
-            Err(ErrorCode::BUSY)
-        } else {
-            self.client.set(caller);
-            Ok(())
-        }
-    }
-}
-
-const PADDING_LEN: usize = 8;
-
-/// Encryption interface for kernel-internal entities (even on behalf of userspace requests).
-impl AEADProvider for UservCrypto {
-    fn padding_size(&self) -> usize { PADDING_LEN }
-
-    fn encrypt(
-        &self,
-        ckey: &[u8; CKEY_LEN_MAX],
-        nonce: &'static mut [u8; NONCE_LEN_MAX],
-        in_plaintext: &'static mut [u8; MESSAGE_LEN_MAX],
-        in_aad: &'static mut [u8; AAD_LEN_MAX],
-        out_ciphertext: &'static mut [u8; MESSAGE_LEN_MAX],
-        out_tag: &'static mut [u8; TAG_LEN_MAX],
-        message_len: usize,
-        aad_len: usize,
-    ) -> Result<(), (ErrorCode, (&'static mut [u8; NONCE_LEN_MAX],
-                                 &'static mut [u8; MESSAGE_LEN_MAX],
-                                 &'static mut [u8; AAD_LEN_MAX],
-                                 &'static mut [u8; MESSAGE_LEN_MAX],
-                                 &'static mut [u8; TAG_LEN_MAX]))> {
-        // Make sure no other operation is active and then mark the service busy.
-        // There is a "gentleman's agreement" in place here that no entity will call this function
-        // unless they have correctly acquire()d the service.
-        //
-        // By altering this interface or providing an entirely new one
-        // that takes the client as an argument, we can avoid this issue.
-        // That client (AEADProviderClient) can be a capsule performing an operation on behalf of an application
-        // or just another kernel entity with an interest in the operation for its own purposes.
-        if self.userv_busy.get() {
-            Err((ErrorCode::BUSY,
-                (nonce,
-                 in_plaintext,
-                 in_aad,
-                 out_ciphertext,
-                 out_tag)))
-        } else {
-            // Mark the service as busy.
-            self.userv_busy.set(true);
-
-            // Build arguments for service call.
-            self.userv_data.enter(
-                self.userv_pid.unwrap_or_panic(),
-                |_ad, kad| {
-                    let pbuf = kad.get_readwrite_processbuffer(ALLOW_RW_NO_ARG_BUFFER)
-                        .unwrap();
-
-                    let mut builder = ArgumentBuilder::new(&pbuf)
-                        .unwrap();
-                    // builder.place(Argument::Bytes(ckey));
-                    // builder.place(Argument::Bytes(nonce));
-                    // builder.place(Argument::U32(message_len as u32)); // ENG: Hmm...
-                    // builder.place(Argument::Buffer(in_plaintext));
-                    // builder.place(Argument::Buffer(in_aad));
-                    // builder.place(Argument::Buffer(out_ciphertext));
-                    // builder.place(Argument::Buffer(out_tag));
-                    // Length of the AAD is communicated through slice length.
-
-                    // Make the upcall to the service.
-                    let _upcall_result = kad.schedule_upcall(
-                        SUBSCRIBE_NO_INVOKE,
-                        builder.as_upcall_arguments(role::crypto::OP_ENCRYPT))
-                        .unwrap();
-                })
-                .unwrap();
-
-            // Take ownership of the buffers.
-            self.client_buffers.set((
-                nonce,
-                in_plaintext,
-                in_aad,
-                out_ciphertext,
-                out_tag,
-            ));
-
-
-            Ok(())
-        }
-    }
-
-    fn decrypt(
-        &self,
-        ckey: &[u8; CKEY_LEN_MAX],
-        nonce: &'static mut [u8; NONCE_LEN_MAX],
-        in_ciphertext: &'static mut [u8; MESSAGE_LEN_MAX],
-        in_aad: &'static mut [u8; AAD_LEN_MAX],
-        expected_tag: &'static mut [u8; TAG_LEN_MAX],
-        out_plaintext: &'static mut [u8; MESSAGE_LEN_MAX],
-        message_len: usize,
-        aad_len: usize,
-    ) -> Result<(), (ErrorCode, (&'static mut [u8; NONCE_LEN_MAX],
-                                 &'static mut [u8; MESSAGE_LEN_MAX],
-                                 &'static mut [u8; AAD_LEN_MAX],
-                                 &'static mut [u8; MESSAGE_LEN_MAX],
-                                 &'static mut [u8; TAG_LEN_MAX]))>
-    {
-        unimplemented!()
-    }
-
-    /// Set the client.
-    ///
-    /// Do not use this function; it will panic.
-    /// Instead, use the `UservCrypto::acquire()` function to exclusively use the service.
-    fn set_client(&self, client: &'static dyn AEADProviderClient) {
-        panic!()
-    }
-}
-
-const COMMAND_USERV_ENCRYPT_SUCCESS: usize = 0x1000_0000;
-const COMMAND_USERV_ENCRYPT_FAIL: usize    = 0x1000_1000;
-
-impl SyscallDriver for UservCrypto {
-    fn command(
-        &self,
-        command_no: usize,
-        r2: usize,
-        r3: usize,
-        caller_pid: ProcessId,
-    ) -> CommandReturn
-    {
-        match (command_no, r2, r3) {
-            (COMMAND_CHECK, _r2, _r3) => CommandReturn::success(),
-
-            (COMMAND_USERV_ENCRYPT_SUCCESS, _r2, _r3) => {
-                let caller_is_userv = self.userv_pid.map_or(
-                    false,
-                    |userv_pid| caller_pid == userv_pid);
-                if !caller_is_userv {
-                    CommandReturn::failure(ErrorCode::NOSUPPORT)
-                } else {
-                    // The userv operation is complete and the data is in its buffers.
-                    //
-                    // Copy the resulting data back to the client's buffers.
-                    let enter_res = self.userv_data.enter(
-                        self.userv_pid.unwrap_or_panic(), // The userv capsule must track the userv PID upon its startup.
-                        |_ad, kad| {
-                            let arg_pbuffer = kad.get_readwrite_processbuffer(ALLOW_RW_NO_ARG_BUFFER)?;
-                            let arg_reader = ArgumentReader::new(&arg_pbuffer);
-
-                            // NEXT: copy results into the client's buffers.
-                            unimplemented!();
-
-                            Ok::<_, Error>(())
-                        });
-
-                    // Call client to notify that the encryption operation is complete.
-                    if enter_res.is_ok() {
-                        // Done with the client's buffers.
-                        // Extract them for to pass back.
-                        let (nonce, pt, aad, ct, tag) = self.client_buffers
-                            .take()
-                            .unwrap();
-
-                        // The client is no longer the client.
-                        // This workflow will prevent deadlocks.
-                        let client = self.client.take().unwrap();
-                        client.encrypt_done(nonce, pt, ct, aad, tag);
-
-                        CommandReturn::success()
-                    } else {
-                        return CommandReturn::failure(ErrorCode::FAIL)
-                    }
-                }
-            },
-
-            (COMMAND_USERV_ENCRYPT_FAIL, _r2, _r3) => unimplemented!(),
-
-            (_unrecognized_command_no, _r2, _r3) => CommandReturn::failure(ErrorCode::INVAL),
         }
     }
 
