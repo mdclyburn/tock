@@ -35,6 +35,7 @@ use kernel::syscall::{
     CommandReturn,
     SyscallDriver,
 };
+use kernel::userv::role;
 use kernel::userv::comm::{
     Client,
 };
@@ -165,6 +166,7 @@ impl Registry {
         &self,
         caller: &'static dyn Client,
         userv_role_id: usize,
+        operation_id: usize,
         args: &[Argument],
     ) -> Result<(), Error>
     {
@@ -190,7 +192,7 @@ impl Registry {
                         // Send an upcall to the userspace service.
                         kad.schedule_upcall(
                             SUBSCRIBE_NO_INVOKE,
-                            arg_builder.as_upcall_arguments())
+                            arg_builder.as_upcall_arguments(operation_id))
                             .map_err(|_upcall_error| Error::KernelError)?;
 
                         // The caller is now the client of the userspace service.
@@ -377,7 +379,7 @@ impl AEADProvider for UservCrypto {
                     // Make the upcall to the service.
                     let _upcall_result = kad.schedule_upcall(
                         SUBSCRIBE_NO_INVOKE,
-                        builder.as_upcall_arguments())
+                        builder.as_upcall_arguments(role::crypto::OP_ENCRYPT))
                         .unwrap();
                 })
                 .unwrap();

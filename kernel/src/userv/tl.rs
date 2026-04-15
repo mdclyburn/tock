@@ -113,8 +113,8 @@ impl<'a> ArgumentBuilder<'a> {
     }
 
     /// Form the upcall arguments to the userspace service.
-    pub fn as_upcall_arguments(&self) -> (usize, usize, usize) {
-        (self.arg_count, self.buffer.ptr() as usize, 0)
+    pub fn as_upcall_arguments(&self, operation_id: usize) -> (usize, usize, usize) {
+        (operation_id, self.arg_count, self.buffer.ptr() as usize)
     }
 }
 
