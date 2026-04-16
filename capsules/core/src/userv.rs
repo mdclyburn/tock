@@ -24,6 +24,7 @@ use kernel::syscall::{
     SyscallDriver,
 };
 use kernel::userv::comm::{
+    UserspaceServiceAccess,
     UserspaceServiceClient,
 };
 use kernel::userv::tl::{
@@ -37,7 +38,8 @@ pub const DRIVER_NO: usize = crate::driver::NUM::UservRegistry as usize;
 
 #[derive(Default)]
 pub struct UserspaceServiceGrant {
-    client: Option<&'static dyn UserspaceServiceClient>,
+    /// The client the service is acting on behalf of currently and the operation ID.
+    client: Option<(usize, &'static dyn UserspaceServiceClient)>,
 }
 
 /// Userspace service entry.
@@ -183,7 +185,7 @@ impl Registry {
                             .map_err(|_upcall_error| Error::KernelError)?;
 
                         // The caller is now the client of the userspace service.
-                        ad.client.insert(caller);
+                        ad.client.insert((operation_id, caller));
 
                         Ok(())
                     })
@@ -234,13 +236,17 @@ impl SyscallDriver for Registry {
             // A userspace operation has completed a previously-requested operation.
             // Retrieve the result and send it to client.
             (COMMAND_USERV_RETURN, _r2, _r3) => {
+                let role_id = self.userv_ents.iter()
+                    .find(|ent| ent.map_or(false, |s| s.current_pid == pid))
+                    .map(|ent| ent.unwrap_or_panic().userv_id)
+                    .unwrap();
                 self.userv_data.enter(
                     pid,
                     |ad, kad| {
                         // Provide the client with the data sent from the userspace service.
                         let pbuf = kad.get_readwrite_processbuffer(ALLOW_RW_NO_ARGS)?;
                         let arg_reader = ArgumentReader::new(&pbuf)?;
-                        ad.client.map(|c| c.usercall_done(&arg_reader));
+                        ad.client.map(|(op, c)| c.usercall_done(role_id, op, &arg_reader));
 
                         // The client is no longer the client,
                         // even in the event of an unsuccessful operation.
@@ -259,5 +265,18 @@ impl SyscallDriver for Registry {
 
     fn allocate_grant(&self, pid: ProcessId) -> Result<(), Error> {
         self.userv_data.enter(pid, |_ad, _kad| {  })
+    }
+}
+
+impl UserspaceServiceAccess for Registry {
+    fn usercall(
+        &self,
+        caller: &'static dyn UserspaceServiceClient,
+        role_id: usize,
+        operation_id: usize,
+        args: &[Argument<'_>],
+    ) -> Result<(), Error>
+    {
+        Registry::usercall(self, caller, role_id, operation_id, args)
     }
 }

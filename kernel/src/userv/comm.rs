@@ -26,5 +26,5 @@ pub trait UserspaceServiceAccess {
 /// Client receiving results of "usercalls": userspace service calls.
 pub trait UserspaceServiceClient {
     /// Callback signalling completion of a usercall.
-    fn usercall_done<'a>(&self, args: &ArgumentReader<'a>);
+    fn usercall_done<'a>(&self, role_id: usize, operation_id: usize, args: &ArgumentReader<'a>);
 }

@@ -154,6 +154,7 @@ pub unsafe fn main() {
             board_kernel.create_grant(
                 capsules_extra::isle::DRIVER_NO,
                 &create_capability!(capabilities::MemoryAllocationCapability)),
+            userv_registry,
             aead_provider,
             static_init!([u8; isle::MESSAGE_LEN_MAX], [0; isle::MESSAGE_LEN_MAX]),
             static_init!([u8; isle::MESSAGE_LEN_MAX], [0; isle::MESSAGE_LEN_MAX]),

@@ -3,6 +3,14 @@
 
 use core::default::Default;
 
+
+pub use kernel::crypto::config::{
+    AAD_LEN_MAX,
+    CKEY_LEN_MAX,
+    MESSAGE_LEN_MAX,
+    NONCE_LEN_MAX,
+    TAG_LEN_MAX,
+};
 use kernel::crypto::provider::{
     AEADProvider,
     AEADProviderClient,
@@ -27,17 +35,17 @@ use kernel::syscall::{
     CommandReturn,
     SyscallDriver,
 };
+use kernel::userv::comm::{
+    UserspaceServiceAccess,
+    UserspaceServiceClient,
+};
+use kernel::userv::tl::{
+    ArgumentReader,
+};
+use kernel::userv::role::crypto;
 use kernel::utilities::cells::{
     OptionalCell,
     TakeCell,
-};
-
-pub use kernel::crypto::config::{
-    AAD_LEN_MAX,
-    CKEY_LEN_MAX,
-    MESSAGE_LEN_MAX,
-    NONCE_LEN_MAX,
-    TAG_LEN_MAX,
 };
 
 pub const DRIVER_NO: usize = capsules_core::driver::NUM::Isle as usize;
@@ -211,6 +219,7 @@ const AAD_PARTIAL_IV_OFFSET: usize = AAD_SENDER_ID_OFFSET + SENDER_ID_LEN;
 /// Network-level isolation packet filter for applications.
 pub struct Isle {
     config_provider: &'static dyn ISLEConfigurationProvider,
+    uservs: &'static dyn UserspaceServiceAccess,
     aead: &'static dyn AEADProvider,
     app_data: Grant<AppData, UpcallCount<1>, AllowRoCount<2>, AllowRwCount<2>>,
     // TODO: move this to the application's grant data.
@@ -230,6 +239,7 @@ impl Isle {
     pub fn new(
         config_provider: &'static dyn ISLEConfigurationProvider,
         grant_data: Grant<AppData, UpcallCount<1>, AllowRoCount<2>, AllowRwCount<2>>,
+        uservs: &'static dyn UserspaceServiceAccess,
         aead: &'static dyn AEADProvider,
         pt_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
         ct_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
@@ -240,6 +250,7 @@ impl Isle {
         Isle {
             config_provider,
             aead,
+            uservs,
             app_data: grant_data,
             pending_for: OptionalCell::empty(),
 
@@ -891,5 +902,19 @@ impl AEADProviderClient for Isle {
         self.tag_buffer.put(Some(tag_buffer));
 
         self.pending_for.clear();
+    }
+}
+
+impl UserspaceServiceClient for Isle {
+    fn usercall_done<'a>(&self, role_id: usize, operation_id: usize, args: &ArgumentReader<'a>) {
+        match (role_id, operation_id) {
+            (crypto::ROLE_ID, crypto::ops::ENCRYPT) => unimplemented!(),
+
+            (crypto::ROLE_ID, crypto::ops::DECRYPT) => unimplemented!(),
+
+            // This capsule used an operation or was provided as the caller for an operation
+            // that it does not handle.
+            _unhandled_op => panic!(),
+        }
     }
 }
