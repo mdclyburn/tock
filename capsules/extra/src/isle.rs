@@ -220,7 +220,16 @@ const AAD_PARTIAL_IV_OFFSET: usize = AAD_SENDER_ID_OFFSET + SENDER_ID_LEN;
 pub struct Isle {
     config_provider: &'static dyn ISLEConfigurationProvider,
     uservs: &'static dyn UserspaceServiceAccess,
-    aead: &'static dyn AEADProvider,
+    /** HACK: the struct cannot guarantee it has the static lifetime in SyscallDriver.
+     *
+     * To be a client for a userspace service, we have a restriction that the client have the static lifetime.
+     * Capsules are created with static_init!(), so they do have the static lifetime,
+     * but the SyscallDriver trait does not let them carry that guarantee forward through the function signature.
+     * So they lose that guarantee through those function calls
+     * and any calls that originate as a syscall force this restriction.
+     * So we provide a 'static self-reference to get around this.
+     */
+    userv_cb_ref: OptionalCell<&'static dyn UserspaceServiceClient>,
     app_data: Grant<AppData, UpcallCount<1>, AllowRoCount<2>, AllowRwCount<2>>,
     // TODO: move this to the application's grant data.
     // Initialize this in allocate_grant() with the application's IP6 address.
@@ -240,7 +249,6 @@ impl Isle {
         config_provider: &'static dyn ISLEConfigurationProvider,
         grant_data: Grant<AppData, UpcallCount<1>, AllowRoCount<2>, AllowRwCount<2>>,
         uservs: &'static dyn UserspaceServiceAccess,
-        aead: &'static dyn AEADProvider,
         pt_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
         ct_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
         aad_buffer: &'static mut [u8; AAD_LEN_MAX],
@@ -249,8 +257,8 @@ impl Isle {
     ) -> Isle {
         Isle {
             config_provider,
-            aead,
             uservs,
+            userv_cb_ref: OptionalCell::empty(),
             app_data: grant_data,
             pending_for: OptionalCell::empty(),
 
@@ -260,6 +268,10 @@ impl Isle {
             tag_buffer: TakeCell::new(tag_buffer),
             nonce_buffer: TakeCell::new(nonce_buffer),
         }
+    }
+
+    pub fn set_cb_ref(&self, r: &'static dyn UserspaceServiceClient) {
+        self.userv_cb_ref.set(r)
     }
 
     /// Ensure the application's realm data in its grant is set up.
@@ -474,7 +486,7 @@ impl Isle {
         let (_raw_message_len, message_len) = self.app_data.enter(
             pid,
             |_ad, kad| {
-                let padding_size = self.aead.padding_size();
+                let padding_size = crypto::PADDING_LEN;
                 kad.get_readonly_processbuffer(ALLOW_RO_NO_IN_BUFFER)
                     .map(|b| (b.len(), b.len() + (padding_size - b.len() % padding_size)))
             })
@@ -499,24 +511,32 @@ impl Isle {
 
         // Perform the encryption.
         // debug!("[isle] calling encryption provider");
-        let encrypt_result = self.aead.encrypt(
+        let nonce_buf = self.nonce_buffer.take().ok_or(Error::AlreadyInUse)?;
+        let pt_buf = self.pt_buffer.take().ok_or(Error::AlreadyInUse)?;
+        let aad_buf = self.aad_buffer.take().ok_or(Error::AlreadyInUse)?;
+        let ct_buf = self.ct_buffer.take().ok_or(Error::AlreadyInUse)?;
+        let tag_buf = self.tag_buffer.take().ok_or(Error::AlreadyInUse)?;
+
+        let encrypt_result = crypto::encrypt(
+            self.uservs,
+            self.userv_cb_ref.unwrap_or_panic(),
             &ckey,
-            self.nonce_buffer.take().ok_or(Error::AlreadyInUse)?,
-            self.pt_buffer.take().ok_or(Error::AlreadyInUse)?,
-            self.aad_buffer.take().ok_or(Error::AlreadyInUse)?,
-            self.ct_buffer.take().ok_or(Error::AlreadyInUse)?,
-            self.tag_buffer.take().ok_or(Error::AlreadyInUse)?,
+            nonce_buf,
+            pt_buf,
+            aad_buf,
+            ct_buf,
+            tag_buf,
             message_len,
             aad_len);
 
-        if let Err((_ec, (nonce_buf, pt_buf, aad_buf, ct_buf, tag_buf))) = encrypt_result {
-            debug!("[isle] encryption provider failed");
-            self.nonce_buffer.put(Some(nonce_buf));
-            self.pt_buffer.put(Some(pt_buf));
-            self.aad_buffer.put(Some(aad_buf));
-            self.ct_buffer.put(Some(ct_buf));
-            self.tag_buffer.put(Some(tag_buf));
+        self.nonce_buffer.put(Some(nonce_buf));
+        self.pt_buffer.put(Some(pt_buf));
+        self.aad_buffer.put(Some(aad_buf));
+        self.ct_buffer.put(Some(ct_buf));
+        self.tag_buffer.put(Some(tag_buf));
 
+        if let Err(_error) = encrypt_result {
+            debug!("[isle] encryption provider failed");
             self.pending_for.clear();
 
             Err(Error::KernelError)
@@ -573,22 +593,31 @@ impl Isle {
             })??;
 
         // Perform the decryption.
-        let decrypt_result = self.aead.decrypt(
+        let nonce_buf = self.nonce_buffer.take().ok_or(Error::AlreadyInUse)?;
+        let pt_buf = self.pt_buffer.take().ok_or(Error::AlreadyInUse)?;
+        let aad_buf = self.aad_buffer.take().ok_or(Error::AlreadyInUse)?;
+        let ct_buf = self.ct_buffer.take().ok_or(Error::AlreadyInUse)?;
+        let tag_buf = self.tag_buffer.take().ok_or(Error::AlreadyInUse)?;
+
+        let decrypt_result = crypto::decrypt(
+            self.uservs,
+            self.userv_cb_ref.unwrap_or_panic(),
             &ckey,
-            self.nonce_buffer.take().ok_or(Error::AlreadyInUse)?,
-            self.ct_buffer.take().ok_or(Error::AlreadyInUse)?,
-            self.aad_buffer.take().ok_or(Error::AlreadyInUse)?,
-            self.tag_buffer.take().ok_or(Error::AlreadyInUse)?,
-            self.pt_buffer.take().ok_or(Error::AlreadyInUse)?,
+            nonce_buf,
+            ct_buf,
+            aad_buf,
+            tag_buf,
+            pt_buf,
             message_len,
             aad_len);
 
-        if let Err((_ec, (nonce_buf, pt_buf, aad_buf, ct_buf, tag_buf))) = decrypt_result {
-            self.nonce_buffer.put(Some(nonce_buf));
-            self.pt_buffer.put(Some(pt_buf));
-            self.aad_buffer.put(Some(aad_buf));
-            self.ct_buffer.put(Some(ct_buf));
-            self.tag_buffer.put(Some(tag_buf));
+        self.nonce_buffer.put(Some(nonce_buf));
+        self.pt_buffer.put(Some(pt_buf));
+        self.aad_buffer.put(Some(aad_buf));
+        self.ct_buffer.put(Some(ct_buf));
+        self.tag_buffer.put(Some(tag_buf));
+
+        if let Err(_error) = decrypt_result {
 
             self.pending_for.clear();
 
@@ -637,7 +666,7 @@ impl SyscallDriver for Isle {
                         // be at least as long as the plaintext buffer
                         // and fit the AEAD provider's padding requirements.
                         Ok((Ok(pt_buffer_len), Ok(ct_buffer_len))) => {
-                            let pad = self.aead.padding_size();
+                            let pad = crypto::PADDING_LEN;
                             let padding_byte_count = pad - (pt_buffer_len % pad);
 
                             debug!("[isle] {} >= {} + {} ?",

@@ -155,7 +155,6 @@ pub unsafe fn main() {
                 capsules_extra::isle::DRIVER_NO,
                 &create_capability!(capabilities::MemoryAllocationCapability)),
             userv_registry,
-            aead_provider,
             static_init!([u8; isle::MESSAGE_LEN_MAX], [0; isle::MESSAGE_LEN_MAX]),
             static_init!([u8; isle::MESSAGE_LEN_MAX], [0; isle::MESSAGE_LEN_MAX]),
             static_init!([u8; isle::AAD_LEN_MAX], [0; isle::AAD_LEN_MAX]),
@@ -163,7 +162,7 @@ pub unsafe fn main() {
             static_init!([u8; isle::NONCE_LEN_MAX], [0; isle::NONCE_LEN_MAX]),
         ));
 
-    aead_provider.set_client(isle);
+    isle.set_cb_ref(isle);
 
     //--------------------------------------------------------------------------
     // AES Encryption Oracle
