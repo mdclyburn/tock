@@ -12,6 +12,7 @@ use crate::processbuffer::{
     WriteableProcessBuffer,
 };
 
+/// Userspace service-compatible argument representation.
 pub enum Argument<'a> {
     /// A single 32-bit unsigned integer.
     U32(u32),
@@ -26,12 +27,19 @@ const ARG_MARK_BYTES: u8  = 0x02;
 const ARG_MARK_BUFFER: u8 = 0x03;
 const ARG_MARK_EMPTY: u8  = 0xFE;
 
+/// Builder for structured argument buffers.
+///
+/// Builds a buffer of arguments to send to a userspace service.
+/// Using this construct ensures that the arguments are formatted correctly and consistently.
 pub struct ArgumentBuilder<'a> {
     arg_count: usize,
     buffer: &'a ReadWriteProcessBuffer,
 }
 
 impl<'a> ArgumentBuilder<'a> {
+    /// Create a new `ArgumentBuilder`.
+    ///
+    /// Accepts a process' read-write buffer and initializes its contents.
     pub fn new(buffer: &'a ReadWriteProcessBuffer)
                -> Result<ArgumentBuilder<'a>, Error> {
         // Zero-initialize the buffer.
@@ -45,6 +53,7 @@ impl<'a> ArgumentBuilder<'a> {
         })
     }
 
+    /// Add an argument to the buffer.
     pub fn place(&mut self, a: &Argument) -> Result<(), Error> {
         self.buffer.mut_enter(
             |buf| {
@@ -118,11 +127,16 @@ impl<'a> ArgumentBuilder<'a> {
     }
 }
 
+/// Reader for a buffer of userspace service arguments.
+///
+/// Reads arguments from a process' buffer,
+/// ensuring that data is consistently and correctly translated.
 pub struct ArgumentReader<'a> {
     buffer: &'a ReadWriteProcessBuffer,
 }
 
 impl<'a> ArgumentReader<'a> {
+    /// Create a new `ArgumentReader`.
     pub fn new(buffer: &'a ReadWriteProcessBuffer) -> Result<ArgumentReader, Error> {
         if buffer.ptr() == ptr::null() {
             Err(Error::AddressOutOfBounds)
@@ -133,6 +147,10 @@ impl<'a> ArgumentReader<'a> {
         }
     }
 
+    /// Read the `n`th argument.
+    ///
+    /// Returns `Some(Argument)` in the buffer.
+    /// Out-of-bounds queries return `None`.
     pub fn read_argument_n(&self, arg_no: usize) -> Option<Argument> {
         self.buffer.enter(
             |buf| {
