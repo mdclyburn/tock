@@ -31,6 +31,7 @@ type Ieee802154RawDriver =
 
 struct Platform {
     base: nrf52840dk_lib::Platform,
+    uservs: &'static capsules_core::userv::Registry,
     ieee802154: &'static Ieee802154RawDriver,
     eui64: &'static nrf52840dk_lib::Eui64Driver,
     screen: &'static ScreenDriver,
@@ -50,6 +51,7 @@ impl SyscallDriverLookup for Platform {
         F: FnOnce(Option<&dyn kernel::syscall::SyscallDriver>) -> R,
     {
         match driver_num {
+            capsules_core::userv::DRIVER_NO => f(Some(self.uservs)),
             capsules_extra::eui64::DRIVER_NUM => f(Some(self.eui64)),
             capsules_extra::ieee802154::DRIVER_NUM => f(Some(self.ieee802154)),
             capsules_extra::screen::screen::DRIVER_NUM => f(Some(self.screen)),
@@ -123,6 +125,17 @@ pub unsafe fn main() {
     .finalize(components::ieee802154_raw_component_static!(
         nrf52840::ieee802154_radio::Radio,
     ));
+
+    //--------------------------------------------------------------------------
+    // Userspace Services
+    //--------------------------------------------------------------------------
+
+    let userv_registry = static_init!(
+        capsules_core::userv::Registry,
+        capsules_core::userv::Registry::new(
+            board_kernel.create_grant(
+                capsules_core::userv::DRIVER_NO,
+                &create_capability!(capabilities::MemoryAllocationCapability))));
 
     //--------------------------------------------------------------------------
     // ISLE
@@ -242,6 +255,7 @@ pub unsafe fn main() {
 
     let platform = Platform {
         base: base_platform,
+        uservs: userv_registry,
         eui64,
         ieee802154,
         screen,
