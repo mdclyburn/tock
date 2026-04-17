@@ -143,9 +143,18 @@ pub unsafe fn main() {
     use capsules_extra::isle;
     use kernel::crypto::provider::AEADProvider;
 
-    let aead_provider = static_init!(
-        kernel::crypto::alg::ascon::Ascon128,
-        kernel::crypto::alg::ascon::Ascon128::new());
+    let aead_provider = {
+        // Software-based Ascon128.
+        // static_init!(
+        //     kernel::crypto::alg::ascon::Ascon128,
+        //     kernel::crypto::alg::ascon::Ascon128::new())
+
+        // Software-based Ascon128 in a userspace service.
+        static_init!(
+            kernel::userv::role::crypto::ServiceInterface,
+            kernel::userv::role::crypto::ServiceInterface::new(
+                userv_registry))
+    };
 
     let isle = static_init!(
         capsules_extra::isle::Isle,
@@ -154,7 +163,6 @@ pub unsafe fn main() {
             board_kernel.create_grant(
                 capsules_extra::isle::DRIVER_NO,
                 &create_capability!(capabilities::MemoryAllocationCapability)),
-            userv_registry,
             aead_provider,
             static_init!([u8; isle::MESSAGE_LEN_MAX], [0; isle::MESSAGE_LEN_MAX]),
             static_init!([u8; isle::MESSAGE_LEN_MAX], [0; isle::MESSAGE_LEN_MAX]),

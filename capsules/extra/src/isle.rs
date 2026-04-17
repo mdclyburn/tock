@@ -219,7 +219,6 @@ const AAD_PARTIAL_IV_OFFSET: usize = AAD_SENDER_ID_OFFSET + SENDER_ID_LEN;
 /// Network-level isolation packet filter for applications.
 pub struct Isle {
     config_provider: &'static dyn ISLEConfigurationProvider,
-    uservs: &'static dyn UserspaceServiceAccess,
     aead: &'static dyn AEADProvider,
     app_data: Grant<AppData, UpcallCount<1>, AllowRoCount<2>, AllowRwCount<2>>,
     // TODO: move this to the application's grant data.
@@ -239,7 +238,6 @@ impl Isle {
     pub fn new(
         config_provider: &'static dyn ISLEConfigurationProvider,
         grant_data: Grant<AppData, UpcallCount<1>, AllowRoCount<2>, AllowRwCount<2>>,
-        uservs: &'static dyn UserspaceServiceAccess,
         aead: &'static dyn AEADProvider,
         pt_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
         ct_buffer: &'static mut [u8; MESSAGE_LEN_MAX],
@@ -250,7 +248,6 @@ impl Isle {
         Isle {
             config_provider,
             aead,
-            uservs,
             app_data: grant_data,
             pending_for: OptionalCell::empty(),
 

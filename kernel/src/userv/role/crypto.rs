@@ -49,12 +49,11 @@ pub struct ServiceInterface {
 impl ServiceInterface {
     pub fn new(
         userv_access: &'static dyn UserspaceServiceAccess,
-        client: &'static dyn AEADProviderClient
     ) -> ServiceInterface
     {
         ServiceInterface {
             userv_access,
-            client: OptionalCell::new(client),
+            client: OptionalCell::empty(),
             aead_buffers: OptionalCell::empty(),
         }
     }
