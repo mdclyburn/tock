@@ -42,7 +42,7 @@ impl<'a> ArgumentBuilder<'a> {
     /// Accepts a process' read-write buffer and initializes its contents.
     pub fn new(buffer: &'a ReadWriteProcessBuffer)
                -> Result<ArgumentBuilder<'a>, Error> {
-        // Zero-initialize the buffer.
+        // Initialize the buffer.
         let _empty_r = buffer.mut_enter(|b| {
             for n in b.iter() { n.set(ARG_MARK_EMPTY); }
         })?;
@@ -95,16 +95,20 @@ impl<'a> ArgumentBuilder<'a> {
 
                         break;
                     } else {
-                        idx += match buf[idx].get() {
+                        idx += mem::size_of::<u8>() + match buf[idx].get() {
                             ARG_MARK_U32 => mem::size_of::<u32>(),
 
-                            ARG_MARK_BUFFER | ARG_MARK_BYTES => {
+                            ARG_MARK_BUFFER => mem::size_of::<u32>() + mem::size_of::<usize>(),
+
+                            ARG_MARK_BYTES => {
                                 // The bytes of the slice are not directly accessible,
                                 // so we must copy the bytes out to interpret them;
                                 // a const-interpretation is not possible.
-                                let mut len_bytes: [u8; 4] = [0; 4];
-                                buf[idx..idx+4].copy_to_slice(&mut len_bytes);
-                                (4 + u32::from_ne_bytes(len_bytes)) as usize
+                                let mut len_bytes: [u8; mem::size_of::<u32>()] = [0; mem::size_of::<u32>()];
+                                buf[idx+1..idx+1+mem::size_of::<u32>()].copy_to_slice(&mut len_bytes);
+                                let skip_len = mem::size_of::<u32>() + u32::from_ne_bytes(len_bytes) as usize;
+
+                                skip_len
                             },
 
                             _ => unimplemented!(),

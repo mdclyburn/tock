@@ -4,6 +4,7 @@
 use core::cell::Cell;
 use core::ptr;
 
+use kernel::debug;
 use kernel::errorcode::ErrorCode;
 use kernel::grant::{
     AllowRoCount,
@@ -130,9 +131,15 @@ impl Registry {
             if can_replace {
                 // New instance of the userspace service replaces its older entry.
                 userv_ent.set(new_service);
+                debug!("[usreg] {} re-registered for service role 0x{:x}",
+                       pid.short_app_id(),
+                       userv_role_id);
                 Ok(())
             } else {
                 // A userspace service that is not the registering one already fulfills the role.
+                debug!("[usreg] {} cannot register for filled service role 0x{:x}",
+                       pid.short_app_id(),
+                       userv_role_id);
                 Err(Error::AlreadyInUse)
             }
         } else {
@@ -142,6 +149,9 @@ impl Registry {
                 .find(|ent| ent.is_none())
                 .unwrap() // Registered service count must not exceed max count.
                 .set(new_service);
+                debug!("[usreg] {} registered for service role 0x{:x}",
+                       pid.short_app_id(),
+                       userv_role_id);
             Ok(())
         }
     }
@@ -159,13 +169,15 @@ impl Registry {
         args: &[Argument],
     ) -> Result<(), Error>
     {
+        debug!("[usreg] usercall: (role: 0x{:x}, op: {})", userv_role_id, operation_id);
         self.with_service(
             userv_role_id,
             |userv| {
+                debug!("[usreg] found userspace service for {:x}", userv_role_id);
                 self.userv_data.enter(
                     userv.current_pid,
                     |ad, kad| {
-                        if !ad.client.is_none() {
+                        if ad.client.is_some() {
                             return Err(Error::AlreadyInUse);
                         }
 
@@ -179,6 +191,7 @@ impl Registry {
                         }
 
                         // Send an upcall to the userspace service.
+                        debug!("[usreg] invoking userspace service");
                         kad.schedule_upcall(
                             SUBSCRIBE_NO_INVOKE,
                             arg_builder.as_upcall_arguments(operation_id))

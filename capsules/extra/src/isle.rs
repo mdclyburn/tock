@@ -332,7 +332,7 @@ impl Isle {
 
         // Copy the message into the capsule buffer.
         // Assign the right buffer depending on if this is a send or receive.
-        debug!("[isle] copying payload to capsule buffer");
+        // debug!("[isle] copying payload to capsule buffer");
         let (src_buffer, _dst_buffer) = if is_send {
             (&self.pt_buffer, &self.ct_buffer)
         } else {
@@ -375,7 +375,7 @@ impl Isle {
                     .flatten()
             })?;
 
-        debug!("[isle] prepare_crypt_op() done (AAD len.: {} B)", aad_len);
+        // debug!("[isle] prepare_crypt_op() done (AAD len.: {} B)", aad_len);
 
         Ok(aad_len)
     }
@@ -425,16 +425,16 @@ impl Isle {
                             kad.get_readwrite_processbuffer(ALLOW_RW_NO_RECV_PARTIAL_IV)?
                                 .mut_enter(|b| b.copy_from_slice(&piv_buffer))?;
 
-                            debug!("AAD:");
-                            let (aad_chunks, aad_rem) = aad_buffer.as_chunks::<4>();
-                            for chunk in aad_chunks {
-                                debug!("{:02x} {:02x} {:02x} {:02x}",
-                                       chunk[0], chunk[1],
-                                       chunk[2], chunk[3]);
-                            }
-                            for x in aad_rem {
-                                debug!("{:02x}", x);
-                            }
+                            // debug!("AAD:");
+                            // let (aad_chunks, aad_rem) = aad_buffer.as_chunks::<4>();
+                            // for chunk in aad_chunks {
+                            //     debug!("{:02x} {:02x} {:02x} {:02x}",
+                            //            chunk[0], chunk[1],
+                            //            chunk[2], chunk[3]);
+                            // }
+                            // for x in aad_rem {
+                            //     debug!("{:02x}", x);
+                            // }
 
                             // Return the length of the AAD.
                             // debug!("[isle] done copying, length of AAD = {}", AAD_PARTIAL_IV_OFFSET + PARTIAL_IV_LEN);
@@ -452,16 +452,16 @@ impl Isle {
                             kad.get_readwrite_processbuffer(ALLOW_RW_NO_RECV_PARTIAL_IV)?
                                 .enter(|b| b.copy_to_slice(&mut aad_buffer[AAD_PARTIAL_IV_OFFSET..AAD_PARTIAL_IV_OFFSET+PARTIAL_IV_LEN]))?;
 
-                            debug!("AAD:");
-                            let (aad_chunks, aad_rem) = aad_buffer.as_chunks::<4>();
-                            for chunk in aad_chunks {
-                                debug!("{:02x} {:02x} {:02x} {:02x}",
-                                       chunk[0], chunk[1],
-                                       chunk[2], chunk[3]);
-                            }
-                            for x in aad_rem {
-                                debug!("{:02x}", x);
-                            }
+                            // debug!("AAD:");
+                            // let (aad_chunks, aad_rem) = aad_buffer.as_chunks::<4>();
+                            // for chunk in aad_chunks {
+                            //     debug!("{:02x} {:02x} {:02x} {:02x}",
+                            //            chunk[0], chunk[1],
+                            //            chunk[2], chunk[3]);
+                            // }
+                            // for x in aad_rem {
+                            //     debug!("{:02x}", x);
+                            // }
 
 
                             // Return the length of the AAD.
@@ -483,7 +483,7 @@ impl Isle {
         // Set up pending state here so that there cannot be a race between
         // setting up the pending state and completing the encryption operation.
         // debug!("[isle] setting up pending state");
-        let (_raw_message_len, message_len) = self.app_data.enter(
+        let (raw_message_len, message_len) = self.app_data.enter(
             pid,
             |_ad, kad| {
                 let padding_size = crypto::PADDING_LEN;
@@ -491,14 +491,14 @@ impl Isle {
                     .map(|b| (b.len(), b.len() + (padding_size - b.len() % padding_size)))
             })
             .flatten()?;
-        // debug!("[isle] encrypting {} B message ({} B padded)", raw_message_len, message_len);
+        debug!("[isle] encrypting {} B message ({} B padded)", raw_message_len, message_len);
         self.pending_for.set(PendingState {
             pid,
             message_len: message_len as u8,
         });
 
         // Get the key from the application's grant data.
-        // debug!("[isle] fetching ckey");
+        debug!("[isle] fetching ckey");
         let mut ckey = [0u8; CKEY_LEN_MAX];
         self.app_data.enter(
             pid,
@@ -510,7 +510,7 @@ impl Isle {
             })??;
 
         // Perform the encryption.
-        // debug!("[isle] calling encryption provider");
+        debug!("[isle] calling userv registry for userv-based encryption");
         let nonce_buf = self.nonce_buffer.take().ok_or(Error::AlreadyInUse)?;
         let pt_buf = self.pt_buffer.take().ok_or(Error::AlreadyInUse)?;
         let aad_buf = self.aad_buffer.take().ok_or(Error::AlreadyInUse)?;
@@ -623,7 +623,7 @@ impl Isle {
 
             Err(Error::KernelError)
         } else {
-            debug!("[isle] started decrypting payload");
+            // debug!("[isle] started decrypting payload");
             Ok(())
         }
     }
@@ -717,13 +717,13 @@ impl SyscallDriver for Isle {
                                 CommandReturn::failure(ErrorCode::NOMEM)
                             } else {
                                 let realm_id = ((src_host_lower & 0xFFFF) as u16).swap_bytes();
-                                debug!("Received packet in realm {:X}", realm_id);
+                                // debug!("Received packet in realm {:X}", realm_id);
                                 let operation_res = self.prepare_crypt_op(pid, realm_id, false)
                                     .and_then(|aad_len| self.decrypt_recv(pid, realm_id, aad_len));
                                 match operation_res {
                                     Ok(()) => CommandReturn::success(),
                                     Err(kerr) => {
-                                        debug!("Failed to start decrypt: {:?}", kerr);
+                                        // debug!("Failed to start decrypt: {:?}", kerr);
                                         CommandReturn::failure(ErrorCode::from(kerr))
                                     }
                                 }
@@ -731,7 +731,7 @@ impl SyscallDriver for Isle {
                         },
 
                         _ => {
-                            debug!("[isle] application did not provide buffers");
+                            // debug!("[isle] application did not provide buffers");
                             CommandReturn::failure(ErrorCode::NOMEM)
                         },
                     }
@@ -840,7 +840,7 @@ impl AEADProviderClient for Isle {
             let _enter_result = self.app_data.enter(
                 current_state.pid,
                 |_ad, kad| {
-                    debug!("[isle] writing result back to application buffers");
+                    // debug!("[isle] writing result back to application buffers");
                     // Copy the ciphertext and tag to the application's buffer.
                     // Use the const-defined HMAC tag length.
                     let write_res = kad.get_readwrite_processbuffer(ALLOW_RW_NO_OUT_BUFFER)
@@ -864,7 +864,7 @@ impl AEADProviderClient for Isle {
                             (0, total_len as usize, 0))
                             .map_err(|e| debug!("[isle] message ready upcall error: {:?}", e));
                     } else {
-                        debug!("[isle] failed to write data back to application buffer");
+                        // debug!("[isle] failed to write data back to application buffer");
                     }
                 });
         });
@@ -893,7 +893,7 @@ impl AEADProviderClient for Isle {
         if !tag_matches {
             // The tag does not match.
             // The message is malformed or an intermediary has tampered with it.
-            debug!("[isle] message not authenticated; dropping");
+            // debug!("[isle] message not authenticated; dropping");
             let _enter_result = self.app_data.enter(
                 // A failed unwrap() here means that the capsule is not tracking state correctly.
                 self.pending_for.map(|current_state| current_state.pid).unwrap(),
@@ -919,7 +919,7 @@ impl AEADProviderClient for Isle {
                             })
                 });
             if copy_result.is_err() {
-                debug!("[isle] error copying back to application buffer");
+                // debug!("[isle] error copying back to application buffer");
             }
         }
 
