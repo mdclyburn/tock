@@ -667,12 +667,12 @@ impl SyscallDriver for Isle {
                         // and fit the AEAD provider's padding requirements.
                         Ok((Ok(pt_buffer_len), Ok(ct_buffer_len))) => {
                             let pad = crypto::PADDING_LEN;
-                            let padding_byte_count = pad - (pt_buffer_len % pad);
+                            let padding_byte_count = (pad - (pt_buffer_len % pad)) % pad;
 
-                            debug!("[isle] {} >= {} + {} ?",
-                                   ct_buffer_len,
-                                   pt_buffer_len,
-                                   padding_byte_count);
+                            // debug!("[isle] {} >= {} + {} ?",
+                            //        ct_buffer_len,
+                            //        pt_buffer_len,
+                            //        padding_byte_count);
                             if ct_buffer_len >= pt_buffer_len + padding_byte_count {
                                 // Numbers from the network stack are big-endian.
                                 // So, the realm ID is actually in the lower two bytes.
@@ -680,9 +680,7 @@ impl SyscallDriver for Isle {
                                 let operation_res = self.prepare_crypt_op(pid, realm_id, true)
                                     .and_then(|aad_len| self.encrypt_send(pid, realm_id, aad_len));
                                 match operation_res {
-                                    Ok(_msg_len) => {
-                                        CommandReturn::success()
-                                    },
+                                    Ok(_msg_len) => CommandReturn::success(),
 
                                     Err(kerr) => CommandReturn::failure(ErrorCode::from(kerr)),
                                 }
