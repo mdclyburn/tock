@@ -25,11 +25,12 @@ use kernel::syscall::{
     SyscallDriver,
 };
 use kernel::userv::comm::{
+    Argument,
     UserspaceServiceAccess,
     UserspaceServiceClient,
+    UsercallArguments,
 };
 use kernel::userv::tl::{
-    Argument,
     ArgumentBuilder,
     ArgumentReader,
 };
@@ -54,7 +55,7 @@ struct Service {
 
 const ALLOW_RW_NO_ARGS: usize = 0;
 
-const SUBSCRIBE_NO_INVOKE: usize = 0;
+const SUBSCRIBE_NO_INVOKE_USERCALL: usize = 0;
 
 pub struct Registry {
     /// Userspace services running on the system.
@@ -156,17 +157,13 @@ impl Registry {
         }
     }
 
-    /// Invoke a userspace service.
-    ///
-    /// Trigger a userspace service operation.
-    /// This operation is an asynchronous process, delivering results to the `caller`
-    /// (most likely to be the caller of this function).
+    /// Invoke a userspace service with extended call arguments.
     pub fn usercall(
         &self,
         caller: &'static dyn UserspaceServiceClient,
         userv_role_id: usize,
         operation_id: usize,
-        args: &[Argument],
+        args: UsercallArguments,
     ) -> Result<(), Error>
     {
         debug!("[usreg] usercall: (role: 0x{:x}, op: {})", userv_role_id, operation_id);
@@ -177,24 +174,32 @@ impl Registry {
                 self.userv_data.enter(
                     userv.current_pid,
                     |ad, kad| {
+                        // Userspace service is already busy with another operation.
                         if ad.client.is_some() {
                             return Err(Error::AlreadyInUse);
                         }
 
-                        // Build the arguments buffer.
-                        let pbuf = kad
-                            .get_readwrite_processbuffer(ALLOW_RW_NO_ARGS)
-                            .unwrap(); // Userspace service should have shared the buffer upon registration.
-                        let mut arg_builder = ArgumentBuilder::new(&pbuf)?;
-                        for arg in args.iter() {
-                            arg_builder.place(arg)?;
-                        }
+                        let upcall_args = match args {
+                            UsercallArguments::Short(arg1, arg2) => (operation_id, arg1, arg2),
+
+                            UsercallArguments::Extended(usercall_args) => {
+                                // Build the arguments buffer.
+                                let pbuf = kad
+                                    .get_readwrite_processbuffer(ALLOW_RW_NO_ARGS)
+                                    .unwrap(); // Userspace service should have shared the buffer upon registration.
+                                let mut arg_builder = ArgumentBuilder::new(&pbuf)?;
+
+                                for arg in usercall_args.iter() {
+                                    arg_builder.place(arg)?;
+                                }
+
+                                arg_builder.as_upcall_arguments(operation_id)
+                            },
+                        };
 
                         // Send an upcall to the userspace service.
                         debug!("[usreg] invoking userspace service");
-                        kad.schedule_upcall(
-                            SUBSCRIBE_NO_INVOKE,
-                            arg_builder.as_upcall_arguments(operation_id))
+                        kad.schedule_upcall(SUBSCRIBE_NO_INVOKE_USERCALL, upcall_args)
                             .map_err(|_upcall_error| Error::KernelError)?;
 
                         // The caller is now the client of the userspace service.
@@ -210,7 +215,7 @@ impl Registry {
 
 const COMMAND_CHECK: usize                = 0x00;
 const COMMAND_REGISTER: usize             = 0x10;
-const COMMAND_USERV_RETURN: usize         = 0x11;
+const COMMAND_USERV_RETURN_SUCCESS: usize = 0x11;
 const COMMAND_USERV_RETURN_FAILURE: usize = 0x12;
 
 impl SyscallDriver for Registry {
@@ -290,7 +295,7 @@ impl UserspaceServiceAccess for Registry {
         caller: &'static dyn UserspaceServiceClient,
         role_id: usize,
         operation_id: usize,
-        args: &[Argument<'_>],
+        args: UsercallArguments,
     ) -> Result<(), Error>
     {
         Registry::usercall(self, caller, role_id, operation_id, args)

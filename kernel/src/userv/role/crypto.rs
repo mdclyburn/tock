@@ -14,15 +14,14 @@ use crate::crypto::provider::{
     AEADTuple,
 };
 use crate::errorcode::ErrorCode;
-use crate::userv::tl::{
-    Argument,
-    ArgumentReader,
-};
 use crate::process::Error;
 use crate::userv::comm::{
+    Argument,
+    UsercallArguments,
     UserspaceServiceAccess,
     UserspaceServiceClient,
 };
+use crate::userv::tl::ArgumentReader;
 use crate::utilities::cells::OptionalCell;
 
 /// Cryptography userspace service role ID.
@@ -88,7 +87,7 @@ impl AEADProvider for ServiceInterface {
             self,
             ROLE_ID,
             ops::ENCRYPT,
-            &encrypt_args);
+            UsercallArguments::Extended(&encrypt_args));
 
         if invoke_res.is_ok() {
             // Take ownership of the buffers while the request is outstanding.
@@ -203,5 +202,5 @@ pub fn encrypt(
         caller,
         ROLE_ID,
         ops::ENCRYPT,
-        &encrypt_args)
+        UsercallArguments::Extended(&encrypt_args))
 }

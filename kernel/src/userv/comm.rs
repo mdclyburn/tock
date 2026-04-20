@@ -3,11 +3,31 @@
 
 use crate::process::Error;
 use crate::userv::tl::{
-    Argument,
     ArgumentReader,
 };
 
+/// Userspace service-compatible argument representation.
+pub enum Argument<'a> {
+    /// A single 32-bit unsigned integer.
+    U32(u32),
+    /// A buffer, passed as address and length.
+    Buffer(&'a [u8]),
+    /// A sequence of bytes, copied.
+    Bytes(&'a [u8]),
+}
+
+/// Usercall argument format.
+pub enum UsercallArguments<'a, 'b> {
+    /// Short-format call arguments requiring only up to two words.
+    Short(usize, usize),
+    /// Arguments requiring more than two words.
+    Extended(&'a [Argument<'b>]),
+}
+
 /// Provides access to userspace services, `userv`s.
+///
+/// Exposes an asynchronous call interface to userspace services.
+/// An operation delivers results to the caller with a callback to the provided [`UserspaceServiceClient`].
 pub trait UserspaceServiceAccess {
     /// Invoke a userspace service.
     ///
@@ -19,7 +39,7 @@ pub trait UserspaceServiceAccess {
         caller: &'static dyn UserspaceServiceClient,
         role_id: usize,
         operation_id: usize,
-        args: &[Argument],
+        args: UsercallArguments,
     ) -> Result<(), Error>;
 }
 

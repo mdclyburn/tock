@@ -11,16 +11,7 @@ use crate::processbuffer::{
     ReadWriteProcessBuffer,
     WriteableProcessBuffer,
 };
-
-/// Userspace service-compatible argument representation.
-pub enum Argument<'a> {
-    /// A single 32-bit unsigned integer.
-    U32(u32),
-    /// A buffer, passed as address and length.
-    Buffer(&'a [u8]),
-    /// A sequence of bytes, copied.
-    Bytes(&'a [u8]),
-}
+use crate::userv::comm::Argument;
 
 const ARG_MARK_U32: u8    = 0x01;
 const ARG_MARK_BYTES: u8  = 0x02;
