@@ -78,8 +78,6 @@ impl AEADProvider for ServiceInterface {
             Argument::U32(message_len as u32), // ENG: Hmm...
             Argument::Bytes(in_plaintext),
             Argument::Bytes(in_aad),
-            Argument::Bytes(out_ciphertext),
-            Argument::Bytes(out_tag),
         ];
 
         // Send request via the userspace service capsule.
