@@ -171,34 +171,3 @@ impl UserspaceServiceClient for ServiceInterface {
         };
     }
 }
-
-/// Encrypt a plaintext buffer with a userspace service.
-pub fn encrypt(
-    uservs: &'static dyn UserspaceServiceAccess,
-    caller: &'static dyn UserspaceServiceClient,
-    ckey: &[u8; CKEY_LEN_MAX],
-    nonce: &'static mut [u8; NONCE_LEN_MAX],
-    in_plaintext: &'static mut [u8; MESSAGE_LEN_MAX],
-    in_aad: &'static mut [u8; AAD_LEN_MAX],
-    out_ciphertext: &'static mut [u8; MESSAGE_LEN_MAX],
-    out_tag: &'static mut [u8; TAG_LEN_MAX],
-    message_len: usize,
-    aad_len: usize,
-) -> Result<(), Error>
-{
-    let encrypt_args = [
-        Argument::Bytes(ckey),
-        Argument::Bytes(nonce),
-        Argument::U32(message_len as u32), // ENG: Hmm...
-        Argument::Bytes(in_plaintext),
-        Argument::Bytes(in_aad),
-        Argument::Bytes(out_ciphertext),
-        Argument::Bytes(out_tag),
-    ];
-
-    uservs.usercall(
-        caller,
-        ROLE_ID,
-        ops::ENCRYPT,
-        UsercallArguments::Extended(&encrypt_args))
-}
