@@ -10,8 +10,6 @@ use crate::userv::tl::{
 pub enum Argument<'a> {
     /// A single 32-bit unsigned integer.
     U32(u32),
-    /// A buffer, passed as address and length.
-    Buffer(&'a [u8]),
     /// A sequence of bytes, copied.
     Bytes(&'a [u8]),
 }

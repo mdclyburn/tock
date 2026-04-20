@@ -15,7 +15,6 @@ use crate::userv::comm::Argument;
 
 const ARG_MARK_U32: u8    = 0x01;
 const ARG_MARK_BYTES: u8  = 0x02;
-const ARG_MARK_BUFFER: u8 = 0x03;
 const ARG_MARK_EMPTY: u8  = 0xFE;
 
 /// Builder for structured argument buffers.
@@ -64,15 +63,6 @@ impl<'a> ArgumentBuilder<'a> {
                                 ARG_MARK_U32
                             },
 
-                            Argument::Buffer(s) => {
-                                buf[idx+1..idx+1+mem::size_of::<usize>()]
-                                    .copy_from_slice(&s.len().to_ne_bytes());
-                                buf[idx+1+mem::size_of::<usize>()..idx+1+mem::size_of::<usize>()+mem::size_of::<usize>()]
-                                    .copy_from_slice(&usize::to_ne_bytes(s.as_ptr() as usize));
-
-                                ARG_MARK_BUFFER
-                            },
-
                             Argument::Bytes(s) => {
                                 buf[idx+1..idx+1+mem::size_of::<usize>()]
                                     .copy_from_slice(&s.len().to_ne_bytes());
@@ -88,8 +78,6 @@ impl<'a> ArgumentBuilder<'a> {
                     } else {
                         idx += mem::size_of::<u8>() + match buf[idx].get() {
                             ARG_MARK_U32 => mem::size_of::<u32>(),
-
-                            ARG_MARK_BUFFER => mem::size_of::<u32>() + mem::size_of::<usize>(),
 
                             ARG_MARK_BYTES => {
                                 // The bytes of the slice are not directly accessible,
@@ -171,8 +159,6 @@ impl<'a> ArgumentReader<'a> {
                             ARG_MARK_EMPTY => None,
 
                             ARG_MARK_U32 => Some(1 + 4),
-
-                            ARG_MARK_BUFFER => Some(1 + 4),
 
                             ARG_MARK_BYTES => {
                                 let mut usize_buf: [u8; 4] = [0; 4];

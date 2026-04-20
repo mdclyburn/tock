@@ -76,10 +76,10 @@ impl AEADProvider for ServiceInterface {
             Argument::Bytes(ckey),
             Argument::Bytes(nonce),
             Argument::U32(message_len as u32), // ENG: Hmm...
-            Argument::Buffer(in_plaintext),
-            Argument::Buffer(in_aad),
-            Argument::Buffer(out_ciphertext),
-            Argument::Buffer(out_tag),
+            Argument::Bytes(in_plaintext),
+            Argument::Bytes(in_aad),
+            Argument::Bytes(out_ciphertext),
+            Argument::Bytes(out_tag),
         ];
 
         // Send request via the userspace service capsule.
@@ -192,10 +192,10 @@ pub fn encrypt(
         Argument::Bytes(ckey),
         Argument::Bytes(nonce),
         Argument::U32(message_len as u32), // ENG: Hmm...
-        Argument::Buffer(in_plaintext),
-        Argument::Buffer(in_aad),
-        Argument::Buffer(out_ciphertext),
-        Argument::Buffer(out_tag),
+        Argument::Bytes(in_plaintext),
+        Argument::Bytes(in_aad),
+        Argument::Bytes(out_ciphertext),
+        Argument::Bytes(out_tag),
     ];
 
     uservs.usercall(
