@@ -208,9 +208,10 @@ impl Registry {
     }
 }
 
-const COMMAND_CHECK: usize        = 0x00;
-const COMMAND_REGISTER: usize     = 0x10;
-const COMMAND_USERV_RETURN: usize = 0x11;
+const COMMAND_CHECK: usize                = 0x00;
+const COMMAND_REGISTER: usize             = 0x10;
+const COMMAND_USERV_RETURN: usize         = 0x11;
+const COMMAND_USERV_RETURN_FAILURE: usize = 0x12;
 
 impl SyscallDriver for Registry {
     fn command(
@@ -248,7 +249,7 @@ impl SyscallDriver for Registry {
 
             // A userspace operation has completed a previously-requested operation.
             // Retrieve the result and send it to client.
-            (COMMAND_USERV_RETURN, _r2, _r3) => {
+            (COMMAND_USERV_RETURN_SUCCESS, _r2, _r3) => {
                 let role_id = self.userv_ents.iter()
                     .find(|ent| ent.map_or(false, |s| s.current_pid == pid))
                     .map(|ent| ent.unwrap_or_panic().userv_id)
@@ -271,6 +272,8 @@ impl SyscallDriver for Registry {
                     .map_err(|_perr| ErrorCode::FAIL)
                     .into()
             },
+
+            (COMMAND_USERV_RETURN_FAILURE, _errorcode, _r3) => unimplemented!(),
 
             _unhandled => CommandReturn::failure(ErrorCode::INVAL),
         }
