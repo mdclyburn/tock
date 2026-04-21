@@ -239,22 +239,9 @@ impl SyscallDriver for Registry {
             // Application is registering as a userspace service.
             // Check that it has shared its buffer with the capsule.
             (COMMAND_REGISTER, role_id, _r3) => {
-                // Check buffer data.
-                let res_buffer_check = self.userv_data.enter(
-                    pid,
-                    |_ad, kad| {
-                        kad.get_readwrite_processbuffer(ALLOW_RW_NO_ARGS)
-                            .map(|pbuf| pbuf.ptr() != ptr::null() && pbuf.len() > 0)
-                    })
-                    .flatten()
-                    .map_err(|err| ErrorCode::FAIL)
-                    .and_then(|is_valid_pbuf| if is_valid_pbuf { Ok(()) } else { Err(ErrorCode::NOMEM) })
-                    .into();
-
                 // Register the service.
                 self.register(pid, role_id)
                     .map_err(|err| ErrorCode::ALREADY)
-                    .and(res_buffer_check)
                     .into()
             },
 
