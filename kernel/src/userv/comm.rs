@@ -1,6 +1,7 @@
 /*! Kernel-userspace service communication.
  */
 
+use crate::errorcode::ErrorCode;
 use crate::process::Error;
 use crate::userv::tl::{
     ArgumentReader,
@@ -49,5 +50,9 @@ pub trait UserspaceServiceClient {
     /// The role ID accompanies the results to allow an implementor creating a composite facility
     /// (e.g., encrypting and hashing roles)
     /// to support and discern multiple roles.
-    fn usercall_done<'a>(&self, role_id: usize, operation_id: usize, args: &ArgumentReader<'a>);
+    fn usercall_done<'a>(
+        &self,
+        role_id: usize,
+        operation_id: usize,
+        args: Result<&ArgumentReader<'a>, usize>);
 }

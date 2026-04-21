@@ -5,6 +5,7 @@ use core::mem;
 use core::ops::Index;
 use core::ptr;
 
+use crate::debug;
 use crate::process::Error;
 use crate::processbuffer::{
     ReadableProcessBuffer,
@@ -94,6 +95,7 @@ impl<'a> ArgumentBuilder<'a> {
                         }
                     }
                 }
+                debug!("[usreg] arg space used: {} B", idx);
 
                 Ok(())
             })??;

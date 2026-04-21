@@ -113,6 +113,12 @@ impl Registry {
         None
     }
 
+    fn find_by_pid(&self, userv_pid: ProcessId) -> Option<usize> {
+        self.userv_ents.iter()
+            .find(|ent| ent.map_or(false, |s| s.current_pid == userv_pid))
+            .map(|ent| ent.unwrap_or_panic().userv_id)
+    }
+
     /// Register a userspace service.
     ///
     /// Adds a userspace service entry.
@@ -255,17 +261,14 @@ impl SyscallDriver for Registry {
             // A userspace operation has completed a previously-requested operation.
             // Retrieve the result and send it to client.
             (COMMAND_USERV_RETURN_SUCCESS, _r2, _r3) => {
-                let role_id = self.userv_ents.iter()
-                    .find(|ent| ent.map_or(false, |s| s.current_pid == pid))
-                    .map(|ent| ent.unwrap_or_panic().userv_id)
-                    .unwrap();
+                let role_id = self.find_by_pid(pid).unwrap();
                 self.userv_data.enter(
                     pid,
                     |ad, kad| {
                         // Provide the client with the data sent from the userspace service.
                         let pbuf = kad.get_readwrite_processbuffer(ALLOW_RW_NO_ARGS)?;
                         let arg_reader = ArgumentReader::new(&pbuf)?;
-                        ad.client.map(|(op, c)| c.usercall_done(role_id, op, &arg_reader));
+                        ad.client.map(|(op, c)| c.usercall_done(role_id, op, Ok(&arg_reader)));
 
                         // The client is no longer the client,
                         // even in the event of an unsuccessful operation.
@@ -278,7 +281,21 @@ impl SyscallDriver for Registry {
                     .into()
             },
 
-            (COMMAND_USERV_RETURN_FAILURE, _errorcode, _r3) => unimplemented!(),
+            (COMMAND_USERV_RETURN_FAILURE, errno, _r3) => {
+                let role_id = self.find_by_pid(pid).unwrap();
+                self.userv_data.enter(
+                    pid,
+                    |ad, kad| {
+                        // Inform the client that the operation completed in failure.
+                        ad.client.map(|(op, c)| c.usercall_done(role_id, op, Err(errno)));
+                        ad.client = None;
+
+                        Ok(())
+                    })
+                    .flatten()
+                    .map_err(|_perr| ErrorCode::FAIL)
+                    .into()
+            },
 
             _unhandled => CommandReturn::failure(ErrorCode::INVAL),
         }

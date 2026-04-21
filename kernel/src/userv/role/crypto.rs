@@ -135,39 +135,58 @@ impl AEADProvider for ServiceInterface {
 }
 
 impl UserspaceServiceClient for ServiceInterface {
-    fn usercall_done<'a>(&self, _role_id: usize, operation_id: usize, args: &ArgumentReader<'a>) {
+    fn usercall_done<'a>(&self, _role_id: usize, operation_id: usize, args: Result<&ArgumentReader<'a>, usize>) {
         let (nonce_buf, pt_buf, aad_buf, ct_buf, tag_buf) = self.aead_buffers.take()
         // Should have always taken ownership of AEAD buffers on call to encrypt/decrypt,
         // and should only get one callback from the userspace service.
             .unwrap();
-        match operation_id {
-            ops::ENCRYPT => {
-                self.client.map(
-                    |client| {
-                        client.encrypt_done(
-                            nonce_buf,
-                            pt_buf,
-                            ct_buf,
-                            aad_buf,
-                            tag_buf)
-                    });
-            },
 
-            ops::DECRYPT => {
-                self.client.map(
-                    |client| {
-                        client.decrypt_done(
-                            nonce_buf,
-                            ct_buf,
-                            pt_buf,
-                            aad_buf,
-                            tag_buf,
-                            true) // TODO: tag_matches should come from userspace service as return argument.
-                    });
-            },
+        if let Ok(args) = args {
+            match operation_id {
+                ops::ENCRYPT => {
+                    // Copy the ciphertext and the AAD into their respective buffers.
+                    let userv_ret = (
+                        args.read_argument_n(0),
+                        args.read_argument_n(1));
+                    if let (Some(Argument::Bytes(ct)), Some(Argument::Bytes(aad))) = userv_ret {
+                        ct_buf.copy_from_slice(ct);
+                        aad_buf.copy_from_slice(aad);
 
-            // Ignore unknown operation codes.
-            _ => {  }
-        };
+                        // Provide the client with the resulting ciphertext and AAD.
+                        self.client.map(
+                            |client| {
+                                client.encrypt_done(
+                                    nonce_buf,
+                                    pt_buf,
+                                    ct_buf,
+                                    aad_buf,
+                                    tag_buf)
+                            });
+                    } else {
+                        // What happens if the userspace service does not abide by the expected return format?
+                        unimplemented!();
+                    }
+                },
+
+                ops::DECRYPT => {
+                    self.client.map(
+                        |client| {
+                            client.decrypt_done(
+                                nonce_buf,
+                                ct_buf,
+                                pt_buf,
+                                aad_buf,
+                                tag_buf,
+                                true) // TODO: tag_matches should come from userspace service as return argument.
+                        });
+                },
+
+                // Ignore unknown operation codes.
+                _ => {  }
+            };
+        } else {
+            // Encrypt/decrypt operation failed.
+            unimplemented!();
+        }
     }
 }
