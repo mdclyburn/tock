@@ -899,17 +899,3 @@ impl AEADProviderClient for Isle {
         self.pending_for.clear();
     }
 }
-
-impl UserspaceServiceClient for Isle {
-    fn usercall_done<'a>(&self, role_id: usize, operation_id: usize, args: &ArgumentReader<'a>) {
-        match (role_id, operation_id) {
-            (crypto::ROLE_ID, crypto::ops::ENCRYPT) => unimplemented!(),
-
-            (crypto::ROLE_ID, crypto::ops::DECRYPT) => unimplemented!(),
-
-            // This capsule used an operation or was provided as the caller for an operation
-            // that it does not handle.
-            _unhandled_op => panic!(),
-        }
-    }
-}
