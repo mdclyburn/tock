@@ -75,7 +75,6 @@ impl AEADProvider for ServiceInterface {
         let encrypt_args = [
             Argument::Bytes(ckey),
             Argument::Bytes(nonce),
-            Argument::U32(message_len as u32), // ENG: Hmm...
             Argument::Bytes(in_plaintext),
             Argument::Bytes(in_aad),
         ];
@@ -85,7 +84,7 @@ impl AEADProvider for ServiceInterface {
             self,
             ROLE_ID,
             ops::ENCRYPT,
-            UsercallArguments::Extended(&encrypt_args));
+            UsercallArguments::Extended(Some(message_len), None, &encrypt_args));
 
         if invoke_res.is_ok() {
             // Take ownership of the buffers while the request is outstanding.

@@ -24,6 +24,7 @@ use kernel::syscall::{
     CommandReturn,
     SyscallDriver,
 };
+use kernel::userv;
 use kernel::userv::comm::{
     Argument,
     UserspaceServiceAccess,
@@ -39,6 +40,7 @@ use kernel::utilities::cells::OptionalCell;
 pub const DRIVER_NO: usize = crate::driver::NUM::UservRegistry as usize;
 
 #[derive(Default)]
+/// Grant containing context for userspace service process.
 pub struct UserspaceServiceGrant {
     /// The client the service is acting on behalf of currently and the operation ID.
     client: Option<(usize, &'static dyn UserspaceServiceClient)>,
@@ -52,8 +54,6 @@ struct Service {
     /// The process ID of the application implementing the userspace service instance running now.
     current_pid: ProcessId,
 }
-
-const ALLOW_RW_NO_ARGS: usize = 0;
 
 const SUBSCRIBE_NO_INVOKE_USERCALL: usize = 0;
 
@@ -185,23 +185,7 @@ impl Registry {
                             return Err(Error::AlreadyInUse);
                         }
 
-                        let upcall_args = match args {
-                            UsercallArguments::Short(arg1, arg2) => (operation_id, arg1, arg2),
-
-                            UsercallArguments::Extended(usercall_args) => {
-                                // Build the arguments buffer.
-                                let pbuf = kad
-                                    .get_readwrite_processbuffer(ALLOW_RW_NO_ARGS)
-                                    .unwrap(); // Userspace service should have shared the buffer upon registration.
-                                let mut arg_builder = ArgumentBuilder::new(&pbuf)?;
-
-                                for arg in usercall_args.iter() {
-                                    arg_builder.place(arg)?;
-                                }
-
-                                arg_builder.as_upcall_arguments(operation_id)
-                            },
-                        };
+                        let upcall_args = userv::comm::place_arguments(operation_id, kad, args)?;
 
                         // Send an upcall to the userspace service.
                         debug!("[usreg] invoking userspace service");
@@ -253,9 +237,8 @@ impl SyscallDriver for Registry {
                     pid,
                     |ad, kad| {
                         // Provide the client with the data sent from the userspace service.
-                        let pbuf = kad.get_readwrite_processbuffer(ALLOW_RW_NO_ARGS)?;
-                        let arg_reader = ArgumentReader::new(&pbuf)?;
-                        ad.client.map(|(op, c)| c.usercall_done(role_id, op, Ok(&arg_reader)));
+                        // Use the userspace service's read-only allow buffers to return results.
+                        unimplemented!();
 
                         // The client is no longer the client,
                         // even in the event of an unsuccessful operation.
