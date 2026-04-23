@@ -63,7 +63,7 @@ pub trait UserspaceServiceClient {
         &self,
         role_id: usize,
         operation_id: usize,
-        args: Result<&ArgumentReader<'a, 'grant>, usize>,
+        args: Result<&ReturnValueReader<'a, 'grant>, usize>,
     );
 }
 
@@ -123,7 +123,7 @@ pub enum ReturnValue<'a> {
     Bytes(&'a ReadOnlyProcessBuffer),
 }
 
-pub struct ArgumentReader<'a, 'grant> {
+pub struct ReturnValueReader<'a, 'grant> {
     userv_k_grant_data: &'a GrantKernelData<'grant>,
 }
 
@@ -131,9 +131,9 @@ const ARG_MARK_IDX: usize = 0;
 
 const ARG_MARK_TYPE_U32: u8 = 0x01;
 
-impl<'a, 'grant> ArgumentReader<'a, 'grant> {
-    pub fn new(userv_k_grant_data: &'a GrantKernelData<'grant>) -> ArgumentReader<'a, 'grant> {
-        ArgumentReader {
+impl<'a, 'grant> ReturnValueReader<'a, 'grant> {
+    pub fn new(userv_k_grant_data: &'a GrantKernelData<'grant>) -> ReturnValueReader<'a, 'grant> {
+        ReturnValueReader {
             userv_k_grant_data,
         }
     }

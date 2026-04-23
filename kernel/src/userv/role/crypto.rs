@@ -20,7 +20,7 @@ use crate::processbuffer::{
 };
 use crate::userv::comm::{
     Argument,
-    ArgumentReader,
+    ReturnValueReader,
     ReturnValue,
     UsercallArguments,
     UserspaceServiceAccess,
@@ -142,7 +142,7 @@ impl UserspaceServiceClient for ServiceInterface {
         &self,
         _role_id: usize,
         operation_id: usize,
-        args: Result<&ArgumentReader<'a, 'grant>, usize>,
+        args: Result<&ReturnValueReader<'a, 'grant>, usize>,
     ) {
         let (nonce_buf, pt_buf, aad_buf, ct_buf, tag_buf) = self.aead_buffers.take()
         // Should have always taken ownership of AEAD buffers on call to encrypt/decrypt,
