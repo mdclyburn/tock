@@ -15,13 +15,17 @@ use crate::crypto::provider::{
 };
 use crate::errorcode::ErrorCode;
 use crate::process::Error;
+use crate::processbuffer::{
+    ReadableProcessBuffer,
+};
 use crate::userv::comm::{
     Argument,
+    ArgumentReader,
+    ReturnValue,
     UsercallArguments,
     UserspaceServiceAccess,
     UserspaceServiceClient,
 };
-use crate::userv::tl::ArgumentReader;
 use crate::utilities::cells::OptionalCell;
 
 /// Cryptography userspace service role ID.
@@ -134,7 +138,12 @@ impl AEADProvider for ServiceInterface {
 }
 
 impl UserspaceServiceClient for ServiceInterface {
-    fn usercall_done<'a>(&self, _role_id: usize, operation_id: usize, args: Result<&ArgumentReader<'a>, usize>) {
+    fn usercall_done<'a, 'grant>(
+        &self,
+        _role_id: usize,
+        operation_id: usize,
+        args: Result<&ArgumentReader<'a, 'grant>, usize>,
+    ) {
         let (nonce_buf, pt_buf, aad_buf, ct_buf, tag_buf) = self.aead_buffers.take()
         // Should have always taken ownership of AEAD buffers on call to encrypt/decrypt,
         // and should only get one callback from the userspace service.
@@ -147,9 +156,9 @@ impl UserspaceServiceClient for ServiceInterface {
                     let userv_ret = (
                         args.read_argument_n(0),
                         args.read_argument_n(1));
-                    if let (Some(Argument::Bytes(ct)), Some(Argument::Bytes(aad))) = userv_ret {
-                        ct_buf.copy_from_slice(ct);
-                        aad_buf.copy_from_slice(aad);
+                    if let (Some(ReturnValue::Bytes(ct)), Some(ReturnValue::Bytes(aad))) = userv_ret {
+                        let _r = ct.enter(|ro_buf| ro_buf.copy_to_slice(&mut ct_buf[0..ct.len()]));
+                        let _r = aad.enter(|ro_buf| ro_buf.copy_to_slice(&mut aad_buf[0..aad.len()]));
 
                         // Provide the client with the resulting ciphertext and AAD.
                         self.client.map(
