@@ -8,6 +8,7 @@ use crate::grant::GrantKernelData;
 use crate::process::Error;
 use crate::processbuffer::{
     ReadOnlyProcessBuffer,
+    ReadOnlyProcessBufferRef,
     ReadableProcessBuffer,
     WriteableProcessBuffer,
 };
@@ -59,11 +60,11 @@ pub trait UserspaceServiceClient {
     /// The role ID accompanies the results to allow an implementor creating a composite facility
     /// (e.g., encrypting and hashing roles)
     /// to support and discern multiple roles.
-    fn usercall_done<'a, 'grant>(
+    fn usercall_done<'r, 'grant>(
         &self,
         role_id: usize,
         operation_id: usize,
-        args: Result<&ReturnValueReader<'a, 'grant>, usize>,
+        args: Result<ReturnValueReader<'r, 'grant>, usize>,
     );
 }
 
@@ -116,23 +117,23 @@ pub fn place_arguments(
 }
 
 /// Data returned from the userspace service.
-pub enum ReturnValue<'a> {
+pub enum ReturnValue<'grant> {
     /// A single 32-bit unsigned integer.
     U32(u32),
     /// A sequence of bytes.
-    Bytes(&'a ReadOnlyProcessBuffer),
+    Bytes(ReadOnlyProcessBufferRef<'grant>),
 }
 
-pub struct ReturnValueReader<'a, 'grant> {
-    userv_k_grant_data: &'a GrantKernelData<'grant>,
+pub struct ReturnValueReader<'r, 'grant> {
+    userv_k_grant_data: &'r GrantKernelData<'grant>,
 }
 
 const ARG_MARK_IDX: usize = 0;
 
 const ARG_MARK_TYPE_U32: u8 = 0x01;
 
-impl<'a, 'grant> ReturnValueReader<'a, 'grant> {
-    pub fn new(userv_k_grant_data: &'a GrantKernelData<'grant>) -> ReturnValueReader<'a, 'grant> {
+impl<'r, 'grant> ReturnValueReader<'r, 'grant> {
+    pub fn new(userv_k_grant_data: &'r GrantKernelData<'grant>) -> ReturnValueReader<'r, 'grant> {
         ReturnValueReader {
             userv_k_grant_data,
         }

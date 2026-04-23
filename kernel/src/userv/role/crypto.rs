@@ -138,11 +138,11 @@ impl AEADProvider for ServiceInterface {
 }
 
 impl UserspaceServiceClient for ServiceInterface {
-    fn usercall_done<'a, 'grant>(
+    fn usercall_done<'r, 'grant>(
         &self,
         _role_id: usize,
         operation_id: usize,
-        args: Result<&ReturnValueReader<'a, 'grant>, usize>,
+        args: Result<ReturnValueReader<'r, 'grant>, usize>,
     ) {
         let (nonce_buf, pt_buf, aad_buf, ct_buf, tag_buf) = self.aead_buffers.take()
         // Should have always taken ownership of AEAD buffers on call to encrypt/decrypt,
