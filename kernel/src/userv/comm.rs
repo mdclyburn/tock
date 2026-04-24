@@ -68,6 +68,7 @@ pub trait UserspaceServiceClient {
     );
 }
 
+/// Put arguments into a userspace service's process buffers.
 pub fn place_arguments(
     operation_id: usize,
     k_grant_data: &GrantKernelData,
@@ -116,13 +117,20 @@ pub fn place_arguments(
     }
 }
 
+/// Data that can be interpreted from a userspace service's process buffer bytes.
 trait Deserialize: Sized {
+    /// Attempt to convert the bytes of a process buffer into a target type.
+    ///
+    /// Try interpreting the bytes in the buffer as having type `Self`.
+    /// Returns `Ok(Self)` if successful.
+    /// Returns `Err(())` if the interpretation failed.
     fn try_deserialize(buffer: ReadOnlyProcessBufferRef<'_>) -> Result<Self, ()>;
 }
 
 impl Deserialize for u32 {
     fn try_deserialize(buffer: ReadOnlyProcessBufferRef<'_>) -> Result<Self, ()> {
-        if buffer.len() < mem::size_of::<u32>() {
+        // Require that the userspace service use the exact number of bytes.
+        if buffer.len() != mem::size_of::<u32>() {
             Err(())
         } else {
             buffer.enter(
@@ -136,6 +144,13 @@ impl Deserialize for u32 {
     }
 }
 
+/// Reader for userspace service return values.
+///
+/// Structured interpreter for userspace service return values.
+/// Provides the two `usize` values returned directly from the userspace service,
+/// as well as functions to parse the data in the userspace service's process buffers.
+/// Use [`ReturnValueReader::buffer_n_as_value()`] to retrieve values of a supported type.
+/// Use [`ReturnValueReader::buffer_n()`] to access the buffer.
 pub struct ReturnValueReader<'r, 'grant> {
     // Values returned directly through the command syscall.
     direct_rvals: (usize, usize),
@@ -144,11 +159,8 @@ pub struct ReturnValueReader<'r, 'grant> {
     userv_k_grant_data: &'r GrantKernelData<'grant>,
 }
 
-const ARG_MARK_IDX: usize = 0;
-
-const ARG_MARK_TYPE_U32: u8 = 0x01;
-
 impl<'r, 'grant> ReturnValueReader<'r, 'grant> {
+    /// Create a new instance.
     pub fn new(
         rval1: usize,
         rval2: usize,
@@ -161,10 +173,15 @@ impl<'r, 'grant> ReturnValueReader<'r, 'grant> {
         }
     }
 
+    /// Returns the pair of direct return values from the userspace service.
     pub fn direct_rvals(&self) -> (usize, usize) {
         self.direct_rvals
     }
 
+    /// Returns access to the nth read-only process buffer.
+    ///
+    /// Provides access to the userspace service's entire nth process buffer.
+    /// Returns `Some(_)` if the userspace service has `allow`ed the buffer and its length is greater than zero.
     pub fn buffer_n(&self, idx: usize) -> Option<ReadOnlyProcessBufferRef<'_>> {
         self.userv_k_grant_data
             .get_readonly_processbuffer(idx)
@@ -172,6 +189,12 @@ impl<'r, 'grant> ReturnValueReader<'r, 'grant> {
             .filter(|pbuf| pbuf.len() > 0)
     }
 
+    /// Interprets and returns the value stored in the nth read-only process buffer.
+    ///
+    /// Interprets the bytes in the userspace service's nth read-only process buffer and returns that value.
+    /// Returns `None` if the userspace service has not `allow`ed its nth read-only process buffer.
+    /// Returns `Some(Err(())` if the userspace service is returning data but the interpretation failed.
+    /// Returns `Some(Ok(T))` upon successful interpretation.
     pub fn buffer_n_as_value<T: Deserialize>(&self, idx: usize) -> Option<Result<T, ()>> {
         let ro_pbuf = self.buffer_n(idx)?;
         Some(T::try_deserialize(ro_pbuf))
