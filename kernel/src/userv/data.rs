@@ -12,7 +12,7 @@ use crate::processbuffer::{
 
 /// Data that can be placed into a userspace service's process buffer.
 pub trait Serialize: Sized {
-    fn try_serialize(buffer: ReadWriteProcessBufferRef<'_>) -> Result<(), ()>;
+    fn try_serialize(&self, buffer: ReadWriteProcessBufferRef<'_>) -> Result<(), ()>;
 }
 
 /// Data that can be interpreted from a userspace service's process buffer bytes.
@@ -33,7 +33,7 @@ macro_rules! impl_serialization_for_numerical {
     ($($t:ty),+) => {
         $(
             impl Serialize for $t {
-                fn try_serialize(buffer: ReadWriteProcessBufferRef<'_>) -> Result<(), ()> {
+                fn try_serialize(&self, buffer: ReadWriteProcessBufferRef<'_>) -> Result<(), ()> {
                     if buffer.len() < mem::size_of::<$t>() {
                         Err(())
                     } else {
@@ -70,3 +70,16 @@ macro_rules! impl_serialization_for_numerical {
 impl_serialization_for_numerical!(
     u8, u16, u32, u64, usize,
     i8, i16, i32, i64, isize);
+
+impl Serialize for &[u8] {
+    fn try_serialize(&self, buffer: ReadWriteProcessBufferRef<'_>) -> Result<(), ()> {
+        if buffer.len() < self.len() {
+            Err(()) // Out of memory error instead?
+        } else {
+            buffer.mut_enter(
+                |rw_slice| rw_slice[0..self.len()]
+                    .copy_from_slice(self))
+                .map_err(|_perr| ())
+        }
+    }
+}
