@@ -27,6 +27,7 @@ use kernel::syscall::{
 use kernel::userv;
 use kernel::userv::comm::{
     Argument,
+    ReturnValueReader,
     UserspaceServiceAccess,
     UserspaceServiceClient,
     UsercallArguments,
@@ -231,14 +232,15 @@ impl SyscallDriver for Registry {
 
             // A userspace operation has completed a previously-requested operation.
             // Retrieve the result and send it to client.
-            (COMMAND_USERV_RETURN_SUCCESS, _r2, _r3) => {
+            (COMMAND_USERV_RETURN_SUCCESS, rv1, rv2) => {
                 let role_id = self.find_by_pid(pid).unwrap();
                 self.userv_data.enter(
                     pid,
                     |ad, kad| {
                         // Provide the client with the data sent from the userspace service.
                         // Use the userspace service's read-only allow buffers to return results.
-                        unimplemented!();
+                        let rv_reader = ReturnValueReader::new(rv1, rv2, kad);
+                        ad.client.map(|(op, c)| c.usercall_done(role_id, op, Ok(rv_reader)));
 
                         // The client is no longer the client,
                         // even in the event of an unsuccessful operation.

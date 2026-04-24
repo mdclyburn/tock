@@ -116,15 +116,31 @@ pub fn place_arguments(
     }
 }
 
-/// Data returned from the userspace service.
-pub enum ReturnValue<'grant> {
-    /// A single 32-bit unsigned integer.
-    U32(u32),
-    /// A sequence of bytes.
-    Bytes(ReadOnlyProcessBufferRef<'grant>),
+trait Deserialize: Sized {
+    fn try_deserialize(buffer: ReadOnlyProcessBufferRef<'_>) -> Result<Self, ()>;
+}
+
+impl Deserialize for u32 {
+    fn try_deserialize(buffer: ReadOnlyProcessBufferRef<'_>) -> Result<Self, ()> {
+        if buffer.len() < mem::size_of::<u32>() {
+            Err(())
+        } else {
+            buffer.enter(
+                |ro_slice| {
+                    let mut val_bytes = [0; mem::size_of::<u32>()];
+                    ro_slice.copy_to_slice(&mut val_bytes[0..mem::size_of::<u32>()]);
+                    u32::from_ne_bytes(val_bytes)
+                })
+                .map_err(|_perr| ())
+        }
+    }
 }
 
 pub struct ReturnValueReader<'r, 'grant> {
+    // Values returned directly through the command syscall.
+    direct_rvals: (usize, usize),
+    // Kernel-managed grant data for the userspace service
+    // permitting access to allow'd buffers containing returned data.
     userv_k_grant_data: &'r GrantKernelData<'grant>,
 }
 
@@ -133,41 +149,31 @@ const ARG_MARK_IDX: usize = 0;
 const ARG_MARK_TYPE_U32: u8 = 0x01;
 
 impl<'r, 'grant> ReturnValueReader<'r, 'grant> {
-    pub fn new(userv_k_grant_data: &'r GrantKernelData<'grant>) -> ReturnValueReader<'r, 'grant> {
+    pub fn new(
+        rval1: usize,
+        rval2: usize,
+        userv_k_grant_data: &'r GrantKernelData<'grant>,
+    ) -> ReturnValueReader<'r, 'grant>
+    {
         ReturnValueReader {
+            direct_rvals: (rval1, rval2),
             userv_k_grant_data,
         }
     }
 
-    pub fn read_argument_n(&self, idx: usize) -> Option<ReturnValue<'grant>> {
-        let ro_pbuf = self.userv_k_grant_data
+    pub fn direct_rvals(&self) -> (usize, usize) {
+        self.direct_rvals
+    }
+
+    pub fn buffer_n(&self, idx: usize) -> Option<ReadOnlyProcessBufferRef<'_>> {
+        self.userv_k_grant_data
             .get_readonly_processbuffer(idx)
-            .ok()?;
+            .ok()
+            .filter(|pbuf| pbuf.len() > 0)
+    }
 
-        if ro_pbuf.len() == 0 {
-            None
-        } else {
-            let arg_type_marker = ro_pbuf
-                .enter(|ro_slice| ro_slice.get(ARG_MARK_IDX).map(|b| b.get()))
-                .ok()
-                .flatten()?;
-            match arg_type_marker {
-                ARG_MARK_TYPE_U32 => {
-                    if ro_pbuf.len() < 5 {
-                        None
-                    } else {
-                        ro_pbuf.enter(
-                            |ro_slice| {
-                                let mut val_bytes = [0; mem::size_of::<u32>()];
-                                ro_slice.copy_to_slice(&mut val_bytes[0..mem::size_of::<u32>()]);
-                                ReturnValue::U32(u32::from_ne_bytes(val_bytes))
-                            })
-                            .ok()
-                    }
-                },
-
-                _ => unimplemented!(),
-            }
-        }
+    pub fn buffer_n_as_value<T: Deserialize>(&self, idx: usize) -> Option<Result<T, ()>> {
+        let ro_pbuf = self.buffer_n(idx)?;
+        Some(T::try_deserialize(ro_pbuf))
     }
 }

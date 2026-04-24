@@ -21,7 +21,6 @@ use crate::processbuffer::{
 use crate::userv::comm::{
     Argument,
     ReturnValueReader,
-    ReturnValue,
     UsercallArguments,
     UserspaceServiceAccess,
     UserspaceServiceClient,
@@ -154,9 +153,9 @@ impl UserspaceServiceClient for ServiceInterface {
                 ops::ENCRYPT => {
                     // Copy the ciphertext and the AAD into their respective buffers.
                     let userv_ret = (
-                        args.read_argument_n(0),
-                        args.read_argument_n(1));
-                    if let (Some(ReturnValue::Bytes(ct)), Some(ReturnValue::Bytes(aad))) = userv_ret {
+                        args.buffer_n(0),
+                        args.buffer_n(1));
+                    if let (Some(ct), Some(aad)) = userv_ret {
                         let _r = ct.enter(|ro_buf| ro_buf.copy_to_slice(&mut ct_buf[0..ct.len()]));
                         let _r = aad.enter(|ro_buf| ro_buf.copy_to_slice(&mut aad_buf[0..aad.len()]));
 
