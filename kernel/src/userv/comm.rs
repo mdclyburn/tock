@@ -12,6 +12,10 @@ use crate::processbuffer::{
     ReadableProcessBuffer,
     WriteableProcessBuffer,
 };
+use crate::userv::data::{
+    Deserialize,
+    Serialize,
+};
 
 /// Userspace service-compatible argument representation.
 pub enum Argument<'a> {
@@ -114,33 +118,6 @@ pub fn place_arguments(
                 opt_arg1.unwrap_or(0),
                 opt_arg2.unwrap_or(0)))
         },
-    }
-}
-
-/// Data that can be interpreted from a userspace service's process buffer bytes.
-trait Deserialize: Sized {
-    /// Attempt to convert the bytes of a process buffer into a target type.
-    ///
-    /// Try interpreting the bytes in the buffer as having type `Self`.
-    /// Returns `Ok(Self)` if successful.
-    /// Returns `Err(())` if the interpretation failed.
-    fn try_deserialize(buffer: ReadOnlyProcessBufferRef<'_>) -> Result<Self, ()>;
-}
-
-impl Deserialize for u32 {
-    fn try_deserialize(buffer: ReadOnlyProcessBufferRef<'_>) -> Result<Self, ()> {
-        // Require that the userspace service use the exact number of bytes.
-        if buffer.len() != mem::size_of::<u32>() {
-            Err(())
-        } else {
-            buffer.enter(
-                |ro_slice| {
-                    let mut val_bytes = [0; mem::size_of::<u32>()];
-                    ro_slice.copy_to_slice(&mut val_bytes[0..mem::size_of::<u32>()]);
-                    u32::from_ne_bytes(val_bytes)
-                })
-                .map_err(|_perr| ())
-        }
     }
 }
 
