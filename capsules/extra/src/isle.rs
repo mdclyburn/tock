@@ -35,14 +35,6 @@ use kernel::syscall::{
     CommandReturn,
     SyscallDriver,
 };
-use kernel::userv::comm::{
-    UserspaceServiceAccess,
-    UserspaceServiceClient,
-};
-use kernel::userv::tl::{
-    ArgumentReader,
-};
-use kernel::userv::role::crypto;
 use kernel::utilities::cells::{
     OptionalCell,
     TakeCell,

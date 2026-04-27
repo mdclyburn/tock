@@ -32,10 +32,6 @@ use kernel::userv::comm::{
     UserspaceServiceClient,
     UsercallArguments,
 };
-use kernel::userv::tl::{
-    ArgumentBuilder,
-    ArgumentReader,
-};
 use kernel::utilities::cells::OptionalCell;
 
 pub const DRIVER_NO: usize = crate::driver::NUM::UservRegistry as usize;
