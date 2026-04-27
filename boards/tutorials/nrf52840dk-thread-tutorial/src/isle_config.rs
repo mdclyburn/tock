@@ -6,6 +6,7 @@ use capsules_extra::isle::{
     ISLEConfigurationProvider,
 };
 
+#[allow(unused)]
 pub struct Fixed;
 
 impl ISLEConfigurationProvider for Fixed {

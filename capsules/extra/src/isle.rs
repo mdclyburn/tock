@@ -42,9 +42,6 @@ use kernel::utilities::cells::{
 
 pub const DRIVER_NO: usize = capsules_core::driver::NUM::Isle as usize;
 
-/// Length of the AEAD provider's ciphertext key in bits.
-const CKEY_LEN_BITS: u16 = CKEY_LEN_MAX as u16 * 8;
-
 /// Length of the interface identifier, the lower half of the IP address.
 const IID_LEN: usize = 8;
 /// Length of the sender ID; lower 64 bits of the IP address.
@@ -300,7 +297,8 @@ impl Isle {
                                     .enter(|b| b.copy_to_slice(&mut buf[IID_LEN..IID_LEN+b.len()]))?;
 
                                 Ok::<_, Error>(())
-                            })?;
+                            })
+                            .flatten()?;
                     }
 
                     Ok(())

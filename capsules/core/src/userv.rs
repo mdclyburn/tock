@@ -1,9 +1,6 @@
 /*! Userspace service-kernel intermediation.
  */
 
-use core::cell::Cell;
-use core::ptr;
-
 use kernel::debug;
 use kernel::errorcode::ErrorCode;
 use kernel::grant::{
@@ -15,10 +12,6 @@ use kernel::grant::{
 use kernel::process::{
     Error,
     ProcessId,
-    ShortId,
-};
-use kernel::processbuffer::{
-    ReadableProcessBuffer,
 };
 use kernel::syscall::{
     CommandReturn,
@@ -26,7 +19,6 @@ use kernel::syscall::{
 };
 use kernel::userv;
 use kernel::userv::comm::{
-    Argument,
     ReturnValueReader,
     UserspaceServiceAccess,
     UserspaceServiceClient,
@@ -78,7 +70,7 @@ impl Registry {
     ///
     /// Idenfifies the `Service` requested by the caller and runs the provided function.
     /// Returns an Error if the service is not in the registry.
-    pub fn with_service<F, T>(&self, target_userv_id: usize, f: F) -> Result<T, Error>
+    fn with_service<F, T>(&self, target_userv_id: usize, f: F) -> Result<T, Error>
     where
         F: FnOnce(Service) -> T
     {
@@ -190,7 +182,7 @@ impl Registry {
                             .map_err(|_upcall_error| Error::KernelError)?;
 
                         // The caller is now the client of the userspace service.
-                        ad.client.insert((operation_id, caller));
+                        let _none = ad.client.insert((operation_id, caller));
 
                         Ok(())
                     })
@@ -222,7 +214,7 @@ impl SyscallDriver for Registry {
             (COMMAND_REGISTER, role_id, _r3) => {
                 // Register the service.
                 self.register(pid, role_id)
-                    .map_err(|err| ErrorCode::ALREADY)
+                    .map_err(|err| err.into())
                     .into()
             },
 
@@ -253,7 +245,7 @@ impl SyscallDriver for Registry {
                 let role_id = self.find_by_pid(pid).unwrap();
                 self.userv_data.enter(
                     pid,
-                    |ad, kad| {
+                    |ad, _kad| {
                         // Inform the client that the operation completed in failure.
                         ad.client.map(|(op, c)| c.usercall_done(role_id, op, Err(errno)));
                         ad.client = None;

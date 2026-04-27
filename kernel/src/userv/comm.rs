@@ -1,16 +1,11 @@
 /*! Kernel-userspace service communication.
  */
 
-use core::mem;
-
-use crate::errorcode::ErrorCode;
 use crate::grant::GrantKernelData;
 use crate::process::Error;
 use crate::processbuffer::{
-    ReadOnlyProcessBuffer,
     ReadOnlyProcessBufferRef,
     ReadableProcessBuffer,
-    WriteableProcessBuffer,
 };
 use crate::userv::data::{
     Deserialize,

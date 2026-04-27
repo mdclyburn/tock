@@ -39,9 +39,8 @@ macro_rules! impl_serialization_for_numerical {
                     } else {
                         buffer.mut_enter(
                             |rw_slice| {
-                                let mut val_bytes = [0; mem::size_of::<$t>()];
                                 rw_slice[0..mem::size_of::<$t>()]
-                                    .copy_from_slice(&val_bytes[0..mem::size_of::<$t>()]);
+                                    .copy_from_slice(&self.to_ne_bytes());
                             })
                             .map_err(|_perr| ())
                     }

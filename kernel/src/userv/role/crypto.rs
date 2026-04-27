@@ -14,12 +14,10 @@ use crate::crypto::provider::{
     AEADTuple,
 };
 use crate::errorcode::ErrorCode;
-use crate::process::Error;
 use crate::processbuffer::{
     ReadableProcessBuffer,
 };
 use crate::userv::comm::{
-    Argument,
     ReturnValueReader,
     UsercallArguments,
     UserspaceServiceAccess,
@@ -82,7 +80,7 @@ impl AEADProvider for ServiceInterface {
         out_ciphertext: &'static mut [u8; MESSAGE_LEN_MAX],
         out_tag: &'static mut [u8; TAG_LEN_MAX],
         message_len: usize,
-        aad_len: usize,
+        _aad_len: usize,
     ) -> Result<(), (ErrorCode, AEADTuple)> {
         use crate::userv::data::{Bytes, Serialize};
 
@@ -131,6 +129,7 @@ impl AEADProvider for ServiceInterface {
         }
     }
 
+    #[allow(unused_variables)]
     fn decrypt(
         &self,
         ckey: &[u8; CKEY_LEN_MAX],
