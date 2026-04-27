@@ -40,7 +40,11 @@ pub mod ops {
 /// Plaintext buffer padding byte length.
 pub const PADDING_LEN: usize = 8;
 
+/// Cryptographic userspace service access provider.
 pub struct ServiceInterface {
+    /// Self-reference to avoid needing &'static self in HILs.
+    self_userv_client: OptionalCell<&'static dyn UserspaceServiceClient>,
+    /// Userspace service access interface.
     userv_access: &'static dyn UserspaceServiceAccess,
     /// The client for the cryptographic userspace service through this entity.
     client: OptionalCell<&'static dyn AEADProviderClient>,
@@ -54,10 +58,15 @@ impl ServiceInterface {
     ) -> ServiceInterface
     {
         ServiceInterface {
+            self_userv_client: OptionalCell::empty(),
             userv_access,
             client: OptionalCell::empty(),
             aead_buffers: OptionalCell::empty(),
         }
+    }
+
+    pub fn init(&'static self) {
+        self.self_userv_client.set(self)
     }
 }
 
@@ -65,7 +74,7 @@ impl AEADProvider for ServiceInterface {
     fn padding_size(&self) -> usize { PADDING_LEN }
 
     fn encrypt(
-        &'static self,
+        &self,
         ckey: &[u8; CKEY_LEN_MAX],
         nonce: &'static mut [u8; NONCE_LEN_MAX],
         in_plaintext: &'static mut [u8; MESSAGE_LEN_MAX],
@@ -85,24 +94,33 @@ impl AEADProvider for ServiceInterface {
         ];
 
         // Send request via the userspace service capsule.
-        let invoke_res = self.userv_access.usercall(
-            self,
-            ROLE_ID,
-            ops::ENCRYPT,
-            UsercallArguments::Extended(Some(message_len), None, &encrypt_args));
+        if let Some(userv_client) = self.self_userv_client.get() {
+                let invoke_res = self.userv_access.usercall(
+                    userv_client,
+                    ROLE_ID,
+                    ops::ENCRYPT,
+                    UsercallArguments::Extended(Some(message_len), None, &encrypt_args));
 
-        if invoke_res.is_ok() {
-            // Take ownership of the buffers while the request is outstanding.
-            // This is the expectation of a typical, hardware-backed provider.
-            self.aead_buffers.set((
-                nonce,
-                in_plaintext,
-                in_aad,
-                out_ciphertext,
-                out_tag,
-            ));
+            if invoke_res.is_ok() {
+                // Take ownership of the buffers while the request is outstanding.
+                // This is the expectation of a typical, hardware-backed provider.
+                self.aead_buffers.set((
+                    nonce,
+                    in_plaintext,
+                    in_aad,
+                    out_ciphertext,
+                    out_tag,
+                ));
 
-            Ok(())
+                Ok(())
+            } else {
+                Err((ErrorCode::FAIL,
+                     (nonce,
+                      in_plaintext,
+                      in_aad,
+                      out_ciphertext,
+                      out_tag)))
+            }
         } else {
             Err((ErrorCode::FAIL,
                  (nonce,
@@ -114,7 +132,7 @@ impl AEADProvider for ServiceInterface {
     }
 
     fn decrypt(
-        &'static self,
+        &self,
         ckey: &[u8; CKEY_LEN_MAX],
         nonce: &'static mut [u8; NONCE_LEN_MAX],
         in_ciphertext: &'static mut [u8; MESSAGE_LEN_MAX],

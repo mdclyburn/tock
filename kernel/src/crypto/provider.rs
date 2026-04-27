@@ -34,7 +34,7 @@ pub trait AEADProvider {
 
     /// Encrypt a message.
     fn encrypt(
-        &'static self,
+        &self,
         ckey: &[u8; CKEY_LEN_MAX],
         nonce: &'static mut [u8; NONCE_LEN_MAX],
         in_plaintext: &'static mut [u8; MESSAGE_LEN_MAX],
@@ -51,7 +51,7 @@ pub trait AEADProvider {
 
     /// Decrypt a message.
     fn decrypt(
-        &'static self,
+        &self,
         ckey: &[u8; CKEY_LEN_MAX],
         nonce: &'static mut [u8; NONCE_LEN_MAX],
         in_ciphertext: &'static mut [u8; MESSAGE_LEN_MAX],

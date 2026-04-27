@@ -155,6 +155,7 @@ pub unsafe fn main() {
             kernel::userv::role::crypto::ServiceInterface::new(
                 userv_registry))
     };
+    aead_provider.init();
 
     let isle = static_init!(
         capsules_extra::isle::Isle,

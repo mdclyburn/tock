@@ -30,11 +30,11 @@ pub enum Argument<'a> {
 
 /// Usercall argument format.
 #[derive(Clone, Copy)]
-pub enum UsercallArguments<'a, 'b> {
+pub enum UsercallArguments<'arg, 'slice> {
     /// Short-format call arguments requiring only up to two words.
     Short(usize, usize),
     /// Arguments requiring more than two words.
-    Extended(Option<usize>, Option<usize>, &'a [&'b dyn Serialize]),
+    Extended(Option<usize>, Option<usize>, &'slice [&'arg dyn Serialize]),
 }
 
 /// Provides access to userspace services, `userv`s.
