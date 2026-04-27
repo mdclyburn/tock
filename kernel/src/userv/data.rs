@@ -11,7 +11,7 @@ use crate::processbuffer::{
 };
 
 /// Data that can be placed into a userspace service's process buffer.
-pub trait Serialize: Sized {
+pub trait Serialize {
     fn try_serialize(&self, buffer: ReadWriteProcessBufferRef<'_>) -> Result<(), ()>;
 }
 
@@ -71,14 +71,23 @@ impl_serialization_for_numerical!(
     u8, u16, u32, u64, usize,
     i8, i16, i32, i64, isize);
 
-impl Serialize for &[u8] {
+/// Newtype wrapper for `Serialize`ing slices into process buffers.
+///
+/// A wrapper type that allows slices to be passed ergonomically to [`UserspaceServiceAccess::usercall()`](crate::userv::comm::UserspaceServiceAccess).
+/// The alternative would be to use double references
+/// (i.e. define `impl Serialize for &&[u8]` and use with `&&&my_data[..]`)
+/// to guarantee to the compiler that the `Serialize` trait object is `Sized`.
+pub struct Bytes<'a>(pub &'a [u8]);
+
+impl<'a> Serialize for Bytes<'a> {
     fn try_serialize(&self, buffer: ReadWriteProcessBufferRef<'_>) -> Result<(), ()> {
-        if buffer.len() < self.len() {
+        let src = self.0;
+        if buffer.len() < src.len() {
             Err(()) // Out of memory error instead?
         } else {
             buffer.mut_enter(
-                |rw_slice| rw_slice[0..self.len()]
-                    .copy_from_slice(self))
+                |rw_slice| rw_slice[0..src.len()]
+                    .copy_from_slice(src))
                 .map_err(|_perr| ())
         }
     }

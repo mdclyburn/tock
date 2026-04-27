@@ -75,11 +75,13 @@ impl AEADProvider for ServiceInterface {
         message_len: usize,
         aad_len: usize,
     ) -> Result<(), (ErrorCode, AEADTuple)> {
-        let encrypt_args = [
-            Argument::Bytes(ckey),
-            Argument::Bytes(nonce),
-            Argument::Bytes(in_plaintext),
-            Argument::Bytes(in_aad),
+        use crate::userv::data::{Bytes, Serialize};
+
+        let encrypt_args: [&dyn Serialize; 4] = [
+            &Bytes(ckey),
+            &Bytes(nonce),
+            &Bytes(in_plaintext),
+            &Bytes(in_aad),
         ];
 
         // Send request via the userspace service capsule.

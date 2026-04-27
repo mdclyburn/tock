@@ -34,7 +34,7 @@ pub enum UsercallArguments<'a, 'b> {
     /// Short-format call arguments requiring only up to two words.
     Short(usize, usize),
     /// Arguments requiring more than two words.
-    Extended(Option<usize>, Option<usize>, &'a [Argument<'b>]),
+    Extended(Option<usize>, Option<usize>, &'a [&'b dyn Serialize]),
 }
 
 /// Provides access to userspace services, `userv`s.
@@ -91,27 +91,8 @@ pub fn place_arguments(
                 .map(|(allow_no, arg)| (k_grant_data.get_readwrite_processbuffer(allow_no), arg));
             for (res_allow_buffer, usercall_arg) in it {
                 let allow_buffer = res_allow_buffer?;
-                match usercall_arg {
-                    Argument::U32(val) => {
-                        if allow_buffer.len() < mem::size_of::<u32>() {
-                            return Err(Error::OutOfMemory);
-                        } else {
-                            allow_buffer.mut_enter(
-                                |pbuf| pbuf[0..mem::size_of::<u32>()]
-                                    .copy_from_slice(&val.to_ne_bytes()))?;
-                        }
-                    },
-
-                    Argument::Bytes(arg_src_buffer) => {
-                        if allow_buffer.len() < arg_src_buffer.len() {
-                            return Err(Error::OutOfMemory);
-                        } else {
-                            allow_buffer.mut_enter(
-                                |pbuf| pbuf[0..arg_src_buffer.len()]
-                                    .copy_from_slice(arg_src_buffer))?;
-                        }
-                    },
-                }
+                usercall_arg.try_serialize(allow_buffer)
+                    .map_err(|_empty| Error::KernelError)?;
             }
 
             Ok((operation_id,
