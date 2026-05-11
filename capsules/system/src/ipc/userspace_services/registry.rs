@@ -1,6 +1,8 @@
 /*! Userspace service-kernel intermediation.
  */
 
+use core::array;
+
 use kernel::debug;
 use kernel::errorcode::ErrorCode;
 use kernel::grant::{
@@ -47,22 +49,25 @@ struct Service {
 
 const SUBSCRIBE_NO_INVOKE_USERCALL: usize = 0;
 
-pub struct Registry {
+/// Userspace services registry.
+///
+/// A registry that tracks running userspace services and calls to them.
+/// Userspace services interact with its `SyscallDriver` implementation
+/// to announce their availability and to respond to invocations.
+/// The type mediates calls and returns between userspace services and kernel-level code using them
+/// with its `UserspaceServiceAccess` implementation.
+///
+/// It supports up to `N` userspace services.
+pub struct Registry<const N: usize> {
     /// Userspace services running on the system.
-    userv_ents: [OptionalCell<Service>; 5],
+    userv_ents: [OptionalCell<Service>; N],
     userv_data: Grant<UserspaceServiceGrant, UpcallCount<1>, AllowRoCount<0>, AllowRwCount<1>>,
 }
 
-impl Registry {
-    pub fn new(grant_data: Grant<UserspaceServiceGrant, UpcallCount<1>, AllowRoCount<0>, AllowRwCount<1>>) -> Registry {
+impl<const N: usize> Registry<N> {
+    pub fn new(grant_data: Grant<UserspaceServiceGrant, UpcallCount<1>, AllowRoCount<0>, AllowRwCount<1>>) -> Registry<N> {
         Registry {
-            userv_ents: [
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-                OptionalCell::empty(),
-            ],
+            userv_ents: array::from_fn(|_| OptionalCell::empty()),
             userv_data: grant_data,
         }
     }
@@ -198,7 +203,7 @@ const COMMAND_REGISTER: usize             = 0x10;
 const COMMAND_USERV_RETURN_SUCCESS: usize = 0x11;
 const COMMAND_USERV_RETURN_FAILURE: usize = 0x12;
 
-impl SyscallDriver for Registry {
+impl<const N: usize> SyscallDriver for Registry<N> {
     fn command(
         &self,
         command_no: usize,
@@ -267,7 +272,7 @@ impl SyscallDriver for Registry {
     }
 }
 
-impl UserspaceServiceAccess for Registry {
+impl<const N: usize> UserspaceServiceAccess for Registry<N> {
     fn usercall(
         &self,
         caller: &'static dyn UserspaceServiceClient,
