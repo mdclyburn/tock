@@ -1,9 +1,10 @@
 /*! Userspace services.
  */
 
-pub mod registry;
 pub mod comm;
 pub mod data;
+pub mod registry;
+pub mod role;
 
 pub use comm::{
     ReturnValueReader,
@@ -13,6 +14,14 @@ pub use comm::{
 };
 
 pub use data::{
+    Bytes,
     Deserialize,
     Serialize,
 };
+
+pub use registry::{
+    DRIVER_NO,
+    Registry,
+};
+
+pub use role::Role;
