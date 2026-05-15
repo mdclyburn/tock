@@ -2,11 +2,25 @@
  */
 
 use kernel::ErrorCode;
+use kernel::grant::{
+    Grant,
+    AllowRoCount,
+    AllowRwCount,
+    UpcallCount,
+};
 use kernel::hil::hasher::{
     Client,
     Hasher,
 };
+use kernel::process::{
+    Error,
+    ProcessId,
+};
 use kernel::processbuffer::ReadableProcessBuffer;
+use kernel::syscall::{
+    CommandReturn,
+    SyscallDriver,
+};
 use kernel::utilities::cells::{
     OptionalCell,
     TakeCell,
@@ -230,5 +244,96 @@ impl<'a: 'static, const L: usize> Hasher<'a, L> for ServiceInterface<L> {
                 ops::CLEAR_DATA,
                 UsercallArguments::Short(0, 0));
         }
+    }
+}
+
+#[derive(Default)]
+pub struct AppData;
+
+pub type DriverGrant = Grant<AppData, UpcallCount<2>, AllowRoCount<1>, AllowRwCount<1>>;
+
+pub struct Driver<const L: usize> {
+    app_data: DriverGrant,
+    data_buffer: TakeCell<'static, [u8; L]>,
+    hash_buffer: TakeCell<'static, [u8; L]>,
+}
+
+impl<const L: usize> Driver<L> {
+    pub fn new(
+        grant: DriverGrant,
+        data_buffer: &'static mut [u8; L],
+        hash_buffer: &'static mut [u8; L],
+    ) -> Driver<L>
+    {
+        Driver {
+            app_data: grant,
+            data_buffer: TakeCell::new(data_buffer),
+            hash_buffer: TakeCell::new(hash_buffer),
+        }
+    }
+}
+
+const ALLOW_RO_NO_DATA: usize = 0;
+const ALLOW_RW_NO_HASH: usize = 0;
+
+const COMMAND_ADD: usize = 0x10;
+const COMMAND_RUN: usize = 0x20;
+
+impl<const L: usize> SyscallDriver for Driver<L> {
+    fn allocate_grant(&self, pid: ProcessId) -> Result<(), Error> {
+        self.app_data.enter(pid, |_ad, _kad| {  })
+    }
+
+    fn command(
+        &self,
+        command_no: usize,
+        r2: usize,
+        r3: usize,
+        pid: ProcessId
+    ) -> CommandReturn
+    {
+        match (command_no, r2, r3) {
+            (0, _r2, _r3) => CommandReturn::success(),
+
+            // Add the data in the allow'd RO slice to the input data.
+            (COMMAND_ADD, _r2, _r3) => {
+                if let Some(data_buffer) = self.data_buffer.take() {
+                    self.app_data.enter(
+                        pid,
+                        |_ad, kad| {
+                            let input_data_pbuf = kad.get_readonly_processbuffer(ALLOW_RO_NO_DATA)?;
+                            if input_data_pbuf.len() < L {
+                                Err(ErrorCode::NOMEM)
+                            } else if input_data_pbuf.len() > L {
+                                Err(ErrorCode::SIZE)
+                            } else {
+                                input_data_pbuf.enter(|buf| buf.copy_to_slice(data_buffer))?;
+                                Ok(())
+                            }
+                        })
+                        .map_err(|kerr| kerr.into())
+                        .flatten()
+                        .into()
+                } else {
+                    CommandReturn::failure(ErrorCode::BUSY)
+                }
+            },
+
+            _ => CommandReturn::failure(ErrorCode::INVAL),
+        }
+    }
+}
+
+impl<const L: usize> Client<L> for Driver<L> {
+    fn add_data_done(&self, result: Result<(), ErrorCode>, data: SubSlice<'static, u8>) {
+        unimplemented!()
+    }
+
+    fn add_mut_data_done(&self, result: Result<(), ErrorCode>, data: SubSliceMut<'static, u8>) {
+        unimplemented!()
+    }
+
+    fn hash_done(&self, result: Result<(), ErrorCode>, hash: &'static mut [u8; L]) {
+        unimplemented!()
     }
 }
