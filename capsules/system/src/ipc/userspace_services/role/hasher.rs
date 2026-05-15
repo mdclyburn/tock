@@ -8,9 +8,16 @@ use kernel::grant::{
     AllowRwCount,
     UpcallCount,
 };
-use kernel::hil::hasher::{
+use kernel::hil::digest::{
+    self,
     Client,
-    Hasher,
+    ClientData,
+    ClientHash,
+    ClientVerify,
+    Digest,
+    DigestData,
+    DigestHash,
+    DigestVerify,
 };
 use kernel::process::{
     Error,
@@ -25,8 +32,10 @@ use kernel::utilities::cells::{
     OptionalCell,
     TakeCell,
 };
-use kernel::utilities::leasable_buffer::SubSlice;
-use kernel::utilities::leasable_buffer::SubSliceMut;
+use kernel::utilities::leasable_buffer::{
+    SubSlice,
+    SubSliceMut,
+};
 
 use crate::ipc::userspace_services::{
     Bytes,
@@ -42,6 +51,7 @@ mod ops {
     pub const ADD_DATA: usize   = 0x10;
     pub const CLEAR_DATA: usize = 0x11;
     pub const RUN: usize        = 0x20;
+    pub const VERIFY: usize     = 0x21;
 }
 
 const ROLE_ID: usize = Role::Hasher as usize;
@@ -50,6 +60,7 @@ enum Operation<const L: usize> {
     AddData(SubSlice<'static, u8>),
     AddMutData(SubSliceMut<'static, u8>),
     Run(&'static mut [u8; L]),
+    Verify(&'static mut [u8; L]),
 }
 
 const RETURN_HASHDONE_HASH_BUFFER_IDX: usize = 0;
@@ -59,8 +70,15 @@ pub struct ServiceInterface<const L: usize> {
     this: OptionalCell<&'static dyn UserspaceServiceClient>,
     /// Userspace service access interface.
     userv_access: &'static dyn UserspaceServiceAccess,
-    /// Client using the hashing userspace service through this entity.
-    client: OptionalCell<&'static dyn Client<L>>,
+
+    // Clients.
+    /// Client using the userspace service for input data addition.
+    data_client: OptionalCell<&'static dyn ClientData<L>>,
+    /// Client using the userspace service for hash calculation.
+    hash_client: OptionalCell<&'static dyn ClientHash<L>>,
+    /// Client using the userspace service for hash verification.
+    verify_client: OptionalCell<&'static dyn ClientVerify<L>>,
+
     /// The userspace service's current operation.
     current_op: OptionalCell<Operation<L>>,
 }
@@ -70,7 +88,9 @@ impl<const L: usize> ServiceInterface<L> {
         ServiceInterface {
             this: OptionalCell::empty(),
             userv_access,
-            client: OptionalCell::empty(),
+            data_client: OptionalCell::empty(),
+            hash_client: OptionalCell::empty(),
+            verify_client: OptionalCell::empty(),
             current_op: OptionalCell::empty(),
         }
     }
@@ -92,7 +112,7 @@ impl<const L: usize> UserspaceServiceClient for ServiceInterface<L> {
             match op {
                 // Provide the client with its buffer back.
                 Operation::AddData(data_slice) => {
-                    self.client.map(
+                    self.data_client.map(
                         |c| c.add_data_done(
                             return_data
                                 .map(|_reader| ())
@@ -103,7 +123,7 @@ impl<const L: usize> UserspaceServiceClient for ServiceInterface<L> {
                 },
 
                 Operation::AddMutData(data_slice) => {
-                    self.client.map(
+                    self.data_client.map(
                         |c| c.add_mut_data_done(
                             return_data
                                 .map(|_reader| ())
@@ -122,7 +142,7 @@ impl<const L: usize> UserspaceServiceClient for ServiceInterface<L> {
                                     |hash_output_pslice| hash_output_pslice[0..L]
                                         .copy_to_slice(hash));
 
-                                self.client.map(|c| c.hash_done(
+                                self.hash_client.map(|c| c.hash_done(
                                     copy_hash_res.map_err(|kerr| kerr.into()),
                                     hash));
                             } else {
@@ -131,10 +151,12 @@ impl<const L: usize> UserspaceServiceClient for ServiceInterface<L> {
                         },
 
                         Err(_eval) => {
-                            self.client.map(|c| c.hash_done(Err(ErrorCode::FAIL), hash));
+                            self.hash_client.map(|c| c.hash_done(Err(ErrorCode::FAIL), hash));
                         },
                     }
                 },
+
+                Operation::Verify(hash) => unimplemented!(),
             }
         } else {
             // This ServiceInterface called usercall()
@@ -143,13 +165,21 @@ impl<const L: usize> UserspaceServiceClient for ServiceInterface<L> {
     }
 }
 
-impl<'a: 'static, const L: usize> Hasher<'a, L> for ServiceInterface<L> {
+impl<'a: 'static, const L: usize> Digest<'a, L> for ServiceInterface<L> {
     fn set_client(&'a self, client: &'a dyn Client<L>) {
-        self.client.set(client)
+        self.data_client.set(client);
+        self.hash_client.set(client);
+        self.verify_client.set(client);
+    }
+}
+
+impl<'a: 'static, const L: usize> DigestData<'a, L> for ServiceInterface<L> {
+    fn set_data_client(&'a self, client: &'a dyn ClientData<L>) {
+        self.data_client.set(client)
     }
 
     fn add_data(&self, data: SubSlice<'static, u8>)
-                -> Result<usize, (ErrorCode, SubSlice<'static, u8>)> {
+                -> Result<(), (ErrorCode, SubSlice<'static, u8>)> {
         if data.len() != L {
             Err((ErrorCode::SIZE, data))
         } else if self.current_op.is_some() {
@@ -172,7 +202,7 @@ impl<'a: 'static, const L: usize> Hasher<'a, L> for ServiceInterface<L> {
                     Err((kerr.into(), data))
                 } else {
                     self.current_op.set(Operation::AddData(data));
-                    Ok(L)
+                    Ok(())
                 }
             } else {
                 Err((ErrorCode::NODEVICE, data))
@@ -181,7 +211,7 @@ impl<'a: 'static, const L: usize> Hasher<'a, L> for ServiceInterface<L> {
     }
 
     fn add_mut_data(&self, data: SubSliceMut<'static, u8>)
-                    -> Result<usize, (ErrorCode, SubSliceMut<'static, u8>)> {
+                    -> Result<(), (ErrorCode, SubSliceMut<'static, u8>)> {
         if data.len() != L {
             Err((ErrorCode::SIZE, data))
         } else if self.current_op.is_some() {
@@ -204,12 +234,29 @@ impl<'a: 'static, const L: usize> Hasher<'a, L> for ServiceInterface<L> {
                     Err((kerr.into(), data))
                 } else {
                     self.current_op.set(Operation::AddMutData(data));
-                    Ok(L)
+                    Ok(())
                 }
             } else {
                 Err((ErrorCode::NODEVICE, data))
             }
         }
+    }
+
+    fn clear_data(&self) {
+        if let Some(this) = self.this.get() {
+            // No return type means no error-handling for the operation or the usercall.
+            let _usercall_result = self.userv_access.usercall(
+                this,
+                ROLE_ID,
+                ops::CLEAR_DATA,
+                UsercallArguments::Short(0, 0));
+        }
+    }
+}
+
+impl<'a: 'static, const L: usize> DigestHash<'a, L> for ServiceInterface<L> {
+    fn set_hash_client(&'a self, client: &'a dyn ClientHash<L>) {
+        self.hash_client.set(client)
     }
 
     fn run(&'a self, hash: &'static mut [u8; L])
@@ -234,15 +281,42 @@ impl<'a: 'static, const L: usize> Hasher<'a, L> for ServiceInterface<L> {
             }
         }
     }
+}
 
-    fn clear_data(&self) {
-        if let Some(this) = self.this.get() {
-            // No return type means no error-handling for the operation or the usercall.
-            let _usercall_result = self.userv_access.usercall(
-                this,
-                ROLE_ID,
-                ops::CLEAR_DATA,
-                UsercallArguments::Short(0, 0));
+impl<'a: 'static, const L: usize> DigestVerify<'a, L> for ServiceInterface<L> {
+    fn set_verify_client(&'a self, client: &'a dyn ClientVerify<L>) {
+        self.verify_client.set(client)
+    }
+
+    fn verify(
+        &'a self,
+        expected_digest_buffer: &'static mut [u8; L]
+    ) -> Result<(), (ErrorCode, &'static mut [u8; L])>
+    {
+        if self.current_op.is_some() {
+            Err((ErrorCode::BUSY, expected_digest_buffer))
+        } else {
+            if let Some(this) = self.this.get() {
+                let usercall_res = self.userv_access.usercall(
+                    this,
+                    ROLE_ID,
+                    ops::VERIFY,
+                    UsercallArguments::Extended(
+                        None,
+                        None,
+                        &[&Bytes(expected_digest_buffer)]
+                    ),
+                );
+
+                if let Err(kerr) = usercall_res {
+                    Err((kerr.into(), expected_digest_buffer))
+                } else {
+                    self.current_op.set(Operation::Verify(expected_digest_buffer));
+                    Ok(())
+                }
+            } else {
+                Err((ErrorCode::NODEVICE, expected_digest_buffer))
+            }
         }
     }
 }
@@ -273,11 +347,21 @@ impl<const L: usize> Driver<L> {
     }
 }
 
-const ALLOW_RO_NO_DATA: usize = 0;
-const ALLOW_RW_NO_HASH: usize = 0;
+mod allow {
+    pub mod ro {
+        pub const DATA: usize = 1;
+    }
 
-const COMMAND_ADD: usize = 0x10;
-const COMMAND_RUN: usize = 0x20;
+    pub mod rw {
+        pub const HASH: usize = 2;
+    }
+}
+
+mod command {
+    pub const ADD: usize    = 0x10;
+    pub const RUN: usize    = 0x20;
+    pub const VERIFY: usize = 0x30;
+}
 
 impl<const L: usize> SyscallDriver for Driver<L> {
     fn allocate_grant(&self, pid: ProcessId) -> Result<(), Error> {
@@ -296,12 +380,12 @@ impl<const L: usize> SyscallDriver for Driver<L> {
             (0, _r2, _r3) => CommandReturn::success(),
 
             // Add the data in the allow'd RO slice to the input data.
-            (COMMAND_ADD, _r2, _r3) => {
+            (command::ADD, _r2, _r3) => {
                 if let Some(data_buffer) = self.data_buffer.take() {
                     self.app_data.enter(
                         pid,
                         |_ad, kad| {
-                            let input_data_pbuf = kad.get_readonly_processbuffer(ALLOW_RO_NO_DATA)?;
+                            let input_data_pbuf = kad.get_readonly_processbuffer(allow::ro::DATA)?;
                             if input_data_pbuf.len() < L {
                                 Err(ErrorCode::NOMEM)
                             } else if input_data_pbuf.len() > L {
@@ -319,21 +403,53 @@ impl<const L: usize> SyscallDriver for Driver<L> {
                 }
             },
 
+            // Trigger the start of a digest calculation on the accumulated data.
+            (command::RUN, _r2, _r3) => unimplemented!(),
+
+            (command::VERIFY, _r2, _r3) => unimplemented!(),
+
             _ => CommandReturn::failure(ErrorCode::INVAL),
         }
     }
 }
 
-impl<const L: usize> Client<L> for Driver<L> {
-    fn add_data_done(&self, result: Result<(), ErrorCode>, data: SubSlice<'static, u8>) {
+impl<'a, const L: usize> ClientData<L> for Driver<L> {
+    fn add_data_done(
+        &self,
+        result: Result<(), ErrorCode>,
+        data_buffer: SubSlice<'static, u8>,
+    )
+    {
         unimplemented!()
     }
-
-    fn add_mut_data_done(&self, result: Result<(), ErrorCode>, data: SubSliceMut<'static, u8>) {
+    fn add_mut_data_done(
+        &self,
+        result: Result<(), ErrorCode>,
+        data_buffer: SubSliceMut<'static, u8>,
+    )
+    {
         unimplemented!()
     }
+}
 
-    fn hash_done(&self, result: Result<(), ErrorCode>, hash: &'static mut [u8; L]) {
+impl<'a, const L: usize> ClientHash<L> for Driver<L> {
+    fn hash_done(
+        &self,
+        result: Result<(), ErrorCode>,
+        data_buffer: &'static mut [u8; L],
+    )
+    {
+        unimplemented!()
+    }
+}
+
+impl<'a, const L: usize> ClientVerify<L> for Driver<L> {
+    fn verification_done(
+        &self,
+        result: Result<bool, ErrorCode>,
+        data_buffer: &'static mut [u8; L],
+    )
+    {
         unimplemented!()
     }
 }

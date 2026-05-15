@@ -254,6 +254,7 @@ impl<const N: usize> SyscallDriver for Registry<N> {
                     pid,
                     |ad, _kad| {
                         // Inform the client that the operation completed in failure.
+                        // TODO: translate error no. into ErrorCode.
                         ad.client.map(|(op, c)| c.usercall_done(role_id, op, Err(errno)));
                         ad.client = None;
 
