@@ -1,7 +1,10 @@
 /*! Hashing userspace service.
  */
 
-use kernel::ErrorCode;
+use kernel::errorcode::{
+    self,
+    ErrorCode,
+};
 use kernel::grant::{
     Grant,
     AllowRoCount,
@@ -9,7 +12,6 @@ use kernel::grant::{
     UpcallCount,
 };
 use kernel::hil::digest::{
-    self,
     Client,
     ClientData,
     ClientHash,
@@ -23,7 +25,10 @@ use kernel::process::{
     Error,
     ProcessId,
 };
-use kernel::processbuffer::ReadableProcessBuffer;
+use kernel::processbuffer::{
+    ReadableProcessBuffer,
+    WriteableProcessBuffer,
+};
 use kernel::syscall::{
     CommandReturn,
     SyscallDriver,
@@ -156,7 +161,13 @@ impl<const L: usize> UserspaceServiceClient for ServiceInterface<L> {
                     }
                 },
 
-                Operation::Verify(hash) => unimplemented!(),
+                // Provide the digest output buffer back to the client along with the comparison result.
+                Operation::Verify(digest_buffer) => {
+                    let verify_result = return_data
+                        .map(|reader| reader.direct_rvals().0 == 1)
+                        .map_err(|_errno| ErrorCode::FAIL);
+                    self.verify_client.map(|c| c.verification_done(verify_result, digest_buffer));
+                },
             }
         } else {
             // This ServiceInterface called usercall()
@@ -324,43 +335,67 @@ impl<'a: 'static, const L: usize> DigestVerify<'a, L> for ServiceInterface<L> {
 #[derive(Default)]
 pub struct AppData;
 
-pub type DriverGrant = Grant<AppData, UpcallCount<2>, AllowRoCount<1>, AllowRwCount<1>>;
+pub type DriverGrant = Grant<AppData, UpcallCount<3>, AllowRoCount<1>, AllowRwCount<1>>;
 
 pub struct Driver<const L: usize> {
     app_data: DriverGrant,
-    data_buffer: TakeCell<'static, [u8; L]>,
+    digest_provider: &'static dyn Digest<'static, L>,
+    data_buffer: TakeCell<'static, [u8]>,
     hash_buffer: TakeCell<'static, [u8; L]>,
+    pending_for: OptionalCell<ProcessId>,
 }
 
 impl<const L: usize> Driver<L> {
     pub fn new(
         grant: DriverGrant,
-        data_buffer: &'static mut [u8; L],
+        digest_provider: &'static dyn Digest<'static, L>,
+        data_buffer: &'static mut [u8],
         hash_buffer: &'static mut [u8; L],
     ) -> Driver<L>
     {
         Driver {
             app_data: grant,
+            digest_provider,
             data_buffer: TakeCell::new(data_buffer),
             hash_buffer: TakeCell::new(hash_buffer),
+            pending_for: OptionalCell::empty(),
         }
     }
 }
 
+/// Allow buffer numbers.
 mod allow {
+    /// Read-only allows.
     pub mod ro {
+        /// Input data for digest calculation.
         pub const DATA: usize = 1;
     }
 
+    /// Read-write allows.
     pub mod rw {
+        /// Digest calculation output.
         pub const HASH: usize = 2;
     }
 }
 
+/// Driver command numbers.
 mod command {
+    /// Add data to the digest calculation.
     pub const ADD: usize    = 0x10;
+    /// Calculate the digest of accumulated data.
     pub const RUN: usize    = 0x20;
+    /// Calculate the digest of accumulated data and compare it to an existing digest.
     pub const VERIFY: usize = 0x30;
+}
+
+/// Upcall numbers.
+mod upcall {
+    /// Digest calculation is complete.
+    pub const RUN_DONE: usize    = 0x00;
+    /// Data digest verification is complete.
+    pub const VERIFY_DONE: usize = 0x01;
+    /// Data addition is complete.
+    pub const ADD_DONE: usize    = 0x02;
 }
 
 impl<const L: usize> SyscallDriver for Driver<L> {
@@ -392,7 +427,13 @@ impl<const L: usize> SyscallDriver for Driver<L> {
                                 Err(ErrorCode::SIZE)
                             } else {
                                 input_data_pbuf.enter(|buf| buf.copy_to_slice(data_buffer))?;
-                                Ok(())
+                                if let Err((ec, buf)) = self.digest_provider.add_mut_data(SubSliceMut::new(data_buffer)) {
+                                    self.data_buffer.put(Some(buf.take()));
+                                    Err(ec)
+                                } else {
+                                    self.pending_for.set(pid);
+                                    Ok(())
+                                }
                             }
                         })
                         .map_err(|kerr| kerr.into())
@@ -404,9 +445,34 @@ impl<const L: usize> SyscallDriver for Driver<L> {
             },
 
             // Trigger the start of a digest calculation on the accumulated data.
-            (command::RUN, _r2, _r3) => unimplemented!(),
+            (command::RUN, _r2, _r3) => {
+                if let Some(hash_buffer) = self.hash_buffer.take() {
+                    if let Err((ec, buf)) = self.digest_provider.run(hash_buffer) {
+                        self.hash_buffer.put(Some(buf));
+                        Err(ec).into()
+                    } else {
+                        self.pending_for.set(pid);
+                        CommandReturn::success()
+                    }
+                } else {
+                    Err(ErrorCode::BUSY).into()
+                }
+            },
 
-            (command::VERIFY, _r2, _r3) => unimplemented!(),
+            // Check the data against the provided hash.
+            (command::VERIFY, _r2, _r3) => {
+                if let Some(hash_buffer) = self.hash_buffer.take() {
+                    if let Err((ec, buf)) = self.digest_provider.verify(hash_buffer) {
+                        self.hash_buffer.put(Some(buf));
+                        Err(ec).into()
+                    } else {
+                        self.pending_for.set(pid);
+                        CommandReturn::success()
+                    }
+                } else {
+                    Err(ErrorCode::BUSY).into()
+                }
+            },
 
             _ => CommandReturn::failure(ErrorCode::INVAL),
         }
@@ -416,40 +482,95 @@ impl<const L: usize> SyscallDriver for Driver<L> {
 impl<'a, const L: usize> ClientData<L> for Driver<L> {
     fn add_data_done(
         &self,
-        result: Result<(), ErrorCode>,
-        data_buffer: SubSlice<'static, u8>,
+        _result: Result<(), ErrorCode>,
+        _data_buffer: SubSlice<'static, u8>,
     )
     {
-        unimplemented!()
+        // This type does not call DigestHash::add_data()
+        // and so should never receive this callback.
     }
+
     fn add_mut_data_done(
         &self,
         result: Result<(), ErrorCode>,
         data_buffer: SubSliceMut<'static, u8>,
     )
     {
-        unimplemented!()
+        self.pending_for.map(
+            |pid| {
+                self.data_buffer.put(Some(data_buffer.take()));
+                let _enter_res = self.app_data.enter(
+                    pid,
+                    |_ad, kad| {
+                        let _res = kad.schedule_upcall(
+                            upcall::ADD_DONE,
+                            (errorcode::into_statuscode(result), 0, 0));
+                    });
+            });
+        self.pending_for.clear();
     }
 }
 
 impl<'a, const L: usize> ClientHash<L> for Driver<L> {
     fn hash_done(
         &self,
-        result: Result<(), ErrorCode>,
-        data_buffer: &'static mut [u8; L],
+        hash_result: Result<(), ErrorCode>,
+        hash_buffer: &'static mut [u8; L],
     )
     {
-        unimplemented!()
+        self.pending_for.map(
+            |pid| {
+                let _enter_res = self.app_data.enter(
+                    pid,
+                    |_ad, kad| {
+                        // Copy the resulting digest to the application's RW buffer.
+                        let digest_copy_res = kad
+                            .get_readwrite_processbuffer(allow::rw::HASH)
+                            .map_err(|kerr| kerr.into())
+                            .and_then(
+                                |app_hash_pbuf| {
+                                    // Check RW-allow buffer's length and copy the digest to it.
+                                    if app_hash_pbuf.len() >= L {
+                                        app_hash_pbuf.mut_enter(
+                                            |app_hash_buf| app_hash_buf[0..L].copy_from_slice(hash_buffer))?;
+                                        Ok(())
+                                    } else {
+                                        Err(ErrorCode::NOMEM)
+                                    }
+                                });
+                        self.hash_buffer.put(Some(hash_buffer));
+
+                        let _upcall_res = kad.schedule_upcall(
+                            upcall::RUN_DONE,
+                            (errorcode::into_statuscode(hash_result.and(digest_copy_res)), 0, 0));
+                    });
+            });
+        self.pending_for.clear();
     }
 }
 
 impl<'a, const L: usize> ClientVerify<L> for Driver<L> {
     fn verification_done(
         &self,
-        result: Result<bool, ErrorCode>,
-        data_buffer: &'static mut [u8; L],
+        verification_result: Result<bool, ErrorCode>,
+        hash_buffer: &'static mut [u8; L],
     )
     {
-        unimplemented!()
+        self.pending_for.map(
+            |pid| {
+                self.hash_buffer.put(Some(hash_buffer));
+                let _enter_res = self.app_data.enter(
+                    pid,
+                    |_ad, kad| {
+                        let (is_match, status_arg) = match verification_result {
+                            Ok(is_match) => (is_match, Ok(())),
+                            Err(ec) => (false, Err(ec)),
+                        };
+                        let _res = kad.schedule_upcall(
+                            upcall::VERIFY_DONE,
+                            (errorcode::into_statuscode(status_arg), is_match as usize, 0));
+                    });
+            });
+        self.pending_for.clear();
     }
 }
