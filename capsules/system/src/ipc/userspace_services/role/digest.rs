@@ -332,6 +332,8 @@ impl<'a: 'static, const L: usize> DigestVerify<'a, L> for ServiceInterface<L> {
     }
 }
 
+pub const DRIVER_NUM: usize = capsules_core::driver::NUM::Sha as usize;
+
 #[derive(Default)]
 pub struct AppData;
 
