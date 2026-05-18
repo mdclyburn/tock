@@ -191,9 +191,7 @@ impl<'a: 'static, const L: usize> DigestData<'a, L> for ServiceInterface<L> {
 
     fn add_data(&self, data: SubSlice<'static, u8>)
                 -> Result<(), (ErrorCode, SubSlice<'static, u8>)> {
-        if data.len() != L {
-            Err((ErrorCode::SIZE, data))
-        } else if self.current_op.is_some() {
+        if self.current_op.is_some() {
             Err((ErrorCode::BUSY, data))
         } else {
             if let Some(this) = self.this.get() {
@@ -223,9 +221,7 @@ impl<'a: 'static, const L: usize> DigestData<'a, L> for ServiceInterface<L> {
 
     fn add_mut_data(&self, data: SubSliceMut<'static, u8>)
                     -> Result<(), (ErrorCode, SubSliceMut<'static, u8>)> {
-        if data.len() != L {
-            Err((ErrorCode::SIZE, data))
-        } else if self.current_op.is_some() {
+        if self.current_op.is_some() {
             Err((ErrorCode::BUSY, data))
         } else {
             if let Some(this) = self.this.get() {
@@ -423,12 +419,10 @@ impl<const L: usize> SyscallDriver for Driver<L> {
                         pid,
                         |_ad, kad| {
                             let input_data_pbuf = kad.get_readonly_processbuffer(allow::ro::DATA)?;
-                            if input_data_pbuf.len() < L {
-                                Err(ErrorCode::NOMEM)
-                            } else if input_data_pbuf.len() > L {
+                            if input_data_pbuf.len() > data_buffer.len() {
                                 Err(ErrorCode::SIZE)
                             } else {
-                                input_data_pbuf.enter(|buf| buf.copy_to_slice(data_buffer))?;
+                                input_data_pbuf.enter(|buf| buf.copy_to_slice(&mut data_buffer[0..input_data_pbuf.len()]))?;
                                 if let Err((ec, buf)) = self.digest_provider.add_mut_data(SubSliceMut::new(data_buffer)) {
                                     self.data_buffer.put(Some(buf.take()));
                                     Err(ec)
