@@ -366,24 +366,24 @@ mod allow {
     /// Read-only allows.
     pub mod ro {
         /// Input data for digest calculation.
-        pub const DATA: usize = 1;
+        pub const DATA: usize = 0;
     }
 
     /// Read-write allows.
     pub mod rw {
         /// Digest calculation output.
-        pub const HASH: usize = 2;
+        pub const HASH: usize = 0;
     }
 }
 
 /// Driver command numbers.
 mod command {
     /// Add data to the digest calculation.
-    pub const ADD: usize    = 0x10;
+    pub const ADD: usize    = 0x02;
     /// Calculate the digest of accumulated data.
-    pub const RUN: usize    = 0x20;
+    pub const RUN: usize    = 0x01;
     /// Calculate the digest of accumulated data and compare it to an existing digest.
-    pub const VERIFY: usize = 0x30;
+    pub const VERIFY: usize = 0x03;
 }
 
 /// Upcall numbers.
