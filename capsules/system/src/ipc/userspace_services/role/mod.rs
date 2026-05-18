@@ -1,9 +1,9 @@
 /*! Service roles.
  */
 
-pub mod hasher;
+pub mod digest;
 
 #[derive(Debug, PartialEq)]
 pub enum Role {
-    Hasher               = 0x11,
+    Digest               = 0x11,
 }

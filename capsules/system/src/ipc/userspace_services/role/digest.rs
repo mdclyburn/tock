@@ -59,7 +59,7 @@ mod ops {
     pub const VERIFY: usize     = 0x21;
 }
 
-const ROLE_ID: usize = Role::Hasher as usize;
+const ROLE_ID: usize = Role::Digest as usize;
 
 enum Operation<const L: usize> {
     AddData(SubSlice<'static, u8>),
