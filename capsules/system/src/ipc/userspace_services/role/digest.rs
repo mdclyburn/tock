@@ -53,10 +53,10 @@ use crate::ipc::userspace_services::{
 };
 
 mod ops {
-    pub const ADD_DATA: usize   = 0x10;
+    pub const ADD_DATA: usize   = 0x02;
     pub const CLEAR_DATA: usize = 0x11;
-    pub const RUN: usize        = 0x20;
-    pub const VERIFY: usize     = 0x21;
+    pub const RUN: usize        = 0x01;
+    pub const VERIFY: usize     = 0x03;
 }
 
 const ROLE_ID: usize = Role::Digest as usize;

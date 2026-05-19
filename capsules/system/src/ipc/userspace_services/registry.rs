@@ -62,11 +62,11 @@ const SUBSCRIBE_NO_INVOKE_USERCALL: usize = 0;
 pub struct Registry<const N: usize> {
     /// Userspace services running on the system.
     userv_ents: [OptionalCell<Service>; N],
-    userv_data: Grant<UserspaceServiceGrant, UpcallCount<1>, AllowRoCount<0>, AllowRwCount<1>>,
+    userv_data: Grant<UserspaceServiceGrant, UpcallCount<1>, AllowRoCount<0>, AllowRwCount<3>>,
 }
 
 impl<const N: usize> Registry<N> {
-    pub fn new(grant_data: Grant<UserspaceServiceGrant, UpcallCount<1>, AllowRoCount<0>, AllowRwCount<1>>) -> Registry<N> {
+    pub fn new(grant_data: Grant<UserspaceServiceGrant, UpcallCount<1>, AllowRoCount<0>, AllowRwCount<3>>) -> Registry<N> {
         Registry {
             userv_ents: array::from_fn(|_| OptionalCell::empty()),
             userv_data: grant_data,
