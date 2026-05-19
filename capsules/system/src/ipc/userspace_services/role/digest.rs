@@ -234,7 +234,7 @@ impl<'a: 'static, const L: usize> DigestData<'a, L> for ServiceInterface<L> {
                     ROLE_ID,
                     ops::ADD_DATA,
                     UsercallArguments::Extended(
-                        None,
+                        Some(data.len()),
                         None,
                         &usercall_args));
                 if let Err(kerr) = usercall_result {
@@ -423,6 +423,8 @@ impl<const L: usize> SyscallDriver for Driver<L> {
                                 Err(ErrorCode::SIZE)
                             } else {
                                 input_data_pbuf.enter(|buf| buf.copy_to_slice(&mut data_buffer[0..input_data_pbuf.len()]))?;
+                                let mut input_data_slice = SubSliceMut::new(data_buffer);
+                                input_data_slice.slice(0..input_data_pbuf.len());
                                 if let Err((ec, buf)) = self.digest_provider.add_mut_data(SubSliceMut::new(data_buffer)) {
                                     self.data_buffer.put(Some(buf.take()));
                                     Err(ec)
