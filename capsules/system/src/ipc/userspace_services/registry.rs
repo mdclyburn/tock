@@ -31,11 +31,20 @@ use crate::ipc::userspace_services::{
 
 pub const DRIVER_NUM: usize = capsules_core::driver::NUM::UserspaceServices as usize;
 
+/// Outstanding usercall tracking.
+#[derive(Clone, Copy)]
+struct PendingUsercall {
+    /// Operation ID of the usercall the service is currently executing.
+    operation_id: usize,
+    /// The callback client to notify upon the operation's completion.
+    client: &'static dyn UserspaceServiceClient,
+}
+
 #[derive(Default)]
 /// Grant containing context for userspace service process.
 pub struct UserspaceServiceGrant {
-    /// The client the service is acting on behalf of currently and the operation ID.
-    client: Option<(usize, &'static dyn UserspaceServiceClient)>,
+    /// The current operation the userspace service is executing.
+    current_op: Option<PendingUsercall>,
 }
 
 /// Userspace service entry.
@@ -178,7 +187,7 @@ impl<const N: usize> Registry<N> {
                     userv.current_pid,
                     |ad, kad| {
                         // Userspace service is already busy with another operation.
-                        if ad.client.is_some() {
+                        if ad.current_op.is_some() {
                             return Err(Error::AlreadyInUse);
                         }
 
@@ -186,11 +195,15 @@ impl<const N: usize> Registry<N> {
 
                         // Send an upcall to the userspace service.
                         debug!("[userv-registry] invoking userspace service");
-                        kad.schedule_upcall(SUBSCRIBE_NO_INVOKE_USERCALL, upcall_args)
+                        kad.schedule_upcall(upcall::INVOKE_USERCALL, upcall_args)
                             .map_err(|_upcall_error| Error::KernelError)?;
 
                         // The caller is now the client of the userspace service.
-                        let _none = ad.client.insert((operation_id, caller));
+                        let _none = ad.current_op.insert(
+                            PendingUsercall {
+                                operation_id,
+                                client: caller,
+                            });
 
                         Ok(())
                     })
@@ -243,11 +256,11 @@ impl<const N: usize> SyscallDriver for Registry<N> {
                         // Provide the client with the data sent from the userspace service.
                         // Use the userspace service's read-only allow buffers to return results.
                         let rv_reader = ReturnValueReader::new(rv1, rv2, kad);
-                        ad.client.map(|(op, c)| c.usercall_done(role_id, op, Ok(rv_reader)));
+                        ad.current_op.map(|op| op.client.usercall_done(role_id, op.operation_id, Ok(rv_reader)));
 
                         // The client is no longer the client,
                         // even in the event of an unsuccessful operation.
-                        ad.client = None;
+                        ad.current_op = None;
 
                         Ok(())
                     })
@@ -263,9 +276,11 @@ impl<const N: usize> SyscallDriver for Registry<N> {
                     pid,
                     |ad, _kad| {
                         // Inform the client that the operation completed in failure.
-                        // TODO: translate error no. into ErrorCode.
-                        ad.client.map(|(op, c)| c.usercall_done(role_id, op, Err(errno)));
-                        ad.client = None;
+                        ad.current_op.map(|op| op.client.usercall_done(
+                            role_id,
+                            op.operation_id,
+                            Err(ec)));
+                        ad.current_op = None;
 
                         Ok(())
                     })
