@@ -200,10 +200,17 @@ impl<const N: usize> Registry<N> {
     }
 }
 
-const COMMAND_CHECK: usize                = 0x00;
-const COMMAND_REGISTER: usize             = 0x10;
-const COMMAND_USERV_RETURN_SUCCESS: usize = 0x11;
-const COMMAND_USERV_RETURN_FAILURE: usize = 0x12;
+/// Syscall driver command numbers.
+mod command {
+    /// Driver available check.
+    pub const CHECK: usize                   = 0x00;
+    /// Userspace service registration.
+    pub const REGISTER_SERVICE: usize        = 0x10;
+    /// Usercall success return.
+    pub const USERCALL_RETURN_SUCCESS: usize = 0x11;
+    /// Usercall failure return.
+    pub const USERCALL_RETURN_FAILURE: usize = 0x12;
+}
 
 impl<const N: usize> SyscallDriver for Registry<N> {
     fn command(
@@ -215,11 +222,11 @@ impl<const N: usize> SyscallDriver for Registry<N> {
     ) -> CommandReturn
     {
         match (command_no, r2, r3) {
-            (COMMAND_CHECK, _r2, _r3) => CommandReturn::success(),
+            (command::CHECK, _r2, _r3) => CommandReturn::success(),
 
             // Application is registering as a userspace service.
             // Check that it has shared its buffer with the capsule.
-            (COMMAND_REGISTER, role_id, _r3) => {
+            (command::REGISTER_SERVICE, role_id, _r3) => {
                 // Register the service.
                 self.register(pid, role_id)
                     .map_err(|err| err.into())
@@ -228,7 +235,7 @@ impl<const N: usize> SyscallDriver for Registry<N> {
 
             // A userspace operation has completed a previously-requested operation.
             // Retrieve the result and send it to client.
-            (COMMAND_USERV_RETURN_SUCCESS, rv1, rv2) => {
+            (command::USERCALL_RETURN_SUCCESS, rv1, rv2) => {
                 let role_id = self.find_by_pid(pid).unwrap();
                 self.userv_data.enter(
                     pid,
@@ -249,7 +256,7 @@ impl<const N: usize> SyscallDriver for Registry<N> {
                     .into()
             },
 
-            (COMMAND_USERV_RETURN_FAILURE, errno, _r3) => {
+            (command::USERCALL_RETURN_FAILURE, errno, _r3) => {
                 let role_id = self.find_by_pid(pid).unwrap();
                 debug!("[userv-registry] userv 0x{:x} reported failure: {}", role_id, errno);
                 self.userv_data.enter(
