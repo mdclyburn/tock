@@ -56,8 +56,6 @@ struct Service {
     current_pid: ProcessId,
 }
 
-const SUBSCRIBE_NO_INVOKE_USERCALL: usize = 0;
-
 /// Userspace services registry.
 ///
 /// A registry that tracks running userspace services and calls to them.
@@ -223,6 +221,12 @@ mod command {
     pub const USERCALL_RETURN_SUCCESS: usize = 0x11;
     /// Usercall failure return.
     pub const USERCALL_RETURN_FAILURE: usize = 0x12;
+}
+
+/// Syscall driver upcall numbers.
+mod upcall {
+    /// Invoke a userspace service.
+    pub const INVOKE_USERCALL: usize = 0x00;
 }
 
 impl<const N: usize> SyscallDriver for Registry<N> {
