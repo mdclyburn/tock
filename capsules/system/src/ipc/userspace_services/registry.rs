@@ -31,20 +31,23 @@ use crate::ipc::userspace_services::{
 
 pub const DRIVER_NUM: usize = capsules_core::driver::NUM::UserspaceServices as usize;
 
-/// Outstanding usercall tracking.
-#[derive(Clone, Copy)]
-struct PendingUsercall {
-    /// Operation ID of the usercall the service is currently executing.
-    operation_id: usize,
-    /// The callback client to notify upon the operation's completion.
-    client: &'static dyn UserspaceServiceClient,
+/// Userspace service state.
+#[derive(Clone, Copy, Default)]
+enum ServiceState {
+    #[default]
+    /// The userspace service is not busy.
+    Idle,
+    /// The userspace service is not busy but is currently claimed by a client.
+    Reserved(&'static dyn UserspaceServiceClient),
+    /// The userspace service is busy and executing an operation for a client.
+    Pending(&'static dyn UserspaceServiceClient, usize),
 }
 
 #[derive(Default)]
 /// Grant containing context for userspace service process.
 pub struct UserspaceServiceGrant {
-    /// The current operation the userspace service is executing.
-    current_op: Option<PendingUsercall>,
+    /// The current operational state of the userspace service.
+    op_state: ServiceState,
 }
 
 /// Userspace service entry.
@@ -184,8 +187,19 @@ impl<const N: usize> Registry<N> {
                 self.userv_data.enter(
                     userv.current_pid,
                     |ad, kad| {
-                        // Userspace service is already busy with another operation.
-                        if ad.current_op.is_some() {
+                        // Check if the userspace service is already busy with another operation.
+                        let is_busy = match ad.op_state {
+                            ServiceState::Idle => false,
+
+                            // Ensure the client is the same if the userspace service is expecting
+                            // further calls from the client.
+                            ServiceState::Reserved(client) => !core::ptr::addr_eq(
+                                caller as *const dyn UserspaceServiceClient,
+                                client as *const dyn UserspaceServiceClient),
+
+                            ServiceState::Pending(_client, _op_id) => true,
+                        };
+                        if is_busy {
                             return Err(Error::AlreadyInUse);
                         }
 
@@ -197,11 +211,7 @@ impl<const N: usize> Registry<N> {
                             .map_err(|_upcall_error| Error::KernelError)?;
 
                         // The caller is now the client of the userspace service.
-                        let _none = ad.current_op.insert(
-                            PendingUsercall {
-                                operation_id,
-                                client: caller,
-                            });
+                        ad.op_state = ServiceState::Pending(caller, operation_id);
 
                         Ok(())
                     })
@@ -214,13 +224,17 @@ impl<const N: usize> Registry<N> {
 /// Syscall driver command numbers.
 mod command {
     /// Driver available check.
-    pub const CHECK: usize                   = 0x00;
+    pub const CHECK: usize                           = 0x00;
+
     /// Userspace service registration.
-    pub const REGISTER_SERVICE: usize        = 0x10;
+    pub const REGISTER_SERVICE: usize                = 0x10;
+
     /// Usercall success return.
-    pub const USERCALL_RETURN_SUCCESS: usize = 0x11;
+    pub const USERCALL_RETURN_SUCCESS_DONE: usize    = 0x11;
+    pub const USERCALL_RETURN_SUCCESS_RESERVE: usize = 0x12;
+
     /// Usercall failure return.
-    pub const USERCALL_RETURN_FAILURE: usize = 0x12;
+    pub const USERCALL_RETURN_FAILURE: usize = 0x20;
 }
 
 /// Syscall driver upcall numbers.
@@ -252,19 +266,27 @@ impl<const N: usize> SyscallDriver for Registry<N> {
 
             // A userspace operation has completed a previously-requested operation.
             // Retrieve the result and send it to client.
-            (command::USERCALL_RETURN_SUCCESS, rv1, rv2) => {
+            (command_no @ command::USERCALL_RETURN_SUCCESS_DONE, rv1, rv2)
+                | (command_no @ command::USERCALL_RETURN_SUCCESS_RESERVE, rv1, rv2) =>
+            {
                 let role_id = self.find_by_pid(pid).unwrap();
                 self.userv_data.enter(
                     pid,
                     |ad, kad| {
-                        // Provide the client with the data sent from the userspace service.
-                        // Use the userspace service's read-only allow buffers to return results.
-                        let rv_reader = ReturnValueReader::new(rv1, rv2, kad);
-                        ad.current_op.map(|op| op.client.usercall_done(role_id, op.operation_id, Ok(rv_reader)));
+                        if let ServiceState::Pending(client, operation_id) = ad.op_state {
+                            // Provide the client with the data sent from the userspace service.
+                            // Use the userspace service's read-only allow buffers to return results.
+                            let rv_reader = ReturnValueReader::new(rv1, rv2, kad);
+                            client.usercall_done(role_id, operation_id, Ok(rv_reader));
 
-                        // The client is no longer the client,
-                        // even in the event of an unsuccessful operation.
-                        ad.current_op = None;
+                            // When the userspace service does not use the USERCALL_RETURN_SUCCESS_RESERVE command,
+                            // the service-client relation ends.
+                            ad.op_state = if command_no == command::USERCALL_RETURN_SUCCESS_RESERVE {
+                                ServiceState::Reserved(client)
+                            } else {
+                                ServiceState::Idle
+                            };
+                        }
 
                         Ok(())
                     })
@@ -298,11 +320,14 @@ impl<const N: usize> SyscallDriver for Registry<N> {
 
                             _ => ErrorCode::FAIL,
                         };
-                        ad.current_op.map(|op| op.client.usercall_done(
-                            role_id,
-                            op.operation_id,
-                            Err(ec)));
-                        ad.current_op = None;
+
+                        if let ServiceState::Pending(client, operation_id) = ad.op_state {
+                            client.usercall_done(
+                                role_id,
+                                operation_id,
+                                Err(ec));
+                            ad.op_state = ServiceState::Idle;
+                        }
 
                         Ok(())
                     })
