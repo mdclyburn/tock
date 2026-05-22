@@ -20,7 +20,7 @@ pub use data::{
 };
 
 pub use registry::{
-    DRIVER_NO,
+    DRIVER_NUM,
     Registry,
 };
 

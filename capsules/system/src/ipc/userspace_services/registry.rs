@@ -29,7 +29,7 @@ use crate::ipc::userspace_services::{
     UsercallArguments,
 };
 
-pub const DRIVER_NO: usize = capsules_core::driver::NUM::UserspaceServices as usize;
+pub const DRIVER_NUM: usize = capsules_core::driver::NUM::UserspaceServices as usize;
 
 #[derive(Default)]
 /// Grant containing context for userspace service process.
