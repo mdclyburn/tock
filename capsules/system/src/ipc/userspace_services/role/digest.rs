@@ -110,7 +110,7 @@ impl<const L: usize> UserspaceServiceClient for ServiceInterface<L> {
         &self,
         _role_id: usize,
         _operation_id: usize,
-        return_data: Result<ReturnValueReader<'r, 'grant>, usize>,
+        return_data: Result<ReturnValueReader<'r, 'grant>, ErrorCode>,
     )
     {
         kernel::debug!("[digest-serv-int] usercall is done");

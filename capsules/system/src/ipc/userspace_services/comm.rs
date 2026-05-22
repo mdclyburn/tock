@@ -1,6 +1,7 @@
 /*! Kernel-userspace service communication.
  */
 
+use kernel::errorcode::ErrorCode;
 use kernel::grant::GrantKernelData;
 use kernel::process::Error;
 use kernel::processbuffer::{
@@ -64,7 +65,7 @@ pub trait UserspaceServiceClient {
         &self,
         role_id: usize,
         operation_id: usize,
-        args: Result<ReturnValueReader<'r, 'grant>, usize>,
+        args: Result<ReturnValueReader<'r, 'grant>, ErrorCode>,
     );
 }
 

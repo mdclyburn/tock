@@ -276,6 +276,24 @@ impl<const N: usize> SyscallDriver for Registry<N> {
                     pid,
                     |ad, _kad| {
                         // Inform the client that the operation completed in failure.
+                        // Map the error number back into an ErrorCode.
+                        let ec = match errno {
+                            1 => ErrorCode::FAIL,
+                            2 => ErrorCode::BUSY,
+                            3 => ErrorCode::ALREADY,
+                            4 => ErrorCode::OFF,
+                            5 => ErrorCode::RESERVE,
+                            6 => ErrorCode::INVAL,
+                            7 => ErrorCode::SIZE,
+                            8 => ErrorCode::CANCEL,
+                            9 => ErrorCode::NOMEM,
+                            10 => ErrorCode::NOSUPPORT,
+                            11 => ErrorCode::NODEVICE,
+                            12 => ErrorCode::UNINSTALLED,
+                            13 => ErrorCode::NOACK,
+
+                            _ => ErrorCode::FAIL,
+                        };
                         ad.current_op.map(|op| op.client.usercall_done(
                             role_id,
                             op.operation_id,
