@@ -72,11 +72,11 @@ struct Service {
 pub struct Registry<const N: usize> {
     /// Userspace services running on the system.
     userv_ents: [OptionalCell<Service>; N],
-    userv_data: Grant<UserspaceServiceGrant, UpcallCount<1>, AllowRoCount<1>, AllowRwCount<5>>,
+    userv_data: Grant<UserspaceServiceGrant, UpcallCount<1>, AllowRoCount<3>, AllowRwCount<5>>,
 }
 
 impl<const N: usize> Registry<N> {
-    pub fn new(grant_data: Grant<UserspaceServiceGrant, UpcallCount<1>, AllowRoCount<1>, AllowRwCount<5>>) -> Registry<N> {
+    pub fn new(grant_data: Grant<UserspaceServiceGrant, UpcallCount<1>, AllowRoCount<3>, AllowRwCount<5>>) -> Registry<N> {
         Registry {
             userv_ents: array::from_fn(|_| OptionalCell::empty()),
             userv_data: grant_data,
@@ -188,7 +188,8 @@ impl<const N: usize> Registry<N> {
                             kad.schedule_upcall(upcall::INVOKE_USERCALL, upcall_args)
                                 .map_err(|_upcall_error| ErrorCode::FAIL)?;
 
-                            // The caller is now the client of the userspace service.
+                            // The caller is now the client of the userspace service,
+                            // and the registry expects some response from the userspace service.
                             ad.op_state = ServiceState::Pending(caller, operation_id);
 
                             Ok(())
