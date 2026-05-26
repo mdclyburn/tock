@@ -156,7 +156,7 @@ impl<const N: usize> Registry<N> {
         userv_role_id: usize,
         operation_id: usize,
         args: UsercallArguments,
-    ) -> Result<(), Error>
+    ) -> Result<(), ErrorCode>
     {
         debug!("[userv-registry] usercall: (role: 0x{:x}, op: {})", userv_role_id, operation_id);
         if let Some(userv_ent) = self.find(userv_role_id) {
@@ -179,7 +179,7 @@ impl<const N: usize> Registry<N> {
                                 ServiceState::Pending(_client, _op_id) => true,
                             };
                             if is_busy {
-                                return Err(Error::AlreadyInUse);
+                                return Err(ErrorCode::BUSY);
                             }
 
                             let upcall_args = comm::place_arguments(operation_id, kad, args)?;
@@ -187,18 +187,19 @@ impl<const N: usize> Registry<N> {
                             // Send an upcall to the userspace service.
                             debug!("[userv-registry] invoking userspace service");
                             kad.schedule_upcall(upcall::INVOKE_USERCALL, upcall_args)
-                                .map_err(|_upcall_error| Error::KernelError)?;
+                                .map_err(|_upcall_error| ErrorCode::FAIL)?;
 
                             // The caller is now the client of the userspace service.
                             ad.op_state = ServiceState::Pending(caller, operation_id);
 
                             Ok(())
                         })
+                        .map_err(|kerr| kerr.into())
                         .flatten()
                 })
-                .unwrap_or(Err(Error::NoSuchApp))
+                .unwrap_or(Err(ErrorCode::NODEVICE))
         } else {
-            Err(Error::NoSuchApp)
+            Err(ErrorCode::NODEVICE)
         }
     }
 }
@@ -334,7 +335,7 @@ impl<const N: usize> UserspaceServiceAccess for Registry<N> {
         role_id: usize,
         operation_id: usize,
         args: UsercallArguments,
-    ) -> Result<(), Error>
+    ) -> Result<(), ErrorCode>
     {
         Registry::usercall(self, caller, role_id, operation_id, args)
     }

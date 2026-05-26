@@ -208,8 +208,8 @@ impl<'a: 'static, const L: usize> DigestData<'a, L> for ServiceInterface<L> {
                         None,
                         None,
                         &usercall_args));
-                if let Err(kerr) = usercall_result {
-                    Err((kerr.into(), data))
+                if let Err(ec) = usercall_result {
+                    Err((ec, data))
                 } else {
                     self.current_op.set(Operation::AddData(data));
                     Ok(())

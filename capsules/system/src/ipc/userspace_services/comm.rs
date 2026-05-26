@@ -50,7 +50,7 @@ pub trait UserspaceServiceAccess {
         role_id: usize,
         operation_id: usize,
         args: UsercallArguments,
-    ) -> Result<(), Error>;
+    ) -> Result<(), ErrorCode>;
 }
 
 /// Client receiving results of "usercalls": userspace service calls.
