@@ -147,8 +147,8 @@ impl<const N: usize> Registry<N> {
         }
     }
 
-    /// Invoke a userspace service with extended call arguments.
-    pub fn usercall(
+    /// Invoke a userspace service.
+    fn usercall(
         &self,
         caller: &'static dyn UserspaceServiceClient,
         userv_role_id: usize,
