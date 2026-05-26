@@ -58,13 +58,10 @@ pub trait UserspaceServiceClient {
     /// Callback signalling completion of a usercall.
     ///
     /// Provides the client with the results of a usercall operation.
-    /// The role ID accompanies the results to allow an implementor creating a composite facility
-    /// (e.g., encrypting and hashing roles)
-    /// to support and discern multiple roles.
+    /// The client can access data the userspace service returns with the
+    /// [`ReturnValueReader`] `args`.
     fn usercall_done<'r, 'grant>(
         &self,
-        role_id: usize,
-        operation_id: usize,
         args: Result<ReturnValueReader<'r, 'grant>, ErrorCode>,
     );
 }

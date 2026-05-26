@@ -98,12 +98,6 @@ impl<const N: usize> Registry<N> {
         None
     }
 
-    fn find_by_pid(&self, userv_pid: ProcessId) -> Option<usize> {
-        self.userv_ents.iter()
-            .find(|ent| ent.map_or(false, |s| s.current_pid == userv_pid))
-            .map(|ent| ent.unwrap_or_panic().userv_id)
-    }
-
     /// Register a userspace service.
     ///
     /// Adds a userspace service entry.
@@ -252,15 +246,14 @@ impl<const N: usize> SyscallDriver for Registry<N> {
             (command_no @ command::USERCALL_RETURN_SUCCESS_DONE, rv1, rv2)
                 | (command_no @ command::USERCALL_RETURN_SUCCESS_RESERVE, rv1, rv2) =>
             {
-                let role_id = self.find_by_pid(pid).unwrap();
                 self.userv_data.enter(
                     pid,
                     |ad, kad| {
-                        if let ServiceState::Pending(client, operation_id) = ad.op_state {
+                        if let ServiceState::Pending(client, _operation_id) = ad.op_state {
                             // Provide the client with the data sent from the userspace service.
                             // Use the userspace service's read-only allow buffers to return results.
                             let rv_reader = ReturnValueReader::new(rv1, rv2, kad);
-                            client.usercall_done(role_id, operation_id, Ok(rv_reader));
+                            client.usercall_done(Ok(rv_reader));
 
                             // When the userspace service does not use the USERCALL_RETURN_SUCCESS_RESERVE command,
                             // the service-client relation ends.
@@ -279,8 +272,7 @@ impl<const N: usize> SyscallDriver for Registry<N> {
             },
 
             (command::USERCALL_RETURN_FAILURE, errno, _r3) => {
-                let role_id = self.find_by_pid(pid).unwrap();
-                debug!("[userv-registry] userv 0x{:x} reported failure: {}", role_id, errno);
+                debug!("[userv-registry] userv reported failure: {}", errno);
                 self.userv_data.enter(
                     pid,
                     |ad, _kad| {
@@ -304,11 +296,8 @@ impl<const N: usize> SyscallDriver for Registry<N> {
                             _ => ErrorCode::FAIL,
                         };
 
-                        if let ServiceState::Pending(client, operation_id) = ad.op_state {
-                            client.usercall_done(
-                                role_id,
-                                operation_id,
-                                Err(ec));
+                        if let ServiceState::Pending(client, _operation_id) = ad.op_state {
+                            client.usercall_done(Err(ec));
                             ad.op_state = ServiceState::Idle;
                         }
 

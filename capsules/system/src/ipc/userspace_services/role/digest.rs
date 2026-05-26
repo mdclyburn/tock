@@ -108,8 +108,6 @@ impl<const L: usize> ServiceInterface<L> {
 impl<const L: usize> UserspaceServiceClient for ServiceInterface<L> {
     fn usercall_done<'r, 'grant>(
         &self,
-        _role_id: usize,
-        _operation_id: usize,
         return_data: Result<ReturnValueReader<'r, 'grant>, ErrorCode>,
     )
     {
