@@ -25,7 +25,15 @@ pub enum Argument<'a> {
     Bytes(&'a [u8]),
 }
 
-/// Usercall argument format.
+/// Usercall argument data.
+///
+/// Usercalls arguments have two formats:
+/// a shorter format using up to two words of data
+/// and a longer format that serializes data into buffers.
+/// The `Short` variant passes two words of data directly through [`schedule_upcall()`](kernel::grant::GrantKernelData::schedule_upcall())'s arguments.
+/// In addition to passing the same two words as the `Short` variant,
+/// the `Extended` variant passes additional arguments by serializing them into one or more buffers.
+/// The additional arguments provided in the slice must support the [`Serialize`] trait.
 #[derive(Clone, Copy)]
 pub enum UsercallArguments<'arg, 'slice> {
     /// Short-format call arguments requiring only up to two words.
@@ -34,16 +42,18 @@ pub enum UsercallArguments<'arg, 'slice> {
     Extended(Option<usize>, Option<usize>, &'slice [&'arg dyn Serialize]),
 }
 
-/// Provides access to userspace services, `userv`s.
+/// Provides call access to userspace services.
 ///
-/// Exposes an asynchronous call interface to userspace services.
-/// An operation delivers results to the caller with a callback to the provided [`UserspaceServiceClient`].
+/// Exposes an asynchronous call interface to userspace services ("usercalls").
+/// The userspace service's operation result returns to the caller through a callback to `caller`.
 pub trait UserspaceServiceAccess {
     /// Invoke a userspace service.
     ///
     /// Trigger a userspace service operation.
-    /// This operation is an asynchronous process, delivering results to the `caller`
-    /// (most likely to be the caller of this function).
+    /// This operation is an asynchronous process, delivering results to the `caller`.
+    /// The caller must provide a &'static `caller`
+    /// (most likely to itself)
+    /// to receive the usercall result.
     fn usercall(
         &self,
         caller: &'static dyn UserspaceServiceClient,
@@ -53,12 +63,12 @@ pub trait UserspaceServiceAccess {
     ) -> Result<(), ErrorCode>;
 }
 
-/// Client receiving results of "usercalls": userspace service calls.
+/// Client receiving the result of a usercall.
 pub trait UserspaceServiceClient {
     /// Callback signalling completion of a usercall.
     ///
     /// Provides the client with the results of a usercall operation.
-    /// The client can access data the userspace service returns with the
+    /// The client accesses data the userspace service returns with the
     /// [`ReturnValueReader`] `args`.
     fn usercall_done<'r, 'grant>(
         &self,
@@ -67,9 +77,14 @@ pub trait UserspaceServiceClient {
 }
 
 /// Put arguments into a userspace service's process buffers.
+///
+/// Prepares arguments for an upcall to the userspace service by
+/// constructing the argument tuple for the call to [`schedule_upcall()`](kernel::grant::GrantKernelData::schedule_upcall())
+/// and serializing arguments into buffers when using [`UsercallArguments::Extended`].
+/// Returns `Result::Ok` containing the upcall tuple upon success.
 pub fn place_arguments(
     operation_id: usize,
-    k_grant_data: &GrantKernelData,
+    userv_kdata: &GrantKernelData,
     usercall_args: UsercallArguments
 ) -> Result<(usize, usize, usize), Error>
 {
@@ -82,7 +97,7 @@ pub fn place_arguments(
             // placing an argument into each buffer.
             let it = ext_args.iter()
                 .enumerate()
-                .map(|(allow_no, arg)| (k_grant_data.get_readwrite_processbuffer(allow_no), arg));
+                .map(|(allow_no, arg)| (userv_kdata.get_readwrite_processbuffer(allow_no), arg));
             for (res_allow_buffer, usercall_arg) in it {
                 let allow_buffer = res_allow_buffer?;
                 usercall_arg.try_serialize(allow_buffer)
@@ -98,11 +113,11 @@ pub fn place_arguments(
 
 /// Reader for userspace service return values.
 ///
-/// Structured interpreter for userspace service return values.
+/// Interpreter for userspace service return results.
 /// Provides the two `usize` values returned directly from the userspace service,
 /// as well as functions to parse the data in the userspace service's process buffers.
-/// Use [`ReturnValueReader::buffer_n_as_value()`] to retrieve values of a supported type.
-/// Use [`ReturnValueReader::buffer_n()`] to access the buffer.
+/// Use [`buffer_n()`](ReturnValueReader::buffer_n()) to access an argument buffer.
+/// Use [`buffer_n_as_value()`](ReturnValueReader::buffer_n_as_value()) to parse a buffer as a value supporting [`Deserialize`].
 pub struct ReturnValueReader<'r, 'grant> {
     // Values returned directly through the command syscall.
     direct_rvals: (usize, usize),
@@ -147,7 +162,7 @@ impl<'r, 'grant> ReturnValueReader<'r, 'grant> {
     /// Returns `None` if the userspace service has not `allow`ed its nth read-only process buffer.
     /// Returns `Some(Err(())` if the userspace service is returning data but the interpretation failed.
     /// Returns `Some(Ok(T))` upon successful interpretation.
-    pub fn buffer_n_as_value<T: Deserialize>(&self, idx: usize) -> Option<Result<T, ()>> {
+    pub fn buffer_n_as_value<T: Deserialize>(&self, idx: usize) -> Option<Result<T, ErrorCode>> {
         let ro_pbuf = self.buffer_n(idx)?;
         Some(T::try_deserialize(ro_pbuf))
     }
