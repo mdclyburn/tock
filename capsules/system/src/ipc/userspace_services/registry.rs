@@ -83,27 +83,6 @@ impl<const N: usize> Registry<N> {
         }
     }
 
-    /// Run code with a particular service.
-    ///
-    /// Idenfifies the `Service` requested by the caller and runs the provided function.
-    /// Returns an Error if the service is not in the registry.
-    fn with_service<F, T>(&self, target_userv_id: usize, f: F) -> Result<T, Error>
-    where
-        F: FnOnce(Service) -> T
-    {
-        for userv_ent in self.userv_ents.iter() {
-            if userv_ent.is_some() {
-                let userv_id = userv_ent.map(|s| s.userv_id)
-                    .unwrap(); // Earlier if-statement check guarantees a service is present.
-                if userv_id == target_userv_id {
-                    return Ok(userv_ent.map(f).unwrap());
-                }
-            }
-        }
-
-        Err(Error::NoSuchApp)
-    }
-
     /// Locate the entry for the service fulfilling the given role ID.
     fn find(&self, userv_role_id: usize) -> Option<&OptionalCell<Service>> {
         for userv_ent in self.userv_ents.iter() {
@@ -180,44 +159,47 @@ impl<const N: usize> Registry<N> {
     ) -> Result<(), Error>
     {
         debug!("[userv-registry] usercall: (role: 0x{:x}, op: {})", userv_role_id, operation_id);
-        self.with_service(
-            userv_role_id,
-            |userv| {
-                debug!("[userv-registry] found userspace service for {:x}", userv_role_id);
-                self.userv_data.enter(
-                    userv.current_pid,
-                    |ad, kad| {
-                        // Check if the userspace service is already busy with another operation.
-                        let is_busy = match ad.op_state {
-                            ServiceState::Idle => false,
+        if let Some(userv_ent) = self.find(userv_role_id) {
+            userv_ent.map(
+                |userv| {
+                    debug!("[userv-registry] found userspace service for {:x}", userv_role_id);
+                    self.userv_data.enter(
+                        userv.current_pid,
+                        |ad, kad| {
+                            // Check if the userspace service is already busy with another operation.
+                            let is_busy = match ad.op_state {
+                                ServiceState::Idle => false,
 
-                            // Ensure the client is the same if the userspace service is expecting
-                            // further calls from the client.
-                            ServiceState::Reserved(client) => !core::ptr::addr_eq(
-                                caller as *const dyn UserspaceServiceClient,
-                                client as *const dyn UserspaceServiceClient),
+                                // Ensure the client is the same if the userspace service is expecting
+                                // further calls from the client.
+                                ServiceState::Reserved(client) => !core::ptr::addr_eq(
+                                    caller as *const dyn UserspaceServiceClient,
+                                    client as *const dyn UserspaceServiceClient),
 
-                            ServiceState::Pending(_client, _op_id) => true,
-                        };
-                        if is_busy {
-                            return Err(Error::AlreadyInUse);
-                        }
+                                ServiceState::Pending(_client, _op_id) => true,
+                            };
+                            if is_busy {
+                                return Err(Error::AlreadyInUse);
+                            }
 
-                        let upcall_args = comm::place_arguments(operation_id, kad, args)?;
+                            let upcall_args = comm::place_arguments(operation_id, kad, args)?;
 
-                        // Send an upcall to the userspace service.
-                        debug!("[userv-registry] invoking userspace service");
-                        kad.schedule_upcall(upcall::INVOKE_USERCALL, upcall_args)
-                            .map_err(|_upcall_error| Error::KernelError)?;
+                            // Send an upcall to the userspace service.
+                            debug!("[userv-registry] invoking userspace service");
+                            kad.schedule_upcall(upcall::INVOKE_USERCALL, upcall_args)
+                                .map_err(|_upcall_error| Error::KernelError)?;
 
-                        // The caller is now the client of the userspace service.
-                        ad.op_state = ServiceState::Pending(caller, operation_id);
+                            // The caller is now the client of the userspace service.
+                            ad.op_state = ServiceState::Pending(caller, operation_id);
 
-                        Ok(())
-                    })
-                    .flatten()
-            })
-            .flatten()
+                            Ok(())
+                        })
+                        .flatten()
+                })
+                .unwrap_or(Err(Error::NoSuchApp))
+        } else {
+            Err(Error::NoSuchApp)
+        }
     }
 }
 
