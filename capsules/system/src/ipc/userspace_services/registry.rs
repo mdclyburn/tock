@@ -83,12 +83,13 @@ impl<const N: usize> Registry<N> {
         }
     }
 
-    /// Locate the entry for the service fulfilling the given role ID.
+    /// Locate the entry for the userspace service that fulfills the given role ID.
     fn find(&self, userv_role_id: usize) -> Option<&OptionalCell<Service>> {
         for userv_ent in self.userv_ents.iter() {
             if userv_ent.is_some() {
-                let is_userv_match = userv_ent.map(|s| s.userv_id == userv_role_id)
-                    .unwrap();
+                let is_userv_match = userv_ent.map_or(
+                    false,
+                    |s| s.userv_id == userv_role_id);
                 if is_userv_match {
                     return Some(userv_ent);
                 }
@@ -102,7 +103,7 @@ impl<const N: usize> Registry<N> {
     ///
     /// Adds a userspace service entry.
     /// Replaces an existing entry if the application short ID matches.
-    fn register(&self, pid: ProcessId, userv_role_id: usize) -> Result<(), Error> {
+    fn register(&self, pid: ProcessId, userv_role_id: usize) -> Result<(), ErrorCode> {
         let new_service = Service {
             userv_id: userv_role_id,
             current_pid: pid,
@@ -111,9 +112,9 @@ impl<const N: usize> Registry<N> {
         // See if this is replacing an older (crashed) instance of the same application.
         if let Some(userv_ent) = self.find(userv_role_id) {
             // Make sure it isn't replacing an existing application.
-            let can_replace = userv_ent
-                .map(|s| pid.short_app_id() == s.current_pid.short_app_id())
-                .unwrap(); // Previous find must not turn up an empty OptionalCell.
+            let can_replace = userv_ent.map_or(
+                false,
+                |s| pid.short_app_id() == s.current_pid.short_app_id());
             if can_replace {
                 // New instance of the userspace service replaces its older entry.
                 userv_ent.set(new_service);
@@ -126,20 +127,23 @@ impl<const N: usize> Registry<N> {
                 debug!("[userv-registry] {} cannot register for filled service role 0x{:x}",
                        pid.short_app_id(),
                        userv_role_id);
-                Err(Error::AlreadyInUse)
+                Err(ErrorCode::ALREADY)
             }
         } else {
             // The userspace service is fulfilling an unfilled role.
-            // Place service entry in an empty slot.
-            self.userv_ents.iter()
-                .find(|ent| ent.is_none())
-                .unwrap() // Registered service count must not exceed max count.
-                .set(new_service);
-            debug!("[userv-registry] {}-{} registered for service role 0x{:x}",
-                   pid.id(),
-                   pid.short_app_id(),
-                   userv_role_id);
-            Ok(())
+            let userv_ent = self.userv_ents.iter()
+                .find(|ent| ent.is_none());
+            if let Some(empty_ent) = userv_ent {
+                // Place service entry in an empty slot.
+                empty_ent.set(new_service);
+                debug!("[userv-registry] {}-{} registered for service role 0x{:x}",
+                       pid.id(),
+                       pid.short_app_id(),
+                       userv_role_id);
+                Ok(())
+            } else {
+                Err(ErrorCode::NOMEM)
+            }
         }
     }
 
@@ -154,7 +158,8 @@ impl<const N: usize> Registry<N> {
     {
         debug!("[userv-registry] usercall: (role: 0x{:x}, op: {})", userv_role_id, operation_id);
         if let Some(userv_ent) = self.find(userv_role_id) {
-            userv_ent.map(
+            userv_ent.map_or(
+                Err(ErrorCode::NODEVICE),
                 |userv| {
                     debug!("[userv-registry] found userspace service for {:x}", userv_role_id);
                     self.userv_data.enter(
@@ -191,7 +196,6 @@ impl<const N: usize> Registry<N> {
                         .map_err(|kerr| kerr.into())
                         .flatten()
                 })
-                .unwrap_or(Err(ErrorCode::NODEVICE))
         } else {
             Err(ErrorCode::NODEVICE)
         }
@@ -237,7 +241,6 @@ impl<const N: usize> SyscallDriver for Registry<N> {
             (command::REGISTER_SERVICE, role_id, _r3) => {
                 // Register the service.
                 self.register(pid, role_id)
-                    .map_err(|err| err.into())
                     .into()
             },
 
