@@ -156,12 +156,12 @@ impl<'r, 'grant> ReturnValueReader<'r, 'grant> {
             .filter(|pbuf| pbuf.len() > 0)
     }
 
-    /// Interprets and returns the value stored in the nth read-only process buffer.
+    /// Deserializes and returns the value stored in the nth read-only process buffer.
     ///
     /// Interprets the bytes in the userspace service's nth read-only process buffer and returns that value.
     /// Returns `None` if the userspace service has not `allow`ed its nth read-only process buffer.
     /// Returns `Some(Err(())` if the userspace service is returning data but the interpretation failed.
-    /// Returns `Some(Ok(T))` upon successful interpretation.
+    /// Returns `Some(Ok(T))` upon successful deserialization.
     pub fn buffer_n_as_value<T: Deserialize>(&self, idx: usize) -> Option<Result<T, ErrorCode>> {
         let ro_pbuf = self.buffer_n(idx)?;
         Some(T::try_deserialize(ro_pbuf))
