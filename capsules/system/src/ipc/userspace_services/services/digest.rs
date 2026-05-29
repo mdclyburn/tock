@@ -1,4 +1,4 @@
-/*! Hashing userspace service.
+/*! Hashing userspace service interface.
  */
 
 use kernel::errorcode::{

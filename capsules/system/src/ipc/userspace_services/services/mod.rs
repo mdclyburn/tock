@@ -8,8 +8,8 @@ pub mod digest;
 
 /// Service function identifier.
 ///
-/// Identifies the userspace service by its function.
-/// The Role identifies the kind of userspace service to address in a usercall.
+/// Identifies the userspace service by its function,
+/// corresponding to the HIL the interface implements.
 #[derive(Debug, PartialEq)]
 pub enum Role {
     Digest               = 0x11,
