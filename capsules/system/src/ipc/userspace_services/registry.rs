@@ -1,4 +1,4 @@
-/*! Userspace service-kernel intermediation.
+/*! Userspace service registry and management.
  */
 
 use core::array;
