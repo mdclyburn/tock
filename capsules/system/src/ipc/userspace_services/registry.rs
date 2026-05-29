@@ -37,10 +37,8 @@ enum ServiceState {
     #[default]
     /// The userspace service is not busy.
     Idle,
-    /// The userspace service is not busy but is currently claimed by a client.
-    Reserved(&'static dyn UserspaceServiceClient),
     /// The userspace service is busy and executing an operation for a client.
-    Pending(&'static dyn UserspaceServiceClient, usize),
+    Pending(&'static dyn UserspaceServiceClient),
 }
 
 #[derive(Default)]
@@ -169,13 +167,7 @@ impl<const N: usize> Registry<N> {
                             let is_busy = match ad.op_state {
                                 ServiceState::Idle => false,
 
-                                // Ensure the client is the same if the userspace service is expecting
-                                // further calls from the client.
-                                ServiceState::Reserved(client) => !core::ptr::addr_eq(
-                                    caller as *const dyn UserspaceServiceClient,
-                                    client as *const dyn UserspaceServiceClient),
-
-                                ServiceState::Pending(_client, _op_id) => true,
+                                ServiceState::Pending(_client) => true,
                             };
                             if is_busy {
                                 return Err(ErrorCode::BUSY);
@@ -190,7 +182,7 @@ impl<const N: usize> Registry<N> {
 
                             // The caller is now the client of the userspace service,
                             // and the registry expects some response from the userspace service.
-                            ad.op_state = ServiceState::Pending(caller, operation_id);
+                            ad.op_state = ServiceState::Pending(caller);
 
                             Ok(())
                         })
@@ -206,17 +198,15 @@ impl<const N: usize> Registry<N> {
 /// Syscall driver command numbers.
 mod command {
     /// Driver available check.
-    pub const CHECK: usize                           = 0x00;
+    pub const CHECK: usize                   = 0x00;
 
     /// Userspace service registration.
-    pub const REGISTER_SERVICE: usize                = 0x10;
+    pub const REGISTER_SERVICE: usize        = 0x10;
 
     /// Usercall success return.
-    pub const USERCALL_RETURN_SUCCESS_DONE: usize    = 0x11;
-    pub const USERCALL_RETURN_SUCCESS_RESERVE: usize = 0x12;
-
+    pub const USERCALL_RETURN_SUCCESS: usize = 0x20;
     /// Usercall failure return.
-    pub const USERCALL_RETURN_FAILURE: usize = 0x20;
+    pub const USERCALL_RETURN_FAILURE: usize = 0x21;
 }
 
 /// Syscall driver upcall numbers.
@@ -247,25 +237,17 @@ impl<const N: usize> SyscallDriver for Registry<N> {
 
             // A userspace operation has completed a previously-requested operation.
             // Retrieve the result and send it to client.
-            (command_no @ command::USERCALL_RETURN_SUCCESS_DONE, rv1, rv2)
-                | (command_no @ command::USERCALL_RETURN_SUCCESS_RESERVE, rv1, rv2) =>
-            {
+            (command::USERCALL_RETURN_SUCCESS, rv1, rv2) => {
                 self.userv_data.enter(
                     pid,
                     |ad, kad| {
-                        if let ServiceState::Pending(client, _operation_id) = ad.op_state {
+                        if let ServiceState::Pending(client) = ad.op_state {
                             // Provide the client with the data sent from the userspace service.
                             // Use the userspace service's read-only allow buffers to return results.
                             let rv_reader = ReturnValueReader::new(rv1, rv2, kad);
                             client.usercall_done(Ok(rv_reader));
 
-                            // When the userspace service does not use the USERCALL_RETURN_SUCCESS_RESERVE command,
-                            // the service-client relation ends.
-                            ad.op_state = if command_no == command::USERCALL_RETURN_SUCCESS_RESERVE {
-                                ServiceState::Reserved(client)
-                            } else {
-                                ServiceState::Idle
-                            };
+                            ad.op_state = ServiceState::Idle;
                         }
 
                         Ok(())
@@ -300,7 +282,7 @@ impl<const N: usize> SyscallDriver for Registry<N> {
                             _ => ErrorCode::FAIL,
                         };
 
-                        if let ServiceState::Pending(client, _operation_id) = ad.op_state {
+                        if let ServiceState::Pending(client) = ad.op_state {
                             client.usercall_done(Err(ec));
                             ad.op_state = ServiceState::Idle;
                         }

@@ -120,8 +120,8 @@ The userspace service application should `subscribe()` to subscription no. 0 to 
 3. **Respond to upcalls with a `command()`.**
 The userspace service application must issue a `command` in return for each upcall it receives from the registry.
 The `command` indicates either
-success (command no. `0x11`)
-or failure (command no. `0x20`).
+success (command no. `0x20`)
+or failure (command no. `0x21`).
 The two arguments of the success `command` can carry return data.
 If the userspace service application is returning additional data through its buffer(s),
 it should `allow_readonly()` the buffer(s) prior to issuing the return success `command`.
