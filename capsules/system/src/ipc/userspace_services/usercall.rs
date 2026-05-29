@@ -37,7 +37,7 @@ pub enum Argument<'a> {
 /// the `Extended` variant passes additional arguments by serializing them into one or more buffers.
 /// The additional arguments provided in the slice must support the [`Serialize`] trait.
 #[derive(Clone, Copy)]
-pub enum UsercallArguments<'arg, 'slice> {
+pub enum Arguments<'arg, 'slice> {
     /// Short-format call arguments requiring only up to two words.
     Short(usize, usize),
     /// Arguments requiring more than two words.
@@ -61,7 +61,7 @@ pub trait UserspaceServiceAccess {
         caller: &'static dyn UserspaceServiceClient,
         role_id: usize,
         operation_id: usize,
-        args: UsercallArguments,
+        args: Arguments,
     ) -> Result<(), ErrorCode>;
 }
 
@@ -71,10 +71,10 @@ pub trait UserspaceServiceClient {
     ///
     /// Provides the client with the results of a usercall operation.
     /// The client accesses data the userspace service returns with the
-    /// [`ReturnValueReader`] `args`.
+    /// [`ReturnReader`] `args`.
     fn usercall_done<'r, 'grant>(
         &self,
-        args: Result<ReturnValueReader<'r, 'grant>, ErrorCode>,
+        args: Result<ReturnReader<'r, 'grant>, ErrorCode>,
     );
 }
 
@@ -82,19 +82,19 @@ pub trait UserspaceServiceClient {
 ///
 /// Prepares arguments for an upcall to the userspace service by
 /// constructing the argument tuple for the call to [`schedule_upcall()`](kernel::grant::GrantKernelData::schedule_upcall())
-/// and serializing arguments into buffers when using [`UsercallArguments::Extended`].
+/// and serializing arguments into buffers when using [`Arguments::Extended`].
 /// Returns `Result::Ok` containing the upcall tuple upon success.
 pub fn place_arguments(
     operation_id: usize,
     userv_kdata: &GrantKernelData,
-    usercall_args: UsercallArguments
+    usercall_args: Arguments
 ) -> Result<(usize, usize, usize), Error>
 {
     match usercall_args {
-        UsercallArguments::Short(arg1, arg2) =>
+        Arguments::Short(arg1, arg2) =>
             Ok((operation_id, arg1, arg2)),
 
-        UsercallArguments::Extended(opt_arg1, opt_arg2, ext_args) => {
+        Arguments::Extended(opt_arg1, opt_arg2, ext_args) => {
             // Retrieve ALLOWed buffers one at a time,
             // placing an argument into each buffer.
             let it = ext_args.iter()
@@ -118,9 +118,9 @@ pub fn place_arguments(
 /// Interpreter for userspace service return results.
 /// Provides the two `usize` values returned directly from the userspace service,
 /// as well as functions to parse the data in the userspace service's process buffers.
-/// Use [`buffer_n()`](ReturnValueReader::buffer_n()) to access an argument buffer.
-/// Use [`buffer_n_as_value()`](ReturnValueReader::buffer_n_as_value()) to parse a buffer as a value supporting [`Deserialize`].
-pub struct ReturnValueReader<'r, 'grant> {
+/// Use [`buffer_n()`](ReturnReader::buffer_n()) to access an argument buffer.
+/// Use [`buffer_n_as_value()`](ReturnReader::buffer_n_as_value()) to parse a buffer as a value supporting [`Deserialize`].
+pub struct ReturnReader<'r, 'grant> {
     // Values returned directly through the command syscall.
     direct_rvals: (usize, usize),
     // Kernel-managed grant data for the userspace service
@@ -128,15 +128,15 @@ pub struct ReturnValueReader<'r, 'grant> {
     userv_k_grant_data: &'r GrantKernelData<'grant>,
 }
 
-impl<'r, 'grant> ReturnValueReader<'r, 'grant> {
+impl<'r, 'grant> ReturnReader<'r, 'grant> {
     /// Create a new instance.
     pub fn new(
         rval1: usize,
         rval2: usize,
         userv_k_grant_data: &'r GrantKernelData<'grant>,
-    ) -> ReturnValueReader<'r, 'grant>
+    ) -> ReturnReader<'r, 'grant>
     {
-        ReturnValueReader {
+        ReturnReader {
             direct_rvals: (rval1, rval2),
             userv_k_grant_data,
         }

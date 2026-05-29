@@ -44,10 +44,10 @@ use kernel::utilities::leasable_buffer::{
 
 use crate::ipc::userspace_services::{
     Bytes,
-    ReturnValueReader,
+    ReturnReader,
     Role,
     Serialize,
-    UsercallArguments,
+    Arguments,
     UserspaceServiceAccess,
     UserspaceServiceClient,
 };
@@ -111,7 +111,7 @@ impl<const L: usize> ServiceInterface<L> {
 impl<const L: usize> UserspaceServiceClient for ServiceInterface<L> {
     fn usercall_done<'r, 'grant>(
         &self,
-        return_data: Result<ReturnValueReader<'r, 'grant>, ErrorCode>,
+        return_data: Result<ReturnReader<'r, 'grant>, ErrorCode>,
     )
     {
         kernel::debug!("[digest-serv-int] usercall is done");
@@ -205,7 +205,7 @@ impl<'a: 'static, const L: usize> DigestData<'a, L> for ServiceInterface<L> {
                     this,
                     ROLE_ID,
                     ops::ADD_DATA,
-                    UsercallArguments::Extended(
+                    Arguments::Extended(
                         None,
                         None,
                         &usercall_args));
@@ -235,7 +235,7 @@ impl<'a: 'static, const L: usize> DigestData<'a, L> for ServiceInterface<L> {
                     this,
                     ROLE_ID,
                     ops::ADD_DATA,
-                    UsercallArguments::Extended(
+                    Arguments::Extended(
                         Some(data.len()),
                         None,
                         &usercall_args));
@@ -258,7 +258,7 @@ impl<'a: 'static, const L: usize> DigestData<'a, L> for ServiceInterface<L> {
                 this,
                 ROLE_ID,
                 ops::CLEAR_DATA,
-                UsercallArguments::Short(0, 0));
+                Arguments::Short(0, 0));
         }
     }
 }
@@ -278,7 +278,7 @@ impl<'a: 'static, const L: usize> DigestHash<'a, L> for ServiceInterface<L> {
                     this,
                     ROLE_ID,
                     ops::RUN,
-                    UsercallArguments::Short(0, 0));
+                    Arguments::Short(0, 0));
                 if let Err(kerr) = usercall_result {
                     Err((kerr.into(), hash))
                 } else {
@@ -310,7 +310,7 @@ impl<'a: 'static, const L: usize> DigestVerify<'a, L> for ServiceInterface<L> {
                     this,
                     ROLE_ID,
                     ops::VERIFY,
-                    UsercallArguments::Extended(
+                    Arguments::Extended(
                         None,
                         None,
                         &[&Bytes(expected_digest_buffer)]

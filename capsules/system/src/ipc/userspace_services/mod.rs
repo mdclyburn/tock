@@ -134,10 +134,10 @@ pub mod services;
 pub mod usercall;
 
 pub use usercall::{
-    ReturnValueReader,
+    ReturnReader,
     UserspaceServiceAccess,
     UserspaceServiceClient,
-    UsercallArguments,
+    Arguments,
 };
 
 pub use data::{

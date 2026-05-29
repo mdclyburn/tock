@@ -23,10 +23,10 @@ use kernel::utilities::cells::OptionalCell;
 
 use crate::ipc::userspace_services::usercall;
 use crate::ipc::userspace_services::{
-    ReturnValueReader,
+    ReturnReader,
     UserspaceServiceAccess,
     UserspaceServiceClient,
-    UsercallArguments,
+    Arguments,
 };
 
 pub const DRIVER_NUM: usize = capsules_core::driver::NUM::UserspaceServices as usize;
@@ -154,7 +154,7 @@ impl<const N: usize> Registry<N> {
         caller: &'static dyn UserspaceServiceClient,
         userv_role_id: usize,
         operation_id: usize,
-        args: UsercallArguments,
+        args: Arguments,
     ) -> Result<(), ErrorCode>
     {
         debug!("[userv-registry] usercall: (role: 0x{:x}, op: {})", userv_role_id, operation_id);
@@ -247,7 +247,7 @@ impl<const N: usize> SyscallDriver for Registry<N> {
                         if let ServiceState::Pending(client) = ad.op_state {
                             // Provide the client with the data sent from the userspace service.
                             // Use the userspace service's read-only allow buffers to return results.
-                            let rv_reader = ReturnValueReader::new(rv1, rv2, kad);
+                            let rv_reader = ReturnReader::new(rv1, rv2, kad);
                             client.usercall_done(Ok(rv_reader));
 
                             ad.op_state = ServiceState::Idle;
@@ -312,7 +312,7 @@ impl<const N: usize> UserspaceServiceAccess for Registry<N> {
         caller: &'static dyn UserspaceServiceClient,
         role_id: usize,
         operation_id: usize,
-        args: UsercallArguments,
+        args: Arguments,
     ) -> Result<(), ErrorCode>
     {
         Registry::usercall(self, caller, role_id, operation_id, args)
