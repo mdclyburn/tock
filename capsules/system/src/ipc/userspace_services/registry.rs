@@ -57,6 +57,9 @@ struct Service {
     current_pid: ProcessId,
 }
 
+/// Registry's grant type.
+pub type RegistryGrant = Grant<UserspaceServiceGrant, UpcallCount<1>, AllowRoCount<3>, AllowRwCount<5>>;
+
 /// Userspace services registry.
 ///
 /// A registry that tracks running userspace services and calls to them.
@@ -70,11 +73,11 @@ struct Service {
 pub struct Registry<const N: usize> {
     /// Userspace services running on the system.
     userv_ents: [OptionalCell<Service>; N],
-    userv_data: Grant<UserspaceServiceGrant, UpcallCount<1>, AllowRoCount<3>, AllowRwCount<5>>,
+    userv_data: RegistryGrant,
 }
 
 impl<const N: usize> Registry<N> {
-    pub fn new(grant_data: Grant<UserspaceServiceGrant, UpcallCount<1>, AllowRoCount<3>, AllowRwCount<5>>) -> Registry<N> {
+    pub fn new(grant_data: RegistryGrant) -> Registry<N> {
         Registry {
             userv_ents: array::from_fn(|_| OptionalCell::empty()),
             userv_data: grant_data,
