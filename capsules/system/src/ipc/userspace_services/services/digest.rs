@@ -1,4 +1,4 @@
-/*! Hashing userspace service interface.
+/*! Hashing as a userspace service.
  */
 
 use kernel::errorcode::{
@@ -70,6 +70,7 @@ enum Operation<const L: usize> {
 
 const RETURN_HASHDONE_HASH_BUFFER_IDX: usize = 0;
 
+/// Hashing userspace service interface.
 pub struct ServiceInterface<const L: usize> {
     /// Self-reference to avoid needing &'static self in HILs.
     this: OptionalCell<&'static dyn UserspaceServiceClient>,
@@ -89,6 +90,7 @@ pub struct ServiceInterface<const L: usize> {
 }
 
 impl<const L: usize> ServiceInterface<L> {
+    /// Create a new instance of the service interface.
     pub fn new(userv_access: &'static dyn UserspaceServiceAccess) -> ServiceInterface<L> {
         ServiceInterface {
             this: OptionalCell::empty(),
@@ -100,6 +102,7 @@ impl<const L: usize> ServiceInterface<L> {
         }
     }
 
+    /// Initialize internal state necessary before use.
     pub fn init(&'static self) {
         self.this.set(self)
     }

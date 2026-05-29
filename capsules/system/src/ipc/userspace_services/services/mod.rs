@@ -2,6 +2,9 @@
 
 Service interfaces bridge a HIL client to the userspace service application through the registry,
 preventing the HIL client from needing code to interact with the registry.
+This being the case,
+much of the implementation of the service interface is dedicated
+to mapping HIL trait functions to [`usercall()`](super::comm::UserspaceServiceAccess::usercall()) calls.
  */
 
 pub mod digest;
