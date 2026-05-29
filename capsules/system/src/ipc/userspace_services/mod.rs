@@ -125,6 +125,7 @@ or failure (command no. `0x21`).
 The two arguments of the success `command` can carry return data.
 If the userspace service application is returning additional data through its buffer(s),
 it should `allow_readonly()` the buffer(s) prior to issuing the return success `command`.
+The failure `command` should return an error code as its first argument.
  */
 
 pub mod comm;
