@@ -128,12 +128,12 @@ it should `allow_readonly()` the buffer(s) prior to issuing the return success `
 The failure `command` should return an error code as its first argument.
  */
 
-pub mod comm;
 pub mod data;
 pub mod registry;
 pub mod services;
+pub mod usercall;
 
-pub use comm::{
+pub use usercall::{
     ReturnValueReader,
     UserspaceServiceAccess,
     UserspaceServiceClient,

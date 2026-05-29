@@ -1,4 +1,6 @@
-/*! Kernel-userspace service communication.
+/*! Userspace service invocation and data-handling.
+
+Structures and interfaces for calling userspace services and copying data to and from them.
  */
 
 use kernel::errorcode::ErrorCode;

@@ -21,7 +21,7 @@ use kernel::syscall::{
 };
 use kernel::utilities::cells::OptionalCell;
 
-use crate::ipc::userspace_services::comm;
+use crate::ipc::userspace_services::usercall;
 use crate::ipc::userspace_services::{
     ReturnValueReader,
     UserspaceServiceAccess,
@@ -176,7 +176,7 @@ impl<const N: usize> Registry<N> {
                                 return Err(ErrorCode::BUSY);
                             }
 
-                            let upcall_args = comm::place_arguments(operation_id, kad, args)?;
+                            let upcall_args = usercall::place_arguments(operation_id, kad, args)?;
 
                             // Send an upcall to the userspace service.
                             debug!("[userv-registry] invoking userspace service");
