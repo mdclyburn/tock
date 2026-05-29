@@ -81,6 +81,7 @@ To invoke a userspace service operation,
 the registry sends an upcall to the userspace service application,
 placing arguments as upcall arguments
 or in the service application's read-write `allow` buffers.
+The first argument of the upcall is an **operation ID** identifying the operation the client is requesting the userspace service run.
 The userspace service application returns the result of the operation with a syscall to the registry,
 placing return data as syscall arguments
 or in its read-only `allow` buffers.
