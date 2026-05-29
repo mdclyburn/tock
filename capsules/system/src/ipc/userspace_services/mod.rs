@@ -131,7 +131,7 @@ The failure `command` should return an error code as its first argument.
 pub mod comm;
 pub mod data;
 pub mod registry;
-pub mod role;
+pub mod services;
 
 pub use comm::{
     ReturnValueReader,
@@ -151,4 +151,4 @@ pub use registry::{
     Registry,
 };
 
-pub use role::Role;
+pub use services::Role;
