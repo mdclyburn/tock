@@ -74,7 +74,7 @@ impl_serialization_for_numerical!(
 
 /// Newtype wrapper for `Serialize`ing slices into process buffers.
 ///
-/// A wrapper type that allows slices to be passed ergonomically to [`UserspaceServiceAccess::usercall()`](super::comm::UserspaceServiceAccess).
+/// A wrapper type that allows slices to be passed ergonomically to [`UserspaceServiceAccess::usercall()`](super::usercall::UserspaceServiceAccess).
 /// The alternative would be to use double references
 /// (i.e. define `impl Serialize for &&[u8]` and use with `&&&my_data[..]`
 /// to guarantee to the compiler that the `Serialize` trait object is `Sized`).
