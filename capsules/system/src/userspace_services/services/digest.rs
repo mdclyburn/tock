@@ -122,10 +122,7 @@ impl<const L: usize> UserspaceServiceClient for ServiceInterface<L> {
                     self.data_client.map(
                         |c| c.add_data_done(
                             return_data
-                                .map(|_reader| ())
-                                // TODO: how to translate an arbitrary usize into an ErrorCode?
-                                // Without this, error codes from the userspace service do not get to the caller.
-                                .map_err(|_val| ErrorCode::FAIL),
+                                .map(|_reader| ()),
                             data_slice));
                 },
 
@@ -133,8 +130,7 @@ impl<const L: usize> UserspaceServiceClient for ServiceInterface<L> {
                     self.data_client.map(
                         |c| c.add_mut_data_done(
                             return_data
-                                .map(|_reader| ())
-                                .map_err(|_val| ErrorCode::FAIL),
+                                .map(|_reader| ()),
                             data_slice));
                 },
 
@@ -166,8 +162,7 @@ impl<const L: usize> UserspaceServiceClient for ServiceInterface<L> {
                 // Provide the digest output buffer back to the client along with the comparison result.
                 Operation::Verify(digest_buffer) => {
                     let verify_result = return_data
-                        .map(|reader| reader.direct_rvals().0 == 1)
-                        .map_err(|_errno| ErrorCode::FAIL);
+                        .map(|reader| reader.direct_rvals().0 == 1);
                     self.verify_client.map(|c| c.verification_done(verify_result, digest_buffer));
                 },
             }
