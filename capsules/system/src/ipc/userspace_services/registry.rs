@@ -65,9 +65,8 @@ pub type RegistryGrant = Grant<UserspaceServiceGrant, UpcallCount<1>, AllowRoCou
 /// A registry that tracks running userspace services and calls to them.
 /// Userspace services interact with its `SyscallDriver` implementation
 /// to announce their availability and to respond to invocations.
-/// The type mediates calls and returns between userspace services and kernel-level code using them
+/// The type mediates between userspace services and callers
 /// with its `UserspaceServiceAccess` implementation.
-/// Userspace services execute a single usercall at a time in this implementation.
 ///
 /// It supports up to `N` userspace services.
 pub struct Registry<const N: usize> {

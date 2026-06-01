@@ -40,7 +40,7 @@ pub enum Argument<'a> {
 pub enum Arguments<'arg, 'slice> {
     /// Short-format call arguments requiring only up to two words.
     Short(usize, usize),
-    /// Arguments requiring more than two words.
+    /// Arguments using up to two words and one or more buffers.
     Extended(Option<usize>, Option<usize>, &'slice [&'arg dyn Serialize]),
 }
 
@@ -115,8 +115,8 @@ pub fn place_arguments(
 
 /// Reader for userspace service return values.
 ///
-/// Interpreter for userspace service return results.
-/// Provides the two `usize` values returned directly from the userspace service,
+/// This an interpreter for userspace service return results.
+/// It provides the two `usize` values returned directly from the userspace service
 /// as well as functions to parse the data in the userspace service's process buffers.
 /// Use [`buffer_n()`](ReturnReader::buffer_n()) to access an argument buffer.
 /// Use [`buffer_n_as_value()`](ReturnReader::buffer_n_as_value()) to parse a buffer as a value supporting [`Deserialize`].

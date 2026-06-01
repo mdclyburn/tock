@@ -6,7 +6,7 @@ The service application is available for use by the entire platform and is separ
 Since the code implementing the service exists in an application,
 changing the service's operation does not require an OS-level modification and update.
 More specifically,
-decoupling particular operations from application
+decoupling particular operations from the application
 while simultaneously avoiding OS-level implementation enables:
 sharing common, necessary function;
 isolating less stable code from an application;
@@ -16,7 +16,7 @@ etc.
 # Architecture
 
 Support for userspace services builds on capsules and HILs.
-Central to this support is the **userspace service registry** ([`Registry`]),
+Central to this framework is the **userspace service registry** capsule ([`Registry`]),
 which tracks and mediates communication with userspace service applications.
 Userspace services register with the registry by sending it a syscall,
 thereafter communicating exclusively with the registry to fulfill its function.
@@ -25,14 +25,14 @@ Coordinated syscalls and upcalls between the registry and userspace service appl
 define the operations the userspace service exposes.
 
 In order to use the userspace service,
-clients interact with the **service interface** which implements the HIL defining its function.
+clients interact with a **service interface** that implements a HIL defining its function.
 Acting as a mapper between HIL functions and usercalls,
 the service interface invokes userspace service operations through the userspace service registry.
 The two communicate through the [`UserspaceServiceClient`] and [`UserspaceServiceAccess`] traits
 to send data between the consumer of the userspace service and the userspace service.
 
-By implementing HIL traits,
-existing capsules can consume a service interface and,
+Because service interfaces implement a HIL trait,
+existing capsules can consume them and,
 in turn,
 offer the functionality of the userspace service to other userspace applications transparently through their syscall driver definition.
 The userspace service application can be transparently updated and swapped out without changing the OS.
@@ -94,9 +94,12 @@ for example,
 a role providing cryptographic hashing.
 When registering,
 the userspace service provides the registry with its role ID.
-No two services may fulfill the same role.
+No two userspace service applications running on the same device may fulfill the same role.
 
 # Writing a Userspace Service
+
+To function as a userspace service,
+an application must do the following:
 
 1. **`allow_*` argument and return data buffers.**
 The userspace service application and registry move data between each other through buffers in the userspace service application's memory space.
@@ -108,7 +111,7 @@ A userspace service announces its availability through the registration `command
 command no. `0x10`,
 providing its role ID as the first and only argument.
 In the event that the userspace service application crashes,
-it will need to re-register with the registry.
+it must re-register with the registry.
 
 2. **`subscribe()` to incoming operations.**
 Essentially,
