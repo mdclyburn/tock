@@ -21,8 +21,8 @@ use kernel::syscall::{
 };
 use kernel::utilities::cells::OptionalCell;
 
-use crate::ipc::userspace_services::usercall;
-use crate::ipc::userspace_services::{
+use crate::userspace_services::usercall;
+use crate::userspace_services::{
     ReturnReader,
     UserspaceServiceAccess,
     UserspaceServiceClient,

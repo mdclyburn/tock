@@ -6,10 +6,10 @@
 #![no_std]
 
 pub mod debug_writer;
-pub mod ipc;
 pub mod process_checker;
 pub mod process_policies;
 pub mod process_printer;
 pub mod storage_permissions;
 pub mod syscall_filter;
+pub mod userspace_services;
 pub mod virtual_scheduler_timer;

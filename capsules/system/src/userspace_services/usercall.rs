@@ -11,7 +11,7 @@ use kernel::processbuffer::{
     ReadableProcessBuffer,
 };
 
-use crate::ipc::userspace_services::{
+use crate::userspace_services::{
     Deserialize,
     Serialize,
 };
@@ -41,7 +41,7 @@ pub enum Arguments<'arg, 'slice> {
     /// Short-format call arguments requiring only up to two words.
     Short(usize, usize),
     /// Arguments using up to two words and one or more buffers.
-    Extended(Option<usize>, Option<usize>, &'slice [&'arg dyn Serialize]),
+    Extended(usize, usize, &'slice [&'arg dyn Serialize]),
 }
 
 /// Provides call access to userspace services.
@@ -94,7 +94,7 @@ pub fn place_arguments(
         Arguments::Short(arg1, arg2) =>
             Ok((operation_id, arg1, arg2)),
 
-        Arguments::Extended(opt_arg1, opt_arg2, ext_args) => {
+        Arguments::Extended(arg1, arg2, ext_args) => {
             // Retrieve ALLOWed buffers one at a time,
             // placing an argument into each buffer.
             let it = ext_args.iter()
@@ -106,9 +106,7 @@ pub fn place_arguments(
                     .map_err(|_empty| Error::KernelError)?;
             }
 
-            Ok((operation_id,
-                opt_arg1.unwrap_or(0),
-                opt_arg2.unwrap_or(0)))
+            Ok((operation_id, arg1, arg2))
         },
     }
 }

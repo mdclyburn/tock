@@ -42,7 +42,7 @@ use kernel::utilities::leasable_buffer::{
     SubSliceMut,
 };
 
-use crate::ipc::userspace_services::{
+use crate::userspace_services::{
     Bytes,
     ReturnReader,
     Role,
@@ -206,8 +206,8 @@ impl<'a: 'static, const L: usize> DigestData<'a, L> for ServiceInterface<L> {
                     ROLE_ID,
                     ops::ADD_DATA,
                     Arguments::Extended(
-                        None,
-                        None,
+                        0,
+                        0,
                         &usercall_args));
                 if let Err(ec) = usercall_result {
                     Err((ec, data))
@@ -236,8 +236,8 @@ impl<'a: 'static, const L: usize> DigestData<'a, L> for ServiceInterface<L> {
                     ROLE_ID,
                     ops::ADD_DATA,
                     Arguments::Extended(
-                        Some(data.len()),
-                        None,
+                        data.len(),
+                        0,
                         &usercall_args));
                 if let Err(kerr) = usercall_result {
                     Err((kerr.into(), data))
@@ -311,8 +311,8 @@ impl<'a: 'static, const L: usize> DigestVerify<'a, L> for ServiceInterface<L> {
                     ROLE_ID,
                     ops::VERIFY,
                     Arguments::Extended(
-                        None,
-                        None,
+                        0,
+                        0,
                         &[&Bytes(expected_digest_buffer)]
                     ),
                 );
