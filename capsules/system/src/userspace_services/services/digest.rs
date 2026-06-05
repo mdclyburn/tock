@@ -12,6 +12,7 @@ use kernel::grant::{
     UpcallCount,
 };
 use kernel::hil::digest::{
+    self,
     Client,
     ClientData,
     ClientHash,
@@ -53,10 +54,10 @@ use crate::userspace_services::{
 };
 
 mod ops {
-    pub const ADD_DATA: usize   = 0x02;
-    pub const CLEAR_DATA: usize = 0x11;
     pub const RUN: usize        = 0x01;
+    pub const ADD_DATA: usize   = 0x02;
     pub const VERIFY: usize     = 0x03;
+    pub const CLEAR_DATA: usize = 0x11;
 }
 
 const ROLE_ID: usize = Role::Digest as usize;
@@ -321,6 +322,12 @@ impl<'a: 'static, const L: usize> DigestVerify<'a, L> for ServiceInterface<L> {
                 Err((ErrorCode::NODEVICE, expected_digest_buffer))
             }
         }
+    }
+}
+
+impl<'a: 'static, const L: usize> digest::Sha256 for ServiceInterface<L> {
+    fn set_mode_sha256(&self) -> Result<(), ErrorCode> {
+        Ok(())
     }
 }
 
