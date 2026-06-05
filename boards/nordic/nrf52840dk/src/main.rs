@@ -12,6 +12,8 @@ use kernel::debug;
 use kernel::platform::{KernelResources, SyscallDriverLookup};
 use kernel::{capabilities, create_capability};
 
+type Sha = capsules_extra::sha_driver::ShaDriver<'static, capsules_system::userspace_services::services::digest::ServiceInterface<32>, 32>;
+
 // State for loading and holding applications.
 // How should the kernel respond when a process faults.
 const FAULT_RESPONSE: capsules_system::process_policies::PanicFaultPolicy =
@@ -22,6 +24,9 @@ struct Platform {
     eui64_driver: &'static nrf52840dk_lib::Eui64Driver,
     ieee802154_driver: &'static nrf52840dk_lib::Ieee802154Driver,
     udp_driver: &'static capsules_extra::net::udp::UDPDriver<'static>,
+    userspace_services: &'static capsules_system::userspace_services::Registry<2>,
+    // digest: &'static capsules_system::userspace_services::services::digest::Driver<32>,
+    digest: &'static Sha,
 }
 
 impl SyscallDriverLookup for Platform {
@@ -33,6 +38,8 @@ impl SyscallDriverLookup for Platform {
             capsules_extra::eui64::DRIVER_NUM => f(Some(self.eui64_driver)),
             capsules_extra::net::udp::DRIVER_NUM => f(Some(self.udp_driver)),
             capsules_extra::ieee802154::DRIVER_NUM => f(Some(self.ieee802154_driver)),
+            capsules_system::userspace_services::registry::DRIVER_NUM => f(Some(self.userspace_services)),
+            capsules_system::userspace_services::services::digest::DRIVER_NUM => f(Some(self.digest)),
             _ => self.base.with_driver(driver_num, f),
         }
     }
@@ -86,11 +93,68 @@ pub unsafe fn main() {
     let (eui64_driver, ieee802154_driver, udp_driver) =
         nrf52840dk_lib::ieee802154_udp(board_kernel, default_peripherals, mux_alarm);
 
+    //--------------------------------------------------------------------------
+    // Userspace services
+    //--------------------------------------------------------------------------
+
+    let userspace_services = kernel::static_init!(
+        capsules_system::userspace_services::Registry<2>,
+        capsules_system::userspace_services::Registry::new(
+            board_kernel.create_grant(capsules_system::userspace_services::DRIVER_NUM,
+                                      &create_capability!(capabilities::MemoryAllocationCapability))));
+
+    // Hashing userspace service.
+    let hashing_service_interface = kernel::static_init!(
+        capsules_system::userspace_services::services::digest::ServiceInterface<32>,
+        capsules_system::userspace_services::services::digest::ServiceInterface::new(userspace_services));
+    hashing_service_interface.init();
+
+    // Userspace driver.
+    // let hashing_service_driver = kernel::static_init!(
+    //     capsules_system::userspace_services::services::digest::Driver<32>,
+    //     capsules_system::userspace_services::services::digest::Driver::new(
+    //         board_kernel.create_grant(capsules_system::userspace_services::services::digest::DRIVER_NUM,
+    //                                   &create_capability!(capabilities::MemoryAllocationCapability)),
+    //         hashing_service_interface,
+    //         kernel::static_init!([u8; 128], [0; 128]),
+    //         kernel::static_init!([u8; 32], [0; 32])));
+
+    // use kernel::hil::digest::Digest;
+    // hashing_service_interface.set_client(hashing_service_driver);
+
+    // let sha = kernel::static_init!(
+    //     capsules_extra::sha::ShaDriver<capsules_system::userspace_services::services::digest::ServiceInterface<32>, 32>,
+    //     capsules_extra::sha::ShaDriver::new(
+    //         hashing_service_interface,
+    //         kernel::static_init!([u8; 128], [0; 128]),
+    //         kernel::static_init!([u8; 32], [0; 32]),
+    //         board_kernel.create_grant(
+    //             capsules_extra::sha::DRIVER_NUM,
+    //             &create_capability!(capabilities::MemoryAllocationCapability))));
+    //     use kernel::hil::digest::Digest;
+    //     hashing_service_interface.set_client(sha);
+
+    let sha_driver = kernel::static_init!(
+        Sha,
+        Sha::new(
+            hashing_service_interface,
+            kernel::static_init!([u8; 128], [0; 128]),
+            kernel::static_init!([u8; 32], [0; 32]),
+            board_kernel.create_grant(
+                capsules_extra::sha_driver::DRIVER_NUM,
+                &create_capability!(capabilities::MemoryAllocationCapability))));
+    use kernel::hil::digest::Digest;
+    hashing_service_interface.set_client(sha_driver);
+
     let platform = Platform {
         base: base_platform,
         eui64_driver,
         ieee802154_driver,
         udp_driver,
+        userspace_services,
+        // digest: hashing_service_driver,
+        // digest: sha,
+        digest: sha_driver,
     };
 
     // These symbols are defined in the linker script.
