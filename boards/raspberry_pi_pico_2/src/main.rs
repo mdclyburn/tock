@@ -19,11 +19,11 @@ use components::gpio::GpioComponent;
 use components::led::LedsComponent;
 use enum_primitive::cast::FromPrimitive;
 use kernel::component::Component;
+use kernel::debug::PanicResources;
 use kernel::hil::led::LedHigh;
 use kernel::platform::{KernelResources, SyscallDriverLookup};
-use kernel::process::ProcessArray;
-use kernel::scheduler::round_robin::RoundRobinSched;
 use kernel::syscall::SyscallDriver;
+use kernel::utilities::single_thread_value::SingleThreadValue;
 use kernel::{capabilities, create_capability, static_init, Kernel};
 
 use rp2350::chip::{Rp2350, Rp2350DefaultPeripherals};
@@ -42,14 +42,8 @@ mod io;
 
 mod flash_bootloader;
 
-/// Allocate memory for the stack
-//
-// When compiling for a macOS host, the `link_section` attribute is elided as
-// it yields the following error: `mach-o section specifier requires a segment
-// and section separated by a comma`.
-#[cfg_attr(not(target_os = "macos"), link_section = ".stack_buffer")]
-#[no_mangle]
-static mut STACK_MEMORY: [u8; 0x3000] = [0; 0x3000];
+// Allocate memory for the stack
+kernel::stack_size! {0x3000}
 
 // Manually setting the boot header section that contains the FCB header
 //
@@ -76,19 +70,19 @@ const FAULT_RESPONSE: capsules_system::process_policies::PanicFaultPolicy =
 const NUM_PROCS: usize = 4;
 
 type ChipHw = Rp2350<'static, Rp2350DefaultPeripherals<'static>>;
+type ProcessPrinterInUse = capsules_system::process_printer::ProcessPrinterText;
 
-/// Static variables used by io.rs.
-static mut PROCESSES: Option<&'static ProcessArray<NUM_PROCS>> = None;
+/// Resources for when a board panics used by io.rs.
+static PANIC_RESOURCES: SingleThreadValue<PanicResources<ChipHw, ProcessPrinterInUse>> =
+    SingleThreadValue::new();
 
-static mut CHIP: Option<&'static Rp2350<Rp2350DefaultPeripherals<'static>>> = None;
-static mut PROCESS_PRINTER: Option<&'static capsules_system::process_printer::ProcessPrinterText> =
-    None;
+type SchedulerInUse = components::sched::round_robin::RoundRobinComponentType;
 
 /// Supported drivers by the platform
 pub struct RaspberryPiPico2 {
     ipc: kernel::ipc::IPC<{ NUM_PROCS as u8 }>,
     console: &'static capsules_core::console::Console<'static>,
-    scheduler: &'static RoundRobinSched<'static>,
+    scheduler: &'static SchedulerInUse,
     systick: cortexm33::systick::SysTick,
     alarm: &'static capsules_core::alarm::AlarmDriver<
         'static,
@@ -118,7 +112,7 @@ impl KernelResources<Rp2350<'static, Rp2350DefaultPeripherals<'static>>> for Ras
     type SyscallDriverLookup = Self;
     type SyscallFilter = ();
     type ProcessFault = ();
-    type Scheduler = RoundRobinSched<'static>;
+    type Scheduler = SchedulerInUse;
     type SchedulerTimer = cortexm33::systick::SysTick;
     type WatchDog = ();
     type ContextSwitchCallback = ();
@@ -177,26 +171,26 @@ core::arch::global_asm!(
     "
 );
 
-fn init_clocks(peripherals: &Rp2350DefaultPeripherals) {
+fn init_clocks(
+    peripherals: &Rp2350DefaultPeripherals,
+    clocks: &'static rp2350::clocks::Clocks,
+    resets: &'static rp2350::resets::Resets,
+) {
     // // Start tick in watchdog
     // peripherals.watchdog.start_tick(12);
     //
     // Disable the Resus clock
-    peripherals.clocks.disable_resus();
+    clocks.disable_resus();
 
     // Setup the external Oscillator
     peripherals.xosc.init();
 
     // disable ref and sys clock aux sources
-    peripherals.clocks.disable_sys_aux();
-    peripherals.clocks.disable_ref_aux();
+    clocks.disable_sys_aux();
+    clocks.disable_ref_aux();
 
-    peripherals
-        .resets
-        .reset(&[Peripheral::PllSys, Peripheral::PllUsb]);
-    peripherals
-        .resets
-        .unreset(&[Peripheral::PllSys, Peripheral::PllUsb], true);
+    resets.reset(&[Peripheral::PllSys, Peripheral::PllUsb]);
+    resets.unreset(&[Peripheral::PllSys, Peripheral::PllUsb], true);
 
     // Configure PLLs (from Pico SDK)
     //                   REF     FBDIV VCO            POSTDIV
@@ -205,22 +199,18 @@ fn init_clocks(peripherals: &Rp2350DefaultPeripherals) {
 
     // It seems that the external oscillator is clocked at 12 MHz
 
-    peripherals
-        .clocks
-        .pll_init(PllClock::Sys, 12, 1, 1500 * 1000000, 6, 2);
-    peripherals
-        .clocks
-        .pll_init(PllClock::Usb, 12, 1, 480 * 1000000, 5, 2);
+    clocks.pll_init(PllClock::Sys, 12, 1, 1500 * 1000000, 6, 2);
+    clocks.pll_init(PllClock::Usb, 12, 1, 480 * 1000000, 5, 2);
 
     // pico-sdk: // CLK_REF = XOSC (12MHz) / 1 = 12MHz
-    peripherals.clocks.configure_reference(
+    clocks.configure_reference(
         ReferenceClockSource::Xosc,
         ReferenceAuxiliaryClockSource::PllUsb,
         12000000,
         12000000,
     );
     // pico-sdk: CLK SYS = PLL SYS (125MHz) / 1 = 125MHz
-    peripherals.clocks.configure_system(
+    clocks.configure_system(
         SystemClockSource::Auxiliary,
         SystemAuxiliaryClockSource::PllSys,
         125000000,
@@ -228,27 +218,29 @@ fn init_clocks(peripherals: &Rp2350DefaultPeripherals) {
     );
 
     // pico-sdk: CLK USB = PLL USB (48MHz) / 1 = 48MHz
-    peripherals
-        .clocks
-        .configure_usb(UsbAuxiliaryClockSource::PllSys, 48000000, 48000000);
+    clocks.configure_usb(UsbAuxiliaryClockSource::PllSys, 48000000, 48000000);
     // pico-sdk: CLK ADC = PLL USB (48MHZ) / 1 = 48MHz
-    peripherals
-        .clocks
-        .configure_adc(AdcAuxiliaryClockSource::PllUsb, 48000000, 48000000);
+    clocks.configure_adc(AdcAuxiliaryClockSource::PllUsb, 48000000, 48000000);
     // pico-sdk: CLK HSTX = PLL USB (48MHz) / 1024 = 46875Hz
-    peripherals
-        .clocks
-        .configure_hstx(HstxAuxiliaryClockSource::PllSys, 48000000, 46875);
+    clocks.configure_hstx(HstxAuxiliaryClockSource::PllSys, 48000000, 46875);
     // pico-sdk:
     // CLK PERI = clk_sys. Used as reference clock for Peripherals. No dividers so just select and enable
     // Normally choose clk_sys or clk_usb
-    peripherals
-        .clocks
-        .configure_peripheral(PeripheralAuxiliaryClockSource::System, 125000000);
+    clocks.configure_peripheral(PeripheralAuxiliaryClockSource::System, 125000000);
 }
 
-unsafe fn get_peripherals() -> &'static mut Rp2350DefaultPeripherals<'static> {
-    static_init!(Rp2350DefaultPeripherals, Rp2350DefaultPeripherals::new())
+unsafe fn get_peripherals() -> (
+    &'static mut Rp2350DefaultPeripherals<'static>,
+    &'static rp2350::clocks::Clocks,
+    &'static rp2350::resets::Resets,
+) {
+    let clocks = static_init!(rp2350::clocks::Clocks, rp2350::clocks::Clocks::new());
+    let resets = static_init!(rp2350::resets::Resets, rp2350::resets::Resets::new());
+    let peripherals = static_init!(
+        Rp2350DefaultPeripherals,
+        Rp2350DefaultPeripherals::new(clocks)
+    );
+    (peripherals, clocks, resets)
 }
 
 /// Main function called after RAM initialized.
@@ -261,19 +253,25 @@ pub unsafe fn main() {
         <ChipHw as kernel::platform::chip::Chip>::ThreadIdProvider,
     >();
 
-    let peripherals = get_peripherals();
-    peripherals.resolve_dependencies();
+    // Bind global variables to this thread.
+    let _ = PANIC_RESOURCES
+        .bind_to_thread::<<ChipHw as kernel::platform::chip::Chip>::ThreadIdProvider>(
+            PanicResources::new(),
+        );
 
-    peripherals.resets.reset_all_except(&[
+    let (peripherals, clocks, resets) = get_peripherals();
+    peripherals.init();
+
+    resets.reset_all_except(&[
         Peripheral::IOQSpi,
         Peripheral::PadsQSpi,
         Peripheral::PllUsb,
         Peripheral::PllSys,
     ]);
 
-    init_clocks(peripherals);
+    init_clocks(peripherals, clocks, resets);
 
-    peripherals.resets.unreset_all_except(&[], true);
+    resets.unreset_all_except(&[], true);
 
     // Set the UART used for panic
     (*addr_of_mut!(io::WRITER)).set_uart(&peripherals.uart0);
@@ -295,13 +293,16 @@ pub unsafe fn main() {
         Rp2350<Rp2350DefaultPeripherals>,
         Rp2350::new(peripherals, &peripherals.sio)
     );
-
-    CHIP = Some(chip);
+    PANIC_RESOURCES.get().map(|resources| {
+        resources.chip.put(chip);
+    });
 
     // Create an array to hold process references.
     let processes = components::process_array::ProcessArrayComponent::new()
         .finalize(components::process_array_component_static!(NUM_PROCS));
-    PROCESSES = Some(processes);
+    PANIC_RESOURCES.get().map(|resources| {
+        resources.processes.put(processes.as_slice());
+    });
 
     let board_kernel = static_init!(Kernel, Kernel::new(processes.as_slice()));
 
@@ -388,7 +389,9 @@ pub unsafe fn main() {
     // PROCESS CONSOLE
     let process_printer = components::process_printer::ProcessPrinterTextComponent::new()
         .finalize(components::process_printer_text_component_static!());
-    PROCESS_PRINTER = Some(process_printer);
+    PANIC_RESOURCES.get().map(|resources| {
+        resources.printer.put(process_printer);
+    });
 
     let process_console = components::process_console::ProcessConsoleComponent::new(
         board_kernel,

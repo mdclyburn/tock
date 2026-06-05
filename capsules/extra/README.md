@@ -87,6 +87,8 @@ Support for wireless radios, network stacks and related infrastructure.
 - **[Ethernet Tap Driver](src/ethernet_tap.rs)**: Forwarding raw IEEE
   802.3 Ethernet frames from / to userspace. Useful for running
   network stacks in userspace.
+- **[WiFi Driver](src/wifi)**: Support for WiFi devices.
+- **[CYW4343x Driver](src/cyw4343)**: Support for Infineon CYW4343x WiFi chips.
 
 Libraries
 ---------
@@ -140,7 +142,7 @@ These provide common and better abstractions for userspace.
 - **[Read Only State](src/read_only_state.rs)**: Read-only state sharing.
 - **[Screen](src/screen/screen.rs)**: Displays and screens.
 - **[Screen Shared](src/screen/screen_shared.rs)**: App-specific screen windows.
-- **[SHA](src/sha.rs)**: SHA hashes.
+- **[SHA](src/sha_driver.rs)**: SHA hashes.
 - **[Sound Pressure](src/sound_pressure.rs)**: Query sound pressure levels.
 - **[Temperature](src/temperature.rs)**: Query temperature sensors.
 - **[Text Screen](src/text_screen.rs)**: Text-based displays.

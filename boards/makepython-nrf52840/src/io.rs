@@ -7,15 +7,12 @@ use core::panic::PanicInfo;
 use core::ptr::{addr_of, addr_of_mut};
 
 use kernel::debug;
-use kernel::debug::IoWrite;
 use kernel::hil::led;
 use kernel::hil::uart::{self};
+use kernel::utilities::io_write::IoWrite;
 use kernel::ErrorCode;
 use nrf52840::gpio::Pin;
 
-use crate::CHIP;
-use crate::PROCESSES;
-use crate::PROCESS_PRINTER;
 use kernel::hil::uart::Transmit;
 use kernel::utilities::cells::VolatileCell;
 
@@ -129,13 +126,11 @@ pub unsafe fn panic_fmt(pi: &PanicInfo) -> ! {
     let led_kernel_pin = &nrf52840::gpio::GPIOPin::new(Pin::P1_10);
     let led = &mut led::LedLow::new(led_kernel_pin);
     let writer = &mut *addr_of_mut!(WRITER);
-    debug::panic(
+    debug::panic_old(
         &mut [led],
         writer,
         pi,
         &cortexm4::support::nop,
-        PROCESSES.unwrap().as_slice(),
-        &*addr_of!(CHIP),
-        &*addr_of!(PROCESS_PRINTER),
+        crate::PANIC_RESOURCES.get(),
     )
 }

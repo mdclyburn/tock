@@ -4,15 +4,11 @@
 
 use core::fmt::Write;
 use core::panic::PanicInfo;
-use core::ptr::addr_of;
 use core::ptr::addr_of_mut;
 
-use crate::CHIP;
-use crate::PROCESSES;
-use crate::PROCESS_PRINTER;
 use kernel::debug;
-use kernel::debug::IoWrite;
 use kernel::hil::led;
+use kernel::utilities::io_write::IoWrite;
 
 /// Writer is used by kernel::debug to panic message to the serial port.
 pub struct Writer {}
@@ -48,13 +44,11 @@ pub unsafe fn panic_fmt(info: &PanicInfo) -> ! {
     let led = &mut led::LedLow::new(led_pin);
     let writer = &mut *addr_of_mut!(WRITER);
 
-    debug::panic(
+    debug::panic_old(
         &mut [led],
         writer,
         info,
         &cortexm4::support::nop,
-        PROCESSES.unwrap().as_slice(),
-        &*addr_of!(CHIP),
-        &*addr_of!(PROCESS_PRINTER),
+        crate::PANIC_RESOURCES.get(),
     )
 }

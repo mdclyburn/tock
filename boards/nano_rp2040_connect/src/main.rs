@@ -18,12 +18,12 @@ use components::led::LedsComponent;
 use enum_primitive::cast::FromPrimitive;
 use kernel::component::Component;
 use kernel::debug;
+use kernel::debug::PanicResources;
 use kernel::hil::led::LedHigh;
 use kernel::hil::usb::Client;
 use kernel::platform::{KernelResources, SyscallDriverLookup};
-use kernel::process::ProcessArray;
-use kernel::scheduler::round_robin::RoundRobinSched;
 use kernel::syscall::SyscallDriver;
+use kernel::utilities::single_thread_value::SingleThreadValue;
 use kernel::{capabilities, create_capability, static_init};
 use rp2040::adc::{Adc, Channel};
 use rp2040::chip::{Rp2040, Rp2040DefaultPeripherals};
@@ -61,17 +61,18 @@ const FAULT_RESPONSE: capsules_system::process_policies::PanicFaultPolicy =
 const NUM_PROCS: usize = 4;
 
 type ChipHw = Rp2040<'static, Rp2040DefaultPeripherals<'static>>;
+type ProcessPrinterInUse = capsules_system::process_printer::ProcessPrinterText;
 
-/// Static variables used by io.rs.
-static mut PROCESSES: Option<&'static ProcessArray<NUM_PROCS>> = None;
-static mut CHIP: Option<&'static Rp2040<Rp2040DefaultPeripherals>> = None;
-static mut PROCESS_PRINTER: Option<&'static capsules_system::process_printer::ProcessPrinterText> =
-    None;
+/// Resources for when a board panics used by io.rs.
+static PANIC_RESOURCES: SingleThreadValue<PanicResources<ChipHw, ProcessPrinterInUse>> =
+    SingleThreadValue::new();
 
 type TemperatureRp2040Sensor = components::temperature_rp2040::TemperatureRp2040ComponentType<
     capsules_core::virtualizers::virtual_adc::AdcDevice<'static, rp2040::adc::Adc<'static>>,
 >;
 type TemperatureDriver = components::temperature::TemperatureComponentType<TemperatureRp2040Sensor>;
+
+type SchedulerInUse = components::sched::round_robin::RoundRobinComponentType;
 
 /// Supported drivers by the platform
 pub struct NanoRP2040Connect {
@@ -94,7 +95,7 @@ pub struct NanoRP2040Connect {
         >,
     >,
 
-    scheduler: &'static RoundRobinSched<'static>,
+    scheduler: &'static SchedulerInUse,
     systick: cortexm0p::systick::SysTick,
 }
 
@@ -122,7 +123,7 @@ impl KernelResources<Rp2040<'static, Rp2040DefaultPeripherals<'static>>> for Nan
     type SyscallDriverLookup = Self;
     type SyscallFilter = ();
     type ProcessFault = ();
-    type Scheduler = RoundRobinSched<'static>;
+    type Scheduler = SchedulerInUse;
     type SchedulerTimer = cortexm0p::systick::SysTick;
     type WatchDog = ();
     type ContextSwitchCallback = ();
@@ -176,26 +177,26 @@ pub unsafe extern "C" fn jump_to_bootloader() {
     );
 }
 
-fn init_clocks(peripherals: &Rp2040DefaultPeripherals) {
+fn init_clocks(
+    peripherals: &Rp2040DefaultPeripherals,
+    clocks: &'static rp2040::clocks::Clocks,
+    resets: &'static rp2040::resets::Resets,
+) {
     // Start tick in watchdog
     peripherals.watchdog.start_tick(12);
 
     // Disable the Resus clock
-    peripherals.clocks.disable_resus();
+    clocks.disable_resus();
 
     // Setup the external Osciallator
     peripherals.xosc.init();
 
     // disable ref and sys clock aux sources
-    peripherals.clocks.disable_sys_aux();
-    peripherals.clocks.disable_ref_aux();
+    clocks.disable_sys_aux();
+    clocks.disable_ref_aux();
 
-    peripherals
-        .resets
-        .reset(&[Peripheral::PllSys, Peripheral::PllUsb]);
-    peripherals
-        .resets
-        .unreset(&[Peripheral::PllSys, Peripheral::PllUsb], true);
+    resets.reset(&[Peripheral::PllSys, Peripheral::PllUsb]);
+    resets.unreset(&[Peripheral::PllSys, Peripheral::PllUsb], true);
 
     // Configure PLLs (from Pico SDK)
     //                   REF     FBDIV VCO            POSTDIV
@@ -204,45 +205,33 @@ fn init_clocks(peripherals: &Rp2040DefaultPeripherals) {
 
     // It seems that the external osciallator is clocked at 12 MHz
 
-    peripherals
-        .clocks
-        .pll_init(PllClock::Sys, 12, 1, 1500 * 1000000, 6, 2);
-    peripherals
-        .clocks
-        .pll_init(PllClock::Usb, 12, 1, 480 * 1000000, 5, 2);
+    clocks.pll_init(PllClock::Sys, 12, 1, 1500 * 1000000, 6, 2);
+    clocks.pll_init(PllClock::Usb, 12, 1, 480 * 1000000, 5, 2);
 
     // pico-sdk: // CLK_REF = XOSC (12MHz) / 1 = 12MHz
-    peripherals.clocks.configure_reference(
+    clocks.configure_reference(
         ReferenceClockSource::Xosc,
         ReferenceAuxiliaryClockSource::PllUsb,
         12000000,
         12000000,
     );
     // pico-sdk: CLK SYS = PLL SYS (125MHz) / 1 = 125MHz
-    peripherals.clocks.configure_system(
+    clocks.configure_system(
         SystemClockSource::Auxiliary,
         SystemAuxiliaryClockSource::PllSys,
         125000000,
         125000000,
     );
     // pico-sdk: CLK USB = PLL USB (48MHz) / 1 = 48MHz
-    peripherals
-        .clocks
-        .configure_usb(UsbAuxiliaryClockSource::PllSys, 48000000, 48000000);
+    clocks.configure_usb(UsbAuxiliaryClockSource::PllSys, 48000000, 48000000);
     // pico-sdk: CLK ADC = PLL USB (48MHZ) / 1 = 48MHz
-    peripherals
-        .clocks
-        .configure_adc(AdcAuxiliaryClockSource::PllUsb, 48000000, 48000000);
+    clocks.configure_adc(AdcAuxiliaryClockSource::PllUsb, 48000000, 48000000);
     // pico-sdk: CLK RTC = PLL USB (48MHz) / 1024 = 46875Hz
-    peripherals
-        .clocks
-        .configure_rtc(RtcAuxiliaryClockSource::PllSys, 48000000, 46875);
+    clocks.configure_rtc(RtcAuxiliaryClockSource::PllSys, 48000000, 46875);
     // pico-sdk:
     // CLK PERI = clk_sys. Used as reference clock for Peripherals. No dividers so just select and enable
     // Normally choose clk_sys or clk_usb
-    peripherals
-        .clocks
-        .configure_peripheral(PeripheralAuxiliaryClockSource::System, 125000000);
+    clocks.configure_peripheral(PeripheralAuxiliaryClockSource::System, 125000000);
 }
 
 /// This is in a separate, inline(never) function so that its stack frame is
@@ -262,11 +251,22 @@ pub unsafe fn start() -> (
         <ChipHw as kernel::platform::chip::Chip>::ThreadIdProvider,
     >();
 
-    let peripherals = static_init!(Rp2040DefaultPeripherals, Rp2040DefaultPeripherals::new());
-    peripherals.resolve_dependencies();
+    // Bind global variables to this thread.
+    let _ = PANIC_RESOURCES
+        .bind_to_thread_unsafe::<<ChipHw as kernel::platform::chip::Chip>::ThreadIdProvider>(
+            PanicResources::new(),
+        );
+
+    let clocks = static_init!(rp2040::clocks::Clocks, rp2040::clocks::Clocks::new());
+    let resets = static_init!(rp2040::resets::Resets, rp2040::resets::Resets::new());
+    let peripherals = static_init!(
+        Rp2040DefaultPeripherals,
+        Rp2040DefaultPeripherals::new(clocks, resets)
+    );
+    peripherals.init();
 
     // Reset all peripherals except QSPI (we might be booting from Flash), PLL USB and PLL SYS
-    peripherals.resets.reset_all_except(&[
+    resets.reset_all_except(&[
         Peripheral::IOQSpi,
         Peripheral::PadsQSpi,
         Peripheral::PllUsb,
@@ -275,7 +275,7 @@ pub unsafe fn start() -> (
 
     // Unreset all the peripherals that do not require clock setup as they run using the sys_clk or ref_clk
     // Wait for the peripherals to reset
-    peripherals.resets.unreset_all_except(
+    resets.unreset_all_except(
         &[
             Peripheral::Adc,
             Peripheral::Rtc,
@@ -288,10 +288,10 @@ pub unsafe fn start() -> (
         true,
     );
 
-    init_clocks(peripherals);
+    init_clocks(peripherals, clocks, resets);
 
     // Unreset all peripherals
-    peripherals.resets.unreset_all_except(&[], true);
+    resets.unreset_all_except(&[], true);
 
     // Set the UART used for panic
     (*addr_of_mut!(io::WRITER)).set_uart(&peripherals.uart0);
@@ -314,13 +314,16 @@ pub unsafe fn start() -> (
         Rp2040<Rp2040DefaultPeripherals>,
         Rp2040::new(peripherals, &peripherals.sio)
     );
-
-    CHIP = Some(chip);
+    PANIC_RESOURCES.get().map(|resources| {
+        resources.chip.put(chip);
+    });
 
     // Create an array to hold process references.
     let processes = components::process_array::ProcessArrayComponent::new()
         .finalize(components::process_array_component_static!(NUM_PROCS));
-    PROCESSES = Some(processes);
+    PANIC_RESOURCES.get().map(|resources| {
+        resources.processes.put(processes.as_slice());
+    });
 
     // Setup space to store the core kernel data structure.
     let board_kernel = static_init!(kernel::Kernel, kernel::Kernel::new(processes.as_slice()));
@@ -545,7 +548,9 @@ pub unsafe fn start() -> (
 
     let process_printer = components::process_printer::ProcessPrinterTextComponent::new()
         .finalize(components::process_printer_text_component_static!());
-    PROCESS_PRINTER = Some(process_printer);
+    PANIC_RESOURCES.get().map(|resources| {
+        resources.printer.put(process_printer);
+    });
 
     // PROCESS CONSOLE
     let process_console = components::process_console::ProcessConsoleComponent::new(

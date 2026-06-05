@@ -27,6 +27,7 @@ members = [
     "boards/hifive1",
     "boards/imix",
     "boards/imxrt1050-evkb",
+    "boards/lpc55s69-evk",
     "boards/litex/arty",
     "boards/litex/sim",
     "boards/msp_exp432p401r",
@@ -43,6 +44,7 @@ members = [
     "boards/pico_explorer_base",
     "boards/raspberry_pi_pico",
     "boards/raspberry_pi_pico_2",
+    "boards/raspberry_pi_pico_w",
     "boards/apollo3/redboard_artemis_atp",
     "boards/apollo3/redboard_artemis_nano",
     "boards/apollo3/lora_things_plus",
@@ -62,11 +64,13 @@ members = [
     "boards/configurations/nrf52840dk/nrf52840dk-test-invs",
     "boards/configurations/nrf52840dk/nrf52840dk-test-kernel",
     "boards/configurations/nrf52840dk/nrf52840dk-test-dynamic-app-load",
+    "boards/configurations/nrf52840dk/nrf52840dk-test-sha256",
     "boards/configurations/microbit_v2/microbit_v2-test-dynamic-app-load",
     "boards/tutorials/nrf52840dk-root-of-trust-tutorial",
     "boards/tutorials/nrf52840dk-dynamic-apps-and-policies",
     "boards/tutorials/nrf52840dk-hotp-tutorial",
     "boards/tutorials/nrf52840dk-thread-tutorial",
+    "boards/lora_e5_mini",
     "boards/tutorials/qemu_rv32_virt-tutorial",
     "capsules/aes_gcm",
     "capsules/ecdsa_sw",
@@ -82,6 +86,7 @@ members = [
     "chips/esp32",
     "chips/esp32-c3",
     "chips/imxrt10xx",
+    "chips/lpc55s6x",
     "chips/litex",
     "chips/litex_vexriscv",
     "chips/lowrisc",
@@ -107,6 +112,8 @@ members = [
     "chips/stm32f412g",
     "chips/stm32f4xx",
     "chips/veer_el2",
+    "chips/stm32wle5xx",
+    "chips/stm32wle5jc",
     "chips/virtio",
     "kernel",
     "libraries/enum_primitive",
@@ -121,6 +128,9 @@ resolver = "2"
 version = "0.2.3-dev"
 authors = ["Tock Project Developers <devel@lists.tockos.org>"]
 edition = "2021"
+
+[workspace.dependencies]
+tock-registers = { version = "0.10.0", default-features = false }
 
 [profile.dev]
 panic = "abort"
@@ -221,7 +231,8 @@ result_unit_err = "allow"
 unusual-byte-groupings = "allow"
 # We widely use upper case acronyms for hardware registers and fields.
 upper_case_acronyms = "allow"
-
+# Condensing match statements can make code harder to read and inconsistent.
+collapsible-match = "allow"
 
 missing_safety_doc = "allow"
 doc_lazy_continuation = "allow"
@@ -271,7 +282,6 @@ or_fun_call = "allow"
 missing_const_for_fn = "allow"
 equatable_if_let = "allow"
 derive_partial_eq_without_eq = "allow"
-empty_line_after_doc_comments = "allow"
 trait_duplication_in_bounds = "allow"
 useless_let_if_seq = "allow"
 
@@ -330,8 +340,6 @@ iter_without_into_iter = "allow"
 
 
 semicolon_if_nothing_returned = "allow"
-ptr_as_ptr = "allow"
-ptr_cast_constness = "allow"
 mut_mut = "allow"
 cast_ptr_alignment = "allow"
 used_underscore_binding = "allow"

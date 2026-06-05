@@ -28,9 +28,9 @@ pub use crate::process_array::{ProcessArray, ProcessSlot};
 pub use crate::process_binary::ProcessBinary;
 pub use crate::process_checker::AcceptedCredential;
 pub use crate::process_checker::{ProcessCheckerMachine, ProcessCheckerMachineClient};
-pub use crate::process_loading::load_processes;
 pub use crate::process_loading::ProcessLoadError;
 pub use crate::process_loading::SequentialProcessLoaderMachine;
+pub use crate::process_loading::load_processes;
 pub use crate::process_loading::{ProcessLoadingAsync, ProcessLoadingAsyncClient};
 pub use crate::process_policies::{ProcessFaultPolicy, ProcessStandardStoragePermissionsPolicy};
 pub use crate::process_printer::{ProcessPrinter, ProcessPrinterContext};
@@ -368,8 +368,8 @@ pub trait Process {
     ///
     /// This function returns:
     /// - `Ok(())` if the [`Task`] was successfully enqueued.
-    /// - [`Err(ErrorCode::NODEVICE)`] if the process is no longer alive.
-    /// - [`Err(ErrorCode::NOMEM)`] if the task could not be enqueued because
+    /// - `Err(ErrorCode::NODEVICE)` if the process is no longer alive.
+    /// - `Err(ErrorCode::NOMEM)` if the task could not be enqueued because
     ///   there is insufficient space in the internal task queue.
     ///
     /// Other return values must be treated as kernel-internal errors.
