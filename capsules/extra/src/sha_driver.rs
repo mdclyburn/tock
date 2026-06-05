@@ -251,7 +251,7 @@ impl<'a, H: digest::Digest<'a, DIGEST_LEN> + digest::Sha256, const DIGEST_LEN: u
                                 }
                             })
                         })
-                        .unwrap_or_else(|err| err.into());
+                        .unwrap_or_else(|_err| Err(ErrorCode::FAIL));
 
                     // If we did have more data to copy, we will get `Ok(true)` and we
                     // have nothing more to do. If we did not have more data to copy, we
