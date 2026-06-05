@@ -115,6 +115,7 @@ impl<const L: usize> UserspaceServiceClient for ServiceInterface<L> {
         return_data: Result<ReturnReader<'r, 'grant>, ErrorCode>,
     )
     {
+        kernel::debug!("[digest-serv-int] usercall is done");
         if let Some(op) = self.current_op.take() {
             match op {
                 // Provide the client with its buffer back.
@@ -497,12 +498,14 @@ impl<'a, const L: usize> ClientData<L> for Driver<L> {
         data_buffer: SubSliceMut<'static, u8>,
     )
     {
+        kernel::debug!("[digest-driver] add data finished {:?}", result);
         self.pending_for.map(
             |pid| {
                 self.data_buffer.put(Some(data_buffer.take()));
                 let _enter_res = self.app_data.enter(
                     pid,
                     |_ad, kad| {
+                        kernel::debug!("[digest-driver] sending add data finished upcall");
                         let _res = kad.schedule_upcall(
                             upcall::ADD_DONE,
                             (errorcode::into_statuscode(result), 0, 0));

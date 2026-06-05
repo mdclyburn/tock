@@ -3,6 +3,7 @@
 
 use core::array;
 
+use kernel::debug;
 use kernel::errorcode::ErrorCode;
 use kernel::grant::{
     AllowRoCount,
@@ -117,9 +118,15 @@ impl<const N: usize> Registry<N> {
             if can_replace {
                 // New instance of the userspace service replaces its older entry.
                 userv_ent.set(new_service);
+                debug!("[userv-registry] {} re-registered for service role 0x{:x}",
+                       pid.short_app_id(),
+                       userv_role_id);
                 Ok(())
             } else {
                 // A userspace service that is not the registering one already fulfills the role.
+                debug!("[userv-registry] {} cannot register for filled service role 0x{:x}",
+                       pid.short_app_id(),
+                       userv_role_id);
                 Err(ErrorCode::ALREADY)
             }
         } else {
@@ -129,6 +136,10 @@ impl<const N: usize> Registry<N> {
             if let Some(empty_ent) = userv_ent {
                 // Place service entry in an empty slot.
                 empty_ent.set(new_service);
+                debug!("[userv-registry] {}-{} registered for service role 0x{:x}",
+                       pid.id(),
+                       pid.short_app_id(),
+                       userv_role_id);
                 Ok(())
             } else {
                 Err(ErrorCode::NOMEM)
@@ -145,10 +156,12 @@ impl<const N: usize> Registry<N> {
         args: Arguments,
     ) -> Result<(), ErrorCode>
     {
+        debug!("[userv-registry] usercall: (role: 0x{:x}, op: {})", userv_role_id, operation_id);
         if let Some(userv_ent) = self.find(userv_role_id) {
             userv_ent.map_or(
                 Err(ErrorCode::NODEVICE),
                 |userv| {
+                    debug!("[userv-registry] found userspace service for {:x}", userv_role_id);
                     self.userv_data.enter(
                         userv.current_pid,
                         |ad, kad| {
@@ -165,6 +178,7 @@ impl<const N: usize> Registry<N> {
                             let upcall_args = usercall::place_arguments(operation_id, kad, args)?;
 
                             // Send an upcall to the userspace service.
+                            debug!("[userv-registry] invoking userspace service");
                             kad.schedule_upcall(upcall::INVOKE_USERCALL, upcall_args)
                                 .map_err(|_upcall_error| ErrorCode::FAIL)?;
 
@@ -246,6 +260,7 @@ impl<const N: usize> SyscallDriver for Registry<N> {
             },
 
             (command::USERCALL_RETURN_FAILURE, errno, _r3) => {
+                debug!("[userv-registry] userv reported failure: {}", errno);
                 self.userv_data.enter(
                     pid,
                     |ad, _kad| {
