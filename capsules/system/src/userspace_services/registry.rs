@@ -2,15 +2,10 @@
  */
 
 use core::array;
+use core::mem;
 
 use kernel::debug;
 use kernel::errorcode::ErrorCode;
-use kernel::grant::{
-    AllowRoCount,
-    AllowRwCount,
-    Grant,
-    UpcallCount,
-};
 use kernel::process::{
     Error,
     ProcessId,
@@ -21,6 +16,10 @@ use kernel::syscall::{
 };
 use kernel::utilities::cells::OptionalCell;
 
+use crate::userspace_services::grant::{
+    ServiceState,
+    RegistryGrant,
+};
 use crate::userspace_services::usercall;
 use crate::userspace_services::{
     ReturnReader,
@@ -31,34 +30,14 @@ use crate::userspace_services::{
 
 pub const DRIVER_NUM: usize = capsules_core::driver::NUM::UserspaceServices as usize;
 
-/// Userspace service state.
-#[derive(Clone, Copy, Default)]
-enum ServiceState {
-    #[default]
-    /// The userspace service is not busy.
-    Idle,
-    /// The userspace service is busy and executing an operation for a client.
-    Pending(&'static dyn UserspaceServiceClient),
-}
-
-#[derive(Default)]
-/// Grant containing context for userspace service process.
-pub struct UserspaceServiceGrant {
-    /// The current operational state of the userspace service.
-    op_state: ServiceState,
-}
-
 /// Userspace service entry.
 #[derive(Clone, Copy, Debug)]
-struct Service {
+pub struct Service {
     /// Identifier for the functionality the userspace service implements.
     userv_id: usize,
     /// The process ID of the application implementing the userspace service instance running now.
     current_pid: ProcessId,
 }
-
-/// Registry's grant type.
-pub type RegistryGrant = Grant<UserspaceServiceGrant, UpcallCount<1>, AllowRoCount<3>, AllowRwCount<5>>;
 
 /// Userspace services registry.
 ///
@@ -242,20 +221,21 @@ impl<const N: usize> SyscallDriver for Registry<N> {
             (command::USERCALL_RETURN_SUCCESS, rv1, rv2) => {
                 self.userv_data.enter(
                     pid,
-                    |ad, kad| {
-                        if let ServiceState::Pending(client) = ad.op_state {
-                            // Provide the client with the data sent from the userspace service.
-                            // Use the userspace service's read-only allow buffers to return results.
-                            let rv_reader = ReturnReader::new(rv1, rv2, kad);
-                            client.usercall_done(Ok(rv_reader));
-
-                            ad.op_state = ServiceState::Idle;
-                        }
-
-                        Ok(())
+                    |ad, _kad| {
+                        mem::take(&mut ad.op_state)
                     })
-                    .flatten()
-                    .map_err(|_perr| ErrorCode::FAIL)
+                    .map_err(|_kerr| ErrorCode::FAIL)
+                    .and_then(
+                        |service_state| {
+                            if let ServiceState::Pending(client) = service_state {
+                                let rv_reader = ReturnReader::new(rv1, rv2, pid, &self.userv_data);
+                                client.usercall_done(Ok(rv_reader));
+
+                                Ok(())
+                            } else {
+                                Err(ErrorCode::FAIL)
+                            }
+                        })
                     .into()
             },
 

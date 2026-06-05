@@ -5,16 +5,21 @@ Structures and interfaces for calling userspace services and copying data to and
 
 use kernel::errorcode::ErrorCode;
 use kernel::grant::GrantKernelData;
-use kernel::process::Error;
+use kernel::process::{
+    Error,
+    ProcessId,
+};
 use kernel::processbuffer::{
     ReadOnlyProcessBufferRef,
     ReadableProcessBuffer,
+    ReadableProcessSlice,
 };
 
 use crate::userspace_services::{
     Deserialize,
     Serialize,
 };
+use crate::userspace_services::grant::RegistryGrant;
 
 /// Userspace service-compatible argument representation.
 pub enum Argument<'a> {
@@ -72,9 +77,9 @@ pub trait UserspaceServiceClient {
     /// Provides the client with the results of a usercall operation.
     /// The client accesses data the userspace service returns with the
     /// [`ReturnReader`] `args`.
-    fn usercall_done<'r, 'grant>(
+    fn usercall_done<'a>(
         &self,
-        args: Result<ReturnReader<'r, 'grant>, ErrorCode>,
+        args: Result<ReturnReader<'a>, ErrorCode>,
     );
 }
 
@@ -118,25 +123,28 @@ pub fn place_arguments(
 /// as well as functions to parse the data in the userspace service's process buffers.
 /// Use [`buffer_n()`](ReturnReader::buffer_n()) to access an argument buffer.
 /// Use [`buffer_n_as_value()`](ReturnReader::buffer_n_as_value()) to parse a buffer as a value supporting [`Deserialize`].
-pub struct ReturnReader<'r, 'grant> {
+pub struct ReturnReader<'a> {
     // Values returned directly through the command syscall.
     direct_rvals: (usize, usize),
-    // Kernel-managed grant data for the userspace service
-    // permitting access to allow'd buffers containing returned data.
-    userv_k_grant_data: &'r GrantKernelData<'grant>,
+    // Userspace service PID.
+    us_pid: ProcessId,
+    // Grant data to access `allow`ed buffers.
+    grant: &'a RegistryGrant,
 }
 
-impl<'r, 'grant> ReturnReader<'r, 'grant> {
+impl<'a> ReturnReader<'a> {
     /// Create a new instance.
     pub fn new(
         rval1: usize,
         rval2: usize,
-        userv_k_grant_data: &'r GrantKernelData<'grant>,
-    ) -> ReturnReader<'r, 'grant>
+        us_pid: ProcessId,
+        grant: &'a RegistryGrant,
+    ) -> ReturnReader<'a>
     {
         ReturnReader {
             direct_rvals: (rval1, rval2),
-            userv_k_grant_data,
+            us_pid,
+            grant,
         }
     }
 
@@ -149,21 +157,28 @@ impl<'r, 'grant> ReturnReader<'r, 'grant> {
     ///
     /// Provides access to the userspace service's entire nth process buffer.
     /// Returns `Some(_)` if the userspace service has `allow`ed the buffer and its length is greater than zero.
-    pub fn buffer_n(&self, idx: usize) -> Option<ReadOnlyProcessBufferRef<'_>> {
-        self.userv_k_grant_data
-            .get_readonly_processbuffer(idx)
-            .ok()
-            .filter(|pbuf| pbuf.len() > 0)
+    pub fn buffer_n<F, T>(&self, idx: usize, access_fn: F) -> Result<T, Error>
+    where
+        F: FnOnce(&ReadableProcessSlice) -> T
+    {
+        self.grant.enter(
+            self.us_pid,
+            |_ad, kad| {
+
+                kad.get_readonly_processbuffer(idx)?
+                    .enter(|proc_slice| access_fn(proc_slice))
+            })
+            .flatten()
     }
 
-    /// Deserializes and returns the value stored in the nth read-only process buffer.
-    ///
-    /// Interprets the bytes in the userspace service's nth read-only process buffer and returns that value.
-    /// Returns `None` if the userspace service has not `allow`ed its nth read-only process buffer.
-    /// Returns `Some(Err(())` if the userspace service is returning data but the interpretation failed.
-    /// Returns `Some(Ok(T))` upon successful deserialization.
-    pub fn buffer_n_as_value<T: Deserialize>(&self, idx: usize) -> Option<Result<T, ErrorCode>> {
-        let ro_pbuf = self.buffer_n(idx)?;
-        Some(T::try_deserialize(ro_pbuf))
-    }
+    // /// Deserializes and returns the value stored in the nth read-only process buffer.
+    // ///
+    // /// Interprets the bytes in the userspace service's nth read-only process buffer and returns that value.
+    // /// Returns `None` if the userspace service has not `allow`ed its nth read-only process buffer.
+    // /// Returns `Some(Err(())` if the userspace service is returning data but the interpretation failed.
+    // /// Returns `Some(Ok(T))` upon successful deserialization.
+    // pub fn buffer_n_as_value<T: Deserialize>(&self, idx: usize) -> Option<Result<T, ErrorCode>> {
+    //     let ro_pbuf = self.buffer_n(idx)?;
+    //     Some(T::try_deserialize(ro_pbuf))
+    // }
 }
