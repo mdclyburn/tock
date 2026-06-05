@@ -12,6 +12,7 @@ use kernel::grant::{
     UpcallCount,
 };
 use kernel::hil::digest::{
+    self,
     Client,
     ClientData,
     ClientHash,
@@ -321,6 +322,12 @@ impl<'a: 'static, const L: usize> DigestVerify<'a, L> for ServiceInterface<L> {
                 Err((ErrorCode::NODEVICE, expected_digest_buffer))
             }
         }
+    }
+}
+
+impl<'a: 'static, const L: usize> digest::Sha256 for ServiceInterface<L> {
+    fn set_mode_sha256(&self) -> Result<(), ErrorCode> {
+        Ok(())
     }
 }
 
