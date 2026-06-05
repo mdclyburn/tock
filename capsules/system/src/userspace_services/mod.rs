@@ -132,6 +132,7 @@ The failure `command` should return an error code as its first argument.
  */
 
 pub mod data;
+pub mod grant;
 pub mod registry;
 pub mod services;
 pub mod usercall;

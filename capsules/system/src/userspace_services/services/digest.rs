@@ -110,9 +110,9 @@ impl<const L: usize> ServiceInterface<L> {
 }
 
 impl<const L: usize> UserspaceServiceClient for ServiceInterface<L> {
-    fn usercall_done<'r, 'grant>(
+    fn usercall_done<'a>(
         &self,
-        return_data: Result<ReturnReader<'r, 'grant>, ErrorCode>,
+        return_data: Result<ReturnReader<'a>, ErrorCode>,
     )
     {
         if let Some(op) = self.current_op.take() {
@@ -138,19 +138,17 @@ impl<const L: usize> UserspaceServiceClient for ServiceInterface<L> {
                 Operation::Run(hash) => {
                     match return_data {
                         Ok(reader) => {
-                            if let Some(hash_output_pbuf) = reader.buffer_n(RETURN_HASHDONE_HASH_BUFFER_IDX) {
-                                // Copy bytes.
-                                // The run function ensures that the caller's buffer is L bytes long.
-                                let copy_hash_res = hash_output_pbuf.enter(
-                                    |hash_output_pslice| hash_output_pslice[0..L]
-                                        .copy_to_slice(hash));
-
-                                self.hash_client.map(|c| c.hash_done(
-                                    copy_hash_res.map_err(|kerr| kerr.into()),
-                                    hash));
-                            } else {
-                                // Userspace service did not provide hash output buffer.
-                            }
+                            let copy_res = reader.buffer_n(
+                                RETURN_HASHDONE_HASH_BUFFER_IDX,
+                                |hash_output_pslice| {
+                                    // Copy bytes.
+                                    // The run function esures that the caller's buffer is L bytes long.
+                                    hash_output_pslice[0..L]
+                                        .copy_to_slice(hash);
+                                });
+                            self.hash_client.map(|c| c.hash_done(
+                                copy_res.map_err(|kerr| kerr.into()),
+                                hash));
                         },
 
                         Err(_eval) => {
