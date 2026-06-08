@@ -43,7 +43,7 @@ The following diagram gives a visual overview of the architecture and communicat
         | Client Application |              | Userspace Service |
         +--------------------+              +-------------------+
                   |                             |        ^ |
-                  | Syscalls           register |        | | usercalls and returns
+                  | Syscalls         register() |        | | usercalls and returns
                   |                     syscall |        | | (upcalls and syscalls)
                   v                             v        | v
    =================================================================
