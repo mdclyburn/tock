@@ -54,10 +54,10 @@ use crate::userspace_services::{
 };
 
 mod ops {
-    pub const ADD_DATA: usize   = 0x02;
-    pub const CLEAR_DATA: usize = 0x11;
     pub const RUN: usize        = 0x01;
+    pub const ADD_DATA: usize   = 0x02;
     pub const VERIFY: usize     = 0x03;
+    pub const CLEAR_DATA: usize = 0x11;
 }
 
 const ROLE_ID: usize = Role::Digest as usize;
