@@ -139,7 +139,7 @@ impl<const L: usize> UserspaceServiceClient for ServiceInterface<L> {
                 Operation::Run(hash) => {
                     match return_data {
                         Ok(reader) => {
-                            let copy_res = reader.buffer_n(
+                            let copy_res = reader.result_buffer_n(
                                 RETURN_HASHDONE_HASH_BUFFER_IDX,
                                 |hash_output_pslice| {
                                     // Copy bytes.

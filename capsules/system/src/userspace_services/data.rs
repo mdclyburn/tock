@@ -3,18 +3,16 @@
 
 use core::mem;
 
-use kernel::errorcode::ErrorCode;
+use kernel::process::Error;
 use kernel::processbuffer::{
-    ReadableProcessBuffer,
-    ReadOnlyProcessBufferRef,
-    ReadWriteProcessBufferRef,
-    WriteableProcessBuffer,
+    ReadableProcessSlice,
+    WriteableProcessSlice,
 };
 
 /// Data that can be serialized into a process buffer.
 pub trait Serialize {
     /// Attempt to write `Self` into a process buffer.
-    fn try_serialize(&self, buffer: ReadWriteProcessBufferRef<'_>) -> Result<(), ErrorCode>;
+    fn try_serialize(&self, buffer: &WriteableProcessSlice) -> Result<(), Error>;
 }
 
 /// Data that can be interpreted from a userspace service's process buffer bytes.
@@ -24,7 +22,7 @@ pub trait Deserialize: Sized {
     /// Try interpreting the bytes in the buffer as having type `Self`.
     /// Returns `Ok(Self)` if successful.
     /// Returns `Err(())` if the interpretation fails.
-    fn try_deserialize(buffer: ReadOnlyProcessBufferRef<'_>) -> Result<Self, ErrorCode>;
+    fn try_deserialize(buffer: &ReadableProcessSlice) -> Result<Self, Error>;
 }
 
 /// Instantiate the Serialize and Deserialize implementations for a numeric type.
@@ -35,32 +33,25 @@ macro_rules! impl_serialization_for_numerical {
     ($($t:ty),+) => {
         $(
             impl Serialize for $t {
-                fn try_serialize(&self, buffer: ReadWriteProcessBufferRef<'_>) -> Result<(), ErrorCode> {
-                    if buffer.len() < mem::size_of::<$t>() {
-                        Err(ErrorCode::NOMEM)
+                fn try_serialize(&self, slice: &WriteableProcessSlice) -> Result<(), Error> {
+                    if slice.len() < mem::size_of::<$t>() {
+                        Err(Error::OutOfMemory)
                     } else {
-                        buffer.mut_enter(
-                            |rw_slice| {
-                                rw_slice[0..mem::size_of::<$t>()]
-                                    .copy_from_slice(&self.to_ne_bytes());
-                            })
-                            .map_err(|perr| perr.into())
+                        slice[0..mem::size_of::<$t>()]
+                            .copy_from_slice(&self.to_ne_bytes());
+                        Ok(())
                     }
                 }
             }
 
             impl Deserialize for $t {
-                fn try_deserialize(buffer: ReadOnlyProcessBufferRef<'_>) -> Result<$t, ErrorCode> {
-                    if buffer.len() != mem::size_of::<$t>() {
-                        Err(ErrorCode::NOMEM)
+                fn try_deserialize(slice: &ReadableProcessSlice) -> Result<$t, Error> {
+                    if slice.len() != mem::size_of::<$t>() {
+                        Err(Error::OutOfMemory)
                     } else {
-                        buffer.enter(
-                            |ro_slice| {
-                                let mut val_bytes = [0; mem::size_of::<$t>()];
-                                ro_slice.copy_to_slice(&mut val_bytes[0..mem::size_of::<$t>()]);
-                                <$t>::from_ne_bytes(val_bytes)
-                            })
-                            .map_err(|perr| perr.into())
+                        let mut val_bytes = [0; mem::size_of::<$t>()];
+                        slice.copy_to_slice(&mut val_bytes[0..mem::size_of::<$t>()]);
+                        Ok(<$t>::from_ne_bytes(val_bytes))
                     }
                 }
             }
@@ -81,15 +72,15 @@ impl_serialization_for_numerical!(
 pub struct Bytes<'a>(pub &'a [u8]);
 
 impl<'a> Serialize for Bytes<'a> {
-    fn try_serialize(&self, buffer: ReadWriteProcessBufferRef<'_>) -> Result<(), ErrorCode> {
+    fn try_serialize(&self, slice: &WriteableProcessSlice) -> Result<(), Error> {
         let src = self.0;
-        if buffer.len() < src.len() {
-            Err(ErrorCode::NOMEM)
+        if slice.len() < src.len() {
+            Err(Error::OutOfMemory)
         } else {
-            buffer.mut_enter(
-                |rw_slice| rw_slice[0..src.len()]
-                    .copy_from_slice(src))
-                .map_err(|perr| perr.into())
+            slice[0..src.len()]
+                .copy_from_slice(src);
+
+            Ok(())
         }
     }
 }

@@ -10,8 +10,8 @@ use kernel::process::{
     ProcessId,
 };
 use kernel::processbuffer::{
-    ReadOnlyProcessBufferRef,
     ReadableProcessBuffer,
+    WriteableProcessBuffer,
     ReadableProcessSlice,
 };
 
@@ -106,9 +106,9 @@ pub fn place_arguments(
                 .enumerate()
                 .map(|(allow_no, arg)| (userv_kdata.get_readwrite_processbuffer(allow_no), arg));
             for (res_allow_buffer, usercall_arg) in it {
-                let allow_buffer = res_allow_buffer?;
-                usercall_arg.try_serialize(allow_buffer)
-                    .map_err(|_empty| Error::KernelError)?;
+                res_allow_buffer?
+                    .mut_enter(|slice| usercall_arg.try_serialize(slice))
+                    .flatten()?;
             }
 
             Ok((operation_id, arg1, arg2))
@@ -153,32 +153,41 @@ impl<'a> ReturnReader<'a> {
         self.direct_rvals
     }
 
-    /// Returns access to the nth read-only process buffer.
+    /// Access the bytes of the nth result buffer.
     ///
     /// Provides access to the userspace service's entire nth process buffer.
-    /// Returns `Some(_)` if the userspace service has `allow`ed the buffer and its length is greater than zero.
-    pub fn buffer_n<F, T>(&self, idx: usize, access_fn: F) -> Result<T, Error>
+    /// Returns `access_fn`'s return value wrapped in `Ok(_)`
+    /// the userspace service is running and has `allow`ed the buffer.
+    pub fn result_buffer_n<F, T>(&self, buffer_idx: usize, access_fn: F) -> Result<T, Error>
     where
         F: FnOnce(&ReadableProcessSlice) -> T
     {
         self.grant.enter(
             self.us_pid,
             |_ad, kad| {
-
-                kad.get_readonly_processbuffer(idx)?
+                kad.get_readonly_processbuffer(buffer_idx)?
                     .enter(|proc_slice| access_fn(proc_slice))
             })
             .flatten()
     }
 
-    // /// Deserializes and returns the value stored in the nth read-only process buffer.
-    // ///
-    // /// Interprets the bytes in the userspace service's nth read-only process buffer and returns that value.
-    // /// Returns `None` if the userspace service has not `allow`ed its nth read-only process buffer.
-    // /// Returns `Some(Err(())` if the userspace service is returning data but the interpretation failed.
-    // /// Returns `Some(Ok(T))` upon successful deserialization.
-    // pub fn buffer_n_as_value<T: Deserialize>(&self, idx: usize) -> Option<Result<T, ErrorCode>> {
-    //     let ro_pbuf = self.buffer_n(idx)?;
-    //     Some(T::try_deserialize(ro_pbuf))
-    // }
+    /// Deserializes and returns the value stored in the nth read-only process buffer.
+    ///
+    /// Interprets the bytes in the userspace service's nth read-only process buffer and returns that value.
+    /// Returns `Ok(T)` upon successful deserialization.
+    /// Returns `Err(())` if
+    /// the userspace service has not `allow`ed the buffer
+    /// or the deserialization failed.
+    pub fn result_buffer_n_as_value<T: Deserialize>(
+        &self,
+        buffer_idx: usize
+    ) -> Result<T, Error>
+    {
+        self.result_buffer_n(
+            buffer_idx,
+            |proc_slice| {
+                T::try_deserialize(proc_slice)
+            })
+            .flatten()
+    }
 }
