@@ -43,11 +43,13 @@ use kernel::utilities::leasable_buffer::{
     SubSliceMut,
 };
 
-use crate::userspace_services::{
+use crate::userspace_services::data::{
     Bytes,
-    ReturnReader,
-    Role,
     Serialize,
+};
+use crate::userspace_services::services::Role;
+use crate::userspace_services::usercall::{
+    ReturnReader,
     Arguments,
     UserspaceServiceAccess,
     UserspaceServiceClient,

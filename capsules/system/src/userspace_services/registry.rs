@@ -20,7 +20,7 @@ use crate::userspace_services::grant::{
     RegistryGrant,
 };
 use crate::userspace_services::usercall;
-use crate::userspace_services::{
+use crate::userspace_services::usercall::{
     ReturnReader,
     UserspaceServiceAccess,
     UserspaceServiceClient,

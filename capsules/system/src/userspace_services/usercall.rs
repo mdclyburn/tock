@@ -15,7 +15,7 @@ use kernel::processbuffer::{
     ReadableProcessSlice,
 };
 
-use crate::userspace_services::{
+use crate::userspace_services::data::{
     Deserialize,
     Serialize,
 };

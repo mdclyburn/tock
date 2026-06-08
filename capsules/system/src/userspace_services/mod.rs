@@ -136,23 +136,3 @@ pub mod grant;
 pub mod registry;
 pub mod services;
 pub mod usercall;
-
-pub use usercall::{
-    ReturnReader,
-    UserspaceServiceAccess,
-    UserspaceServiceClient,
-    Arguments,
-};
-
-pub use data::{
-    Bytes,
-    Deserialize,
-    Serialize,
-};
-
-pub use registry::{
-    DRIVER_NUM,
-    Registry,
-};
-
-pub use services::Role;
