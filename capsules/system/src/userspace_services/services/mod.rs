@@ -1,3 +1,7 @@
+// Licensed under the Apache License, Version 2.0 or the MIT License.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright Tock Contributors 2022.
+
 /*! Userspace service service interfaces.
 
 Service interfaces bridge a HIL client to the userspace service application through the registry,

@@ -1,3 +1,7 @@
+// Licensed under the Apache License, Version 2.0 or the MIT License.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright Tock Contributors 2022.
+
 /*! Userspace service invocation and data-handling.
 
 Structures and interfaces for calling userspace services and copying data to and from them.
