@@ -1,16 +1,16 @@
+// Licensed under the Apache License, Version 2.0 or the MIT License.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright Tock Contributors 2022.
+
 /*! Hashing as a userspace service.
  */
 
-use kernel::errorcode::{self, ErrorCode};
-use kernel::grant::{AllowRoCount, AllowRwCount, Grant, UpcallCount};
+use kernel::errorcode::ErrorCode;
 use kernel::hil::digest::{
     self, Client, ClientData, ClientHash, ClientVerify, Digest, DigestData, DigestHash,
     DigestVerify,
 };
-use kernel::process::{Error, ProcessId};
-use kernel::processbuffer::{ReadableProcessBuffer, WriteableProcessBuffer};
-use kernel::syscall::{CommandReturn, SyscallDriver};
-use kernel::utilities::cells::{OptionalCell, TakeCell};
+use kernel::utilities::cells::OptionalCell;
 use kernel::utilities::leasable_buffer::{SubSlice, SubSliceMut};
 
 use crate::userspace_services::data::{Bytes, Serialize};
@@ -76,7 +76,7 @@ impl<const L: usize> ServiceInterface<L> {
 }
 
 impl<const L: usize> UserspaceServiceClient for ServiceInterface<L> {
-    fn usercall_done<'a>(&self, return_data: Result<ReturnReader<'a>, ErrorCode>) {
+    fn usercall_done(&self, return_data: Result<ReturnReader<'_>, ErrorCode>) {
         if let Some(op) = self.current_op.take() {
             match op {
                 // Provide the client with its buffer back.
@@ -184,8 +184,8 @@ impl<'a: 'static, const L: usize> DigestData<'a, L> for ServiceInterface<L> {
                     ops::ADD_DATA,
                     Arguments::Extended(data.len(), 0, &usercall_args),
                 );
-                if let Err(kerr) = usercall_result {
-                    Err((kerr.into(), data))
+                if let Err(ec) = usercall_result {
+                    Err((ec, data))
                 } else {
                     self.current_op.set(Operation::AddMutData(data));
                     Ok(())
@@ -219,8 +219,8 @@ impl<'a: 'static, const L: usize> DigestHash<'a, L> for ServiceInterface<L> {
                 let usercall_result =
                     self.userv_access
                         .usercall(this, ROLE_ID, ops::RUN, Arguments::Short(0, 0));
-                if let Err(kerr) = usercall_result {
-                    Err((kerr.into(), hash))
+                if let Err(ec) = usercall_result {
+                    Err((ec, hash))
                 } else {
                     self.current_op.set(Operation::Run(hash));
                     Ok(())
@@ -252,8 +252,8 @@ impl<'a: 'static, const L: usize> DigestVerify<'a, L> for ServiceInterface<L> {
                     Arguments::Extended(0, 0, &[&Bytes(expected_digest_buffer)]),
                 );
 
-                if let Err(kerr) = usercall_res {
-                    Err((kerr.into(), expected_digest_buffer))
+                if let Err(ec) = usercall_res {
+                    Err((ec, expected_digest_buffer))
                 } else {
                     self.current_op
                         .set(Operation::Verify(expected_digest_buffer));
@@ -266,7 +266,7 @@ impl<'a: 'static, const L: usize> DigestVerify<'a, L> for ServiceInterface<L> {
     }
 }
 
-impl<'a: 'static, const L: usize> digest::Sha256 for ServiceInterface<L> {
+impl<const L: usize> digest::Sha256 for ServiceInterface<L> {
     fn set_mode_sha256(&self) -> Result<(), ErrorCode> {
         Ok(())
     }

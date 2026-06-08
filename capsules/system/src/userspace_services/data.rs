@@ -66,7 +66,7 @@ impl_serialization_for_numerical!(u8, u16, u32, u64, usize, i8, i16, i32, i64, i
 /// to guarantee to the compiler that the `Serialize` trait object is `Sized`).
 pub struct Bytes<'a>(pub &'a [u8]);
 
-impl<'a> Serialize for Bytes<'a> {
+impl Serialize for Bytes<'_> {
     fn try_serialize(&self, slice: &WriteableProcessSlice) -> Result<(), Error> {
         let src = self.0;
         if slice.len() < src.len() {
