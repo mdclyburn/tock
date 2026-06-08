@@ -15,5 +15,5 @@ pub mod digest;
 /// corresponding to the HIL the interface implements.
 #[derive(Debug, PartialEq)]
 pub enum Role {
-    Digest               = 0x11,
+    Digest = 0x11,
 }

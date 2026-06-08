@@ -1,16 +1,12 @@
 /*! Userspace service grant types.
  */
 
-use kernel::grant::{
-    AllowRoCount,
-    AllowRwCount,
-    Grant,
-    UpcallCount,
-};
 use crate::userspace_services::usercall::UserspaceServiceClient;
+use kernel::grant::{AllowRoCount, AllowRwCount, Grant, UpcallCount};
 
 /// Registry's grant type.
-pub type RegistryGrant = Grant<UserspaceServiceGrant, UpcallCount<1>, AllowRoCount<3>, AllowRwCount<5>>;
+pub type RegistryGrant =
+    Grant<UserspaceServiceGrant, UpcallCount<1>, AllowRoCount<3>, AllowRwCount<5>>;
 
 /// Userspace service state.
 #[derive(Clone, Copy, Default)]

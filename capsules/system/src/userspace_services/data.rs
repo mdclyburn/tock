@@ -4,10 +4,7 @@
 use core::mem;
 
 use kernel::process::Error;
-use kernel::processbuffer::{
-    ReadableProcessSlice,
-    WriteableProcessSlice,
-};
+use kernel::processbuffer::{ReadableProcessSlice, WriteableProcessSlice};
 
 /// Data that can be serialized into a process buffer.
 pub trait Serialize {
@@ -59,9 +56,7 @@ macro_rules! impl_serialization_for_numerical {
     };
 }
 
-impl_serialization_for_numerical!(
-    u8, u16, u32, u64, usize,
-    i8, i16, i32, i64, isize);
+impl_serialization_for_numerical!(u8, u16, u32, u64, usize, i8, i16, i32, i64, isize);
 
 /// Newtype wrapper for `Serialize`ing slices into process buffers.
 ///
@@ -77,8 +72,7 @@ impl<'a> Serialize for Bytes<'a> {
         if slice.len() < src.len() {
             Err(Error::OutOfMemory)
         } else {
-            slice[0..src.len()]
-                .copy_from_slice(src);
+            slice[0..src.len()].copy_from_slice(src);
 
             Ok(())
         }

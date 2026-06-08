@@ -5,20 +5,10 @@ Structures and interfaces for calling userspace services and copying data to and
 
 use kernel::errorcode::ErrorCode;
 use kernel::grant::GrantKernelData;
-use kernel::process::{
-    Error,
-    ProcessId,
-};
-use kernel::processbuffer::{
-    ReadableProcessBuffer,
-    WriteableProcessBuffer,
-    ReadableProcessSlice,
-};
+use kernel::process::{Error, ProcessId};
+use kernel::processbuffer::{ReadableProcessBuffer, ReadableProcessSlice, WriteableProcessBuffer};
 
-use crate::userspace_services::data::{
-    Deserialize,
-    Serialize,
-};
+use crate::userspace_services::data::{Deserialize, Serialize};
 use crate::userspace_services::grant::RegistryGrant;
 
 /// Userspace service-compatible argument representation.
@@ -77,10 +67,7 @@ pub trait UserspaceServiceClient {
     /// Provides the client with the results of a usercall operation.
     /// The client accesses data the userspace service returns with the
     /// [`ReturnReader`] `args`.
-    fn usercall_done<'a>(
-        &self,
-        args: Result<ReturnReader<'a>, ErrorCode>,
-    );
+    fn usercall_done<'a>(&self, args: Result<ReturnReader<'a>, ErrorCode>);
 }
 
 /// Put arguments into a userspace service's process buffers.
@@ -92,17 +79,16 @@ pub trait UserspaceServiceClient {
 pub fn place_arguments(
     operation_id: usize,
     userv_kdata: &GrantKernelData,
-    usercall_args: Arguments
-) -> Result<(usize, usize, usize), Error>
-{
+    usercall_args: Arguments,
+) -> Result<(usize, usize, usize), Error> {
     match usercall_args {
-        Arguments::Short(arg1, arg2) =>
-            Ok((operation_id, arg1, arg2)),
+        Arguments::Short(arg1, arg2) => Ok((operation_id, arg1, arg2)),
 
         Arguments::Extended(arg1, arg2, ext_args) => {
             // Retrieve ALLOWed buffers one at a time,
             // placing an argument into each buffer.
-            let it = ext_args.iter()
+            let it = ext_args
+                .iter()
                 .enumerate()
                 .map(|(allow_no, arg)| (userv_kdata.get_readwrite_processbuffer(allow_no), arg));
             for (res_allow_buffer, usercall_arg) in it {
@@ -112,7 +98,7 @@ pub fn place_arguments(
             }
 
             Ok((operation_id, arg1, arg2))
-        },
+        }
     }
 }
 
@@ -139,8 +125,7 @@ impl<'a> ReturnReader<'a> {
         rval2: usize,
         us_pid: ProcessId,
         grant: &'a RegistryGrant,
-    ) -> ReturnReader<'a>
-    {
+    ) -> ReturnReader<'a> {
         ReturnReader {
             direct_rvals: (rval1, rval2),
             us_pid,
@@ -160,11 +145,10 @@ impl<'a> ReturnReader<'a> {
     /// the userspace service is running and has `allow`ed the buffer.
     pub fn result_buffer_n<F, T>(&self, buffer_idx: usize, access_fn: F) -> Result<T, Error>
     where
-        F: FnOnce(&ReadableProcessSlice) -> T
+        F: FnOnce(&ReadableProcessSlice) -> T,
     {
-        self.grant.enter(
-            self.us_pid,
-            |_ad, kad| {
+        self.grant
+            .enter(self.us_pid, |_ad, kad| {
                 kad.get_readonly_processbuffer(buffer_idx)?
                     .enter(|proc_slice| access_fn(proc_slice))
             })
@@ -178,16 +162,8 @@ impl<'a> ReturnReader<'a> {
     /// Returns `Err(())` if
     /// the userspace service has not `allow`ed the buffer
     /// or the deserialization failed.
-    pub fn result_buffer_n_as_value<T: Deserialize>(
-        &self,
-        buffer_idx: usize
-    ) -> Result<T, Error>
-    {
-        self.result_buffer_n(
-            buffer_idx,
-            |proc_slice| {
-                T::try_deserialize(proc_slice)
-            })
+    pub fn result_buffer_n_as_value<T: Deserialize>(&self, buffer_idx: usize) -> Result<T, Error> {
+        self.result_buffer_n(buffer_idx, |proc_slice| T::try_deserialize(proc_slice))
             .flatten()
     }
 }

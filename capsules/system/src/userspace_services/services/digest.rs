@@ -1,64 +1,28 @@
 /*! Hashing as a userspace service.
  */
 
-use kernel::errorcode::{
-    self,
-    ErrorCode,
-};
-use kernel::grant::{
-    Grant,
-    AllowRoCount,
-    AllowRwCount,
-    UpcallCount,
-};
+use kernel::errorcode::{self, ErrorCode};
+use kernel::grant::{AllowRoCount, AllowRwCount, Grant, UpcallCount};
 use kernel::hil::digest::{
-    self,
-    Client,
-    ClientData,
-    ClientHash,
-    ClientVerify,
-    Digest,
-    DigestData,
-    DigestHash,
+    self, Client, ClientData, ClientHash, ClientVerify, Digest, DigestData, DigestHash,
     DigestVerify,
 };
-use kernel::process::{
-    Error,
-    ProcessId,
-};
-use kernel::processbuffer::{
-    ReadableProcessBuffer,
-    WriteableProcessBuffer,
-};
-use kernel::syscall::{
-    CommandReturn,
-    SyscallDriver,
-};
-use kernel::utilities::cells::{
-    OptionalCell,
-    TakeCell,
-};
-use kernel::utilities::leasable_buffer::{
-    SubSlice,
-    SubSliceMut,
-};
+use kernel::process::{Error, ProcessId};
+use kernel::processbuffer::{ReadableProcessBuffer, WriteableProcessBuffer};
+use kernel::syscall::{CommandReturn, SyscallDriver};
+use kernel::utilities::cells::{OptionalCell, TakeCell};
+use kernel::utilities::leasable_buffer::{SubSlice, SubSliceMut};
 
-use crate::userspace_services::data::{
-    Bytes,
-    Serialize,
-};
+use crate::userspace_services::data::{Bytes, Serialize};
 use crate::userspace_services::services::Role;
 use crate::userspace_services::usercall::{
-    ReturnReader,
-    Arguments,
-    UserspaceServiceAccess,
-    UserspaceServiceClient,
+    Arguments, ReturnReader, UserspaceServiceAccess, UserspaceServiceClient,
 };
 
 mod ops {
-    pub const RUN: usize        = 0x01;
-    pub const ADD_DATA: usize   = 0x02;
-    pub const VERIFY: usize     = 0x03;
+    pub const RUN: usize = 0x01;
+    pub const ADD_DATA: usize = 0x02;
+    pub const VERIFY: usize = 0x03;
     pub const CLEAR_DATA: usize = 0x11;
 }
 
@@ -112,29 +76,19 @@ impl<const L: usize> ServiceInterface<L> {
 }
 
 impl<const L: usize> UserspaceServiceClient for ServiceInterface<L> {
-    fn usercall_done<'a>(
-        &self,
-        return_data: Result<ReturnReader<'a>, ErrorCode>,
-    )
-    {
+    fn usercall_done<'a>(&self, return_data: Result<ReturnReader<'a>, ErrorCode>) {
         if let Some(op) = self.current_op.take() {
             match op {
                 // Provide the client with its buffer back.
                 Operation::AddData(data_slice) => {
-                    self.data_client.map(
-                        |c| c.add_data_done(
-                            return_data
-                                .map(|_reader| ()),
-                            data_slice));
-                },
+                    self.data_client
+                        .map(|c| c.add_data_done(return_data.map(|_reader| ()), data_slice));
+                }
 
                 Operation::AddMutData(data_slice) => {
-                    self.data_client.map(
-                        |c| c.add_mut_data_done(
-                            return_data
-                                .map(|_reader| ()),
-                            data_slice));
-                },
+                    self.data_client
+                        .map(|c| c.add_mut_data_done(return_data.map(|_reader| ()), data_slice));
+                }
 
                 // Copy the resulting hash into the caller's provided buffer and return it.
                 Operation::Run(hash) => {
@@ -145,26 +99,26 @@ impl<const L: usize> UserspaceServiceClient for ServiceInterface<L> {
                                 |hash_output_pslice| {
                                     // Copy bytes.
                                     // The run function esures that the caller's buffer is L bytes long.
-                                    hash_output_pslice[0..L]
-                                        .copy_to_slice(hash);
-                                });
-                            self.hash_client.map(|c| c.hash_done(
-                                copy_res.map_err(|kerr| kerr.into()),
-                                hash));
-                        },
+                                    hash_output_pslice[0..L].copy_to_slice(hash);
+                                },
+                            );
+                            self.hash_client
+                                .map(|c| c.hash_done(copy_res.map_err(|kerr| kerr.into()), hash));
+                        }
 
                         Err(_eval) => {
-                            self.hash_client.map(|c| c.hash_done(Err(ErrorCode::FAIL), hash));
-                        },
+                            self.hash_client
+                                .map(|c| c.hash_done(Err(ErrorCode::FAIL), hash));
+                        }
                     }
-                },
+                }
 
                 // Provide the digest output buffer back to the client along with the comparison result.
                 Operation::Verify(digest_buffer) => {
-                    let verify_result = return_data
-                        .map(|reader| reader.direct_rvals().0 == 1);
-                    self.verify_client.map(|c| c.verification_done(verify_result, digest_buffer));
-                },
+                    let verify_result = return_data.map(|reader| reader.direct_rvals().0 == 1);
+                    self.verify_client
+                        .map(|c| c.verification_done(verify_result, digest_buffer));
+                }
             }
         } else {
             // This ServiceInterface called usercall()
@@ -186,24 +140,22 @@ impl<'a: 'static, const L: usize> DigestData<'a, L> for ServiceInterface<L> {
         self.data_client.set(client)
     }
 
-    fn add_data(&self, data: SubSlice<'static, u8>)
-                -> Result<(), (ErrorCode, SubSlice<'static, u8>)> {
+    fn add_data(
+        &self,
+        data: SubSlice<'static, u8>,
+    ) -> Result<(), (ErrorCode, SubSlice<'static, u8>)> {
         if self.current_op.is_some() {
             Err((ErrorCode::BUSY, data))
         } else {
             if let Some(this) = self.this.get() {
-                let usercall_args: [&dyn Serialize; _] = [
-                    &Bytes(data.as_slice()),
-                ];
+                let usercall_args: [&dyn Serialize; _] = [&Bytes(data.as_slice())];
 
                 let usercall_result = self.userv_access.usercall(
                     this,
                     ROLE_ID,
                     ops::ADD_DATA,
-                    Arguments::Extended(
-                        0,
-                        0,
-                        &usercall_args));
+                    Arguments::Extended(0, 0, &usercall_args),
+                );
                 if let Err(ec) = usercall_result {
                     Err((ec, data))
                 } else {
@@ -216,24 +168,22 @@ impl<'a: 'static, const L: usize> DigestData<'a, L> for ServiceInterface<L> {
         }
     }
 
-    fn add_mut_data(&self, data: SubSliceMut<'static, u8>)
-                    -> Result<(), (ErrorCode, SubSliceMut<'static, u8>)> {
+    fn add_mut_data(
+        &self,
+        data: SubSliceMut<'static, u8>,
+    ) -> Result<(), (ErrorCode, SubSliceMut<'static, u8>)> {
         if self.current_op.is_some() {
             Err((ErrorCode::BUSY, data))
         } else {
             if let Some(this) = self.this.get() {
-                let usercall_args: [&dyn Serialize; _] = [
-                    &Bytes(data.as_slice()),
-                ];
+                let usercall_args: [&dyn Serialize; _] = [&Bytes(data.as_slice())];
 
                 let usercall_result = self.userv_access.usercall(
                     this,
                     ROLE_ID,
                     ops::ADD_DATA,
-                    Arguments::Extended(
-                        data.len(),
-                        0,
-                        &usercall_args));
+                    Arguments::Extended(data.len(), 0, &usercall_args),
+                );
                 if let Err(kerr) = usercall_result {
                     Err((kerr.into(), data))
                 } else {
@@ -249,11 +199,9 @@ impl<'a: 'static, const L: usize> DigestData<'a, L> for ServiceInterface<L> {
     fn clear_data(&self) {
         if let Some(this) = self.this.get() {
             // No return type means no error-handling for the operation or the usercall.
-            let _usercall_result = self.userv_access.usercall(
-                this,
-                ROLE_ID,
-                ops::CLEAR_DATA,
-                Arguments::Short(0, 0));
+            let _usercall_result =
+                self.userv_access
+                    .usercall(this, ROLE_ID, ops::CLEAR_DATA, Arguments::Short(0, 0));
         }
     }
 }
@@ -263,17 +211,14 @@ impl<'a: 'static, const L: usize> DigestHash<'a, L> for ServiceInterface<L> {
         self.hash_client.set(client)
     }
 
-    fn run(&'a self, hash: &'static mut [u8; L])
-           -> Result<(), (ErrorCode, &'static mut [u8; L])> {
+    fn run(&'a self, hash: &'static mut [u8; L]) -> Result<(), (ErrorCode, &'static mut [u8; L])> {
         if self.current_op.is_some() {
             Err((ErrorCode::BUSY, hash))
         } else {
             if let Some(this) = self.this.get() {
-                let usercall_result = self.userv_access.usercall(
-                    this,
-                    ROLE_ID,
-                    ops::RUN,
-                    Arguments::Short(0, 0));
+                let usercall_result =
+                    self.userv_access
+                        .usercall(this, ROLE_ID, ops::RUN, Arguments::Short(0, 0));
                 if let Err(kerr) = usercall_result {
                     Err((kerr.into(), hash))
                 } else {
@@ -294,9 +239,8 @@ impl<'a: 'static, const L: usize> DigestVerify<'a, L> for ServiceInterface<L> {
 
     fn verify(
         &'a self,
-        expected_digest_buffer: &'static mut [u8; L]
-    ) -> Result<(), (ErrorCode, &'static mut [u8; L])>
-    {
+        expected_digest_buffer: &'static mut [u8; L],
+    ) -> Result<(), (ErrorCode, &'static mut [u8; L])> {
         if self.current_op.is_some() {
             Err((ErrorCode::BUSY, expected_digest_buffer))
         } else {
@@ -305,17 +249,14 @@ impl<'a: 'static, const L: usize> DigestVerify<'a, L> for ServiceInterface<L> {
                     this,
                     ROLE_ID,
                     ops::VERIFY,
-                    Arguments::Extended(
-                        0,
-                        0,
-                        &[&Bytes(expected_digest_buffer)]
-                    ),
+                    Arguments::Extended(0, 0, &[&Bytes(expected_digest_buffer)]),
                 );
 
                 if let Err(kerr) = usercall_res {
                     Err((kerr.into(), expected_digest_buffer))
                 } else {
-                    self.current_op.set(Operation::Verify(expected_digest_buffer));
+                    self.current_op
+                        .set(Operation::Verify(expected_digest_buffer));
                     Ok(())
                 }
             } else {

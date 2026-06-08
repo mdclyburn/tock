@@ -5,26 +5,14 @@ use core::array;
 use core::mem;
 
 use kernel::errorcode::ErrorCode;
-use kernel::process::{
-    Error,
-    ProcessId,
-};
-use kernel::syscall::{
-    CommandReturn,
-    SyscallDriver,
-};
+use kernel::process::{Error, ProcessId};
+use kernel::syscall::{CommandReturn, SyscallDriver};
 use kernel::utilities::cells::OptionalCell;
 
-use crate::userspace_services::grant::{
-    ServiceState,
-    RegistryGrant,
-};
+use crate::userspace_services::grant::{RegistryGrant, ServiceState};
 use crate::userspace_services::usercall;
 use crate::userspace_services::usercall::{
-    ReturnReader,
-    UserspaceServiceAccess,
-    UserspaceServiceClient,
-    Arguments,
+    Arguments, ReturnReader, UserspaceServiceAccess, UserspaceServiceClient,
 };
 
 pub const DRIVER_NUM: usize = capsules_core::driver::NUM::UserspaceServices as usize;
@@ -65,9 +53,7 @@ impl<const N: usize> Registry<N> {
     fn find(&self, userv_role_id: usize) -> Option<&OptionalCell<Service>> {
         for userv_ent in self.userv_ents.iter() {
             if userv_ent.is_some() {
-                let is_userv_match = userv_ent.map_or(
-                    false,
-                    |s| s.userv_id == userv_role_id);
+                let is_userv_match = userv_ent.map_or(false, |s| s.userv_id == userv_role_id);
                 if is_userv_match {
                     return Some(userv_ent);
                 }
@@ -90,9 +76,9 @@ impl<const N: usize> Registry<N> {
         // See if this is replacing an older (crashed) instance of the same application.
         if let Some(userv_ent) = self.find(userv_role_id) {
             // Make sure it isn't replacing an existing application.
-            let can_replace = userv_ent.map_or(
-                false,
-                |s| pid.short_app_id() == s.current_pid.short_app_id());
+            let can_replace = userv_ent.map_or(false, |s| {
+                pid.short_app_id() == s.current_pid.short_app_id()
+            });
             if can_replace {
                 // New instance of the userspace service replaces its older entry.
                 userv_ent.set(new_service);
@@ -103,8 +89,7 @@ impl<const N: usize> Registry<N> {
             }
         } else {
             // The userspace service is fulfilling an unfilled role.
-            let userv_ent = self.userv_ents.iter()
-                .find(|ent| ent.is_none());
+            let userv_ent = self.userv_ents.iter().find(|ent| ent.is_none());
             if let Some(empty_ent) = userv_ent {
                 // Place service entry in an empty slot.
                 empty_ent.set(new_service);
@@ -122,40 +107,36 @@ impl<const N: usize> Registry<N> {
         userv_role_id: usize,
         operation_id: usize,
         args: Arguments,
-    ) -> Result<(), ErrorCode>
-    {
+    ) -> Result<(), ErrorCode> {
         if let Some(userv_ent) = self.find(userv_role_id) {
-            userv_ent.map_or(
-                Err(ErrorCode::NODEVICE),
-                |userv| {
-                    self.userv_data.enter(
-                        userv.current_pid,
-                        |ad, kad| {
-                            // Check if the userspace service is already busy with another operation.
-                            let is_busy = match ad.op_state {
-                                ServiceState::Idle => false,
+            userv_ent.map_or(Err(ErrorCode::NODEVICE), |userv| {
+                self.userv_data
+                    .enter(userv.current_pid, |ad, kad| {
+                        // Check if the userspace service is already busy with another operation.
+                        let is_busy = match ad.op_state {
+                            ServiceState::Idle => false,
 
-                                ServiceState::Pending(_client) => true,
-                            };
-                            if is_busy {
-                                return Err(ErrorCode::BUSY);
-                            }
+                            ServiceState::Pending(_client) => true,
+                        };
+                        if is_busy {
+                            return Err(ErrorCode::BUSY);
+                        }
 
-                            let upcall_args = usercall::place_arguments(operation_id, kad, args)?;
+                        let upcall_args = usercall::place_arguments(operation_id, kad, args)?;
 
-                            // Send an upcall to the userspace service.
-                            kad.schedule_upcall(upcall::INVOKE_USERCALL, upcall_args)
-                                .map_err(|_upcall_error| ErrorCode::FAIL)?;
+                        // Send an upcall to the userspace service.
+                        kad.schedule_upcall(upcall::INVOKE_USERCALL, upcall_args)
+                            .map_err(|_upcall_error| ErrorCode::FAIL)?;
 
-                            // The caller is now the client of the userspace service,
-                            // and the registry expects some response from the userspace service.
-                            ad.op_state = ServiceState::Pending(caller);
+                        // The caller is now the client of the userspace service,
+                        // and the registry expects some response from the userspace service.
+                        ad.op_state = ServiceState::Pending(caller);
 
-                            Ok(())
-                        })
-                        .map_err(|kerr| kerr.into())
-                        .flatten()
-                })
+                        Ok(())
+                    })
+                    .map_err(|kerr| kerr.into())
+                    .flatten()
+            })
         } else {
             Err(ErrorCode::NODEVICE)
         }
@@ -165,10 +146,10 @@ impl<const N: usize> Registry<N> {
 /// Syscall driver command numbers.
 mod command {
     /// Driver available check.
-    pub const CHECK: usize                   = 0x00;
+    pub const CHECK: usize = 0x00;
 
     /// Userspace service registration.
-    pub const REGISTER_SERVICE: usize        = 0x10;
+    pub const REGISTER_SERVICE: usize = 0x10;
 
     /// Usercall success return.
     pub const USERCALL_RETURN_SUCCESS: usize = 0x20;
@@ -183,14 +164,7 @@ mod upcall {
 }
 
 impl<const N: usize> SyscallDriver for Registry<N> {
-    fn command(
-        &self,
-        command_no: usize,
-        r2: usize,
-        r3: usize,
-        pid: ProcessId
-    ) -> CommandReturn
-    {
+    fn command(&self, command_no: usize, r2: usize, r3: usize, pid: ProcessId) -> CommandReturn {
         match (command_no, r2, r3) {
             (command::CHECK, _r2, _r3) => CommandReturn::success(),
 
@@ -198,37 +172,30 @@ impl<const N: usize> SyscallDriver for Registry<N> {
             // Check that it has shared its buffer with the capsule.
             (command::REGISTER_SERVICE, role_id, _r3) => {
                 // Register the service.
-                self.register(pid, role_id)
-                    .into()
-            },
+                self.register(pid, role_id).into()
+            }
 
             // A userspace operation has completed a previously-requested operation.
             // Retrieve the result and send it to client.
-            (command::USERCALL_RETURN_SUCCESS, rv1, rv2) => {
-                self.userv_data.enter(
-                    pid,
-                    |ad, _kad| {
-                        mem::take(&mut ad.op_state)
-                    })
-                    .map_err(|_kerr| ErrorCode::FAIL)
-                    .and_then(
-                        |service_state| {
-                            if let ServiceState::Pending(client) = service_state {
-                                let rv_reader = ReturnReader::new(rv1, rv2, pid, &self.userv_data);
-                                client.usercall_done(Ok(rv_reader));
+            (command::USERCALL_RETURN_SUCCESS, rv1, rv2) => self
+                .userv_data
+                .enter(pid, |ad, _kad| mem::take(&mut ad.op_state))
+                .map_err(|_kerr| ErrorCode::FAIL)
+                .and_then(|service_state| {
+                    if let ServiceState::Pending(client) = service_state {
+                        let rv_reader = ReturnReader::new(rv1, rv2, pid, &self.userv_data);
+                        client.usercall_done(Ok(rv_reader));
 
-                                Ok(())
-                            } else {
-                                Err(ErrorCode::FAIL)
-                            }
-                        })
-                    .into()
-            },
+                        Ok(())
+                    } else {
+                        Err(ErrorCode::FAIL)
+                    }
+                })
+                .into(),
 
             (command::USERCALL_RETURN_FAILURE, errno, _r3) => {
-                self.userv_data.enter(
-                    pid,
-                    |ad, _kad| {
+                self.userv_data
+                    .enter(pid, |ad, _kad| {
                         // Inform the client that the operation completed in failure.
                         // Map the error number back into an ErrorCode.
                         let ec = match errno {
@@ -259,14 +226,14 @@ impl<const N: usize> SyscallDriver for Registry<N> {
                     .flatten()
                     .map_err(|_perr| ErrorCode::FAIL)
                     .into()
-            },
+            }
 
             _unhandled => CommandReturn::failure(ErrorCode::INVAL),
         }
     }
 
     fn allocate_grant(&self, pid: ProcessId) -> Result<(), Error> {
-        self.userv_data.enter(pid, |_ad, _kad| {  })
+        self.userv_data.enter(pid, |_ad, _kad| {})
     }
 }
 
@@ -277,8 +244,7 @@ impl<const N: usize> UserspaceServiceAccess for Registry<N> {
         role_id: usize,
         operation_id: usize,
         args: Arguments,
-    ) -> Result<(), ErrorCode>
-    {
+    ) -> Result<(), ErrorCode> {
         Registry::usercall(self, caller, role_id, operation_id, args)
     }
 }
