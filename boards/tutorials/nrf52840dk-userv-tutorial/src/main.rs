@@ -129,32 +129,30 @@ pub unsafe fn main() {
 
 
     // === Option B: Userspace Service SHA256 (Disabled by default) ===
-    /*
     // Registry capsule for communicating with userspace service applications.
-    let userspace_services = kernel::static_init!(
-        capsules_system::userspace_services::Registry<2>,
-        capsules_system::userspace_services::Registry::new(
-            board_kernel.create_grant(capsules_system::userspace_services::DRIVER_NUM,
-                                      &create_capability!(capabilities::MemoryAllocationCapability))));
+    // let userspace_services = kernel::static_init!(
+    //     capsules_system::userspace_services::Registry<2>,
+    //     capsules_system::userspace_services::Registry::new(
+    //         board_kernel.create_grant(capsules_system::userspace_services::DRIVER_NUM,
+    //                                   &create_capability!(capabilities::MemoryAllocationCapability))));
 
-    // Hashing service interface to translate from HIL call to userspace service application usercall.
-    let hashing_service_interface = kernel::static_init!(
-        capsules_system::userspace_services::services::digest::ServiceInterface<32>,
-        capsules_system::userspace_services::services::digest::ServiceInterface::new(userspace_services));
-    hashing_service_interface.init();
+    // // Hashing service interface to translate from HIL call to userspace service application usercall.
+    // let hashing_service_interface = kernel::static_init!(
+    //     capsules_system::userspace_services::services::digest::ServiceInterface<32>,
+    //     capsules_system::userspace_services::services::digest::ServiceInterface::new(userspace_services));
+    // hashing_service_interface.init();
 
-    let sha_driver = kernel::static_init!(
-        Sha,
-        Sha::new(
-            hashing_service_interface,
-            kernel::static_init!([u8; 128], [0; 128]),
-            kernel::static_init!([u8; 32], [0; 32]),
-            board_kernel.create_grant(
-                capsules_extra::sha_driver::DRIVER_NUM,
-                &create_capability!(capabilities::MemoryAllocationCapability))));
-    use kernel::hil::digest::Digest;
-    hashing_service_interface.set_client(sha_driver);
-    */
+    // let sha_driver = kernel::static_init!(
+    //     Sha,
+    //     Sha::new(
+    //         hashing_service_interface,
+    //         kernel::static_init!([u8; 128], [0; 128]),
+    //         kernel::static_init!([u8; 32], [0; 32]),
+    //         board_kernel.create_grant(
+    //             capsules_extra::sha_driver::DRIVER_NUM,
+    //             &create_capability!(capabilities::MemoryAllocationCapability))));
+    // use kernel::hil::digest::Digest;
+    // hashing_service_interface.set_client(sha_driver);
 
     let platform = Platform {
         base: base_platform,
