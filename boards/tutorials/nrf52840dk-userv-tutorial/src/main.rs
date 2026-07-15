@@ -17,10 +17,10 @@ use kernel::{capabilities, create_capability};
 // =============================================================================
 
 // --- Option A: Software SHA256 Capsule (Active by default) ---
-type Sha = capsules_extra::sha_driver::ShaDriver<'static, capsules_extra::sha256::Sha256Software<'static>, 32>;
+type Sha = capsules_extra::sha256_driver::ShaDriver<'static, capsules_extra::sha256::Sha256Software<'static>, 32>;
 
 // --- Option B: Userspace Service SHA256 (Disabled by default) ---
-// type Sha = capsules_extra::sha_driver::ShaDriver<'static, capsules_system::userspace_services::services::digest::ServiceInterface<32>, 32>;
+// type Sha = capsules_extra::sha256_driver::ShaDriver<'static, capsules_system::userspace_services::services::digest::ServiceInterface<32>, 32>;
 
 // State for loading and holding applications.
 // How should the kernel respond when a process faults.
@@ -47,7 +47,7 @@ impl SyscallDriverLookup for Platform {
             capsules_extra::eui64::DRIVER_NUM => f(Some(self.eui64_driver)),
             capsules_extra::net::udp::DRIVER_NUM => f(Some(self.udp_driver)),
             capsules_extra::ieee802154::DRIVER_NUM => f(Some(self.ieee802154_driver)),
-            capsules_system::userspace_services::services::digest::DRIVER_NUM => f(Some(self.digest)),
+            capsules_extra::sha256_driver::DRIVER_NUM => f(Some(self.digest)),
 
             // Uncomment if Option B is active:
             // capsules_system::userspace_services::DRIVER_NUM => f(Some(self.userspace_services)),
@@ -115,18 +115,17 @@ pub unsafe fn main() {
         capsules_extra::sha256::Sha256Software::new());
     kernel::deferred_call::DeferredCallClient::register(sha_software);
 
-    let sha_driver = kernel::static_init!(
+    let sha256_driver = kernel::static_init!(
         Sha,
         Sha::new(
             sha_software,
             kernel::static_init!([u8; 128], [0; 128]),
             kernel::static_init!([u8; 32], [0; 32]),
             board_kernel.create_grant(
-                capsules_extra::sha_driver::DRIVER_NUM,
+                capsules_extra::sha256_driver::DRIVER_NUM,
                 &create_capability!(capabilities::MemoryAllocationCapability))));
-    use kernel::hil::digest::Digest;
-    sha_software.set_client(sha_driver);
-
+    use kernel::hil::digest::DigestDataHash;
+    sha_software.set_client(sha256_driver);
 
     // === Option B: Userspace Service SHA256 (Disabled by default) ===
     // Registry capsule for communicating with userspace service applications.
@@ -159,7 +158,7 @@ pub unsafe fn main() {
         eui64_driver,
         ieee802154_driver,
         udp_driver,
-        digest: sha_driver,
+        digest: sha256_driver,
 
         // Uncomment if Option B is active:
         // userspace_services,
