@@ -9,7 +9,7 @@ pub mod debug;
 #[allow(unused_imports)]
 use self::debug::{HexBuf, UdintFlags, UeconFlags, UestaFlags};
 use crate::pm;
-use crate::pm::{disable_clock, enable_clock, Clock, HSBClock, PBBClock};
+use crate::pm::{Clock, HSBClock, PBBClock, disable_clock, enable_clock};
 use crate::scif;
 use core::cell::Cell;
 use core::ptr;
@@ -17,13 +17,13 @@ use core::slice;
 use kernel::debug as debugln;
 use kernel::hil;
 use kernel::hil::usb::TransferType;
+use kernel::utilities::StaticRef;
 use kernel::utilities::cells::{OptionalCell, VolatileCell};
 use kernel::utilities::registers::interfaces::{ReadWriteable, Readable, Writeable};
 use kernel::utilities::registers::{
-    register_bitfields, FieldValue, InMemoryRegister, LocalRegisterCopy, ReadOnly, ReadWrite,
-    WriteOnly,
+    FieldValue, InMemoryRegister, LocalRegisterCopy, ReadOnly, ReadWrite, WriteOnly,
+    register_bitfields,
 };
-use kernel::utilities::StaticRef;
 
 // The following macros provide some diagnostics and panics(!)
 // while this module is experimental and should eventually be removed or
@@ -481,7 +481,8 @@ impl<'a> Usbc<'a> {
     ) {
         let e: usize = From::from(endpoint);
         let b: usize = From::from(bank);
-        let p = buf.as_ptr() as *const u8 as *mut u8;
+        let p: *const VolatileCell<u8> = buf.as_ptr();
+        let p: *mut u8 = p.cast_mut().cast();
 
         debug1!("Set Endpoint{}/Bank{} addr={:8?}", e, b, p);
         self.descriptors[e][b].set_addr(p);

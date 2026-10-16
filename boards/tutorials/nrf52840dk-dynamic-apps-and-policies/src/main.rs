@@ -29,7 +29,6 @@ const SCREEN_I2C_SCL_PIN: Pin = Pin::P1_11;
 const NUM_PROCS: usize = 8;
 
 type ChipHw = nrf52840dk_lib::ChipHw;
-static mut CHIP: Option<&'static ChipHw> = None;
 
 // How should the kernel respond when a process faults.
 const FAULT_RESPONSE: capsules_system::process_policies::StopWithDebugFaultPolicy =
@@ -213,8 +212,6 @@ pub unsafe fn main() {
     let (board_kernel, base_platform, chip, nrf52840_peripherals, _mux_alarm) =
         nrf52840dk_lib::start();
 
-    CHIP = Some(chip);
-
     //--------------------------------------------------------------------------
     // SCREEN
     //--------------------------------------------------------------------------
@@ -222,8 +219,8 @@ pub unsafe fn main() {
     let i2c_bus = components::i2c::I2CMuxComponent::new(&nrf52840_peripherals.nrf52.twi1, None)
         .finalize(components::i2c_mux_component_static!(nrf52840::i2c::TWI));
     nrf52840_peripherals.nrf52.twi1.configure(
-        nrf52840::pinmux::Pinmux::new(SCREEN_I2C_SCL_PIN as u32),
-        nrf52840::pinmux::Pinmux::new(SCREEN_I2C_SDA_PIN as u32),
+        nrf52840::pinmux::Pinmux::new(SCREEN_I2C_SCL_PIN),
+        nrf52840::pinmux::Pinmux::new(SCREEN_I2C_SDA_PIN),
     );
     nrf52840_peripherals
         .nrf52
@@ -275,6 +272,7 @@ pub unsafe fn main() {
         capsules_extra::screen::screen::DRIVER_NUM,
         ssd1306_sh1106,
         apps_regions,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::screen_shared_component_static!(1032, Screen));
 
@@ -311,7 +309,8 @@ pub unsafe fn main() {
         capsules_extra::isolated_nonvolatile_storage_driver::DRIVER_NUM,
         virtual_flash_nvm,
         core::ptr::addr_of!(APP_STORAGE) as usize,
-        APP_STORAGE.len()
+        APP_STORAGE.len(),
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::isolated_nonvolatile_storage_component_static!(
         capsules_core::virtualizers::virtual_flash::FlashUser<'static, nrf52840::nvmc::Nvmc>,
@@ -326,6 +325,7 @@ pub unsafe fn main() {
         board_kernel,
         capsules_extra::process_info_driver::DRIVER_NUM,
         PMCapability,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::process_info_component_static!(PMCapability));
 
@@ -495,6 +495,7 @@ pub unsafe fn main() {
         storage_permissions_policy,
         app_flash,
         app_memory,
+        create_capability!(capabilities::ProcessManagementCapability),
     )
     .finalize(components::process_loader_sequential_component_static!(
         nrf52840::chip::NRF52<Nrf52840DefaultPeripherals>,
@@ -524,6 +525,7 @@ pub unsafe fn main() {
         capsules_extra::app_loader::DRIVER_NUM,
         dynamic_binary_storage,
         dynamic_binary_storage,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::app_loader_component_static!(
         DynamicBinaryStorage<'static>,

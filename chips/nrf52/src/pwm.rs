@@ -4,12 +4,12 @@
 
 //! PWM driver for nRF52.
 
+use kernel::ErrorCode;
 use kernel::hil;
+use kernel::utilities::StaticRef;
 use kernel::utilities::cells::VolatileCell;
 use kernel::utilities::registers::interfaces::Writeable;
-use kernel::utilities::registers::{register_bitfields, ReadWrite, WriteOnly};
-use kernel::utilities::StaticRef;
-use kernel::ErrorCode;
+use kernel::utilities::registers::{ReadWrite, WriteOnly, register_bitfields};
 
 #[repr(C)]
 struct PwmRegisters {
@@ -232,11 +232,10 @@ impl Pwm {
         // Setup the duty cycles
         unsafe {
             DUTY_CYCLES[0] = dc_out as u16;
-            self.registers
-                .seq0
-                .seq_ptr
-                .set(core::ptr::addr_of!(DUTY_CYCLES) as *const u16);
         }
+        let duty_cycles: *const [u16; 4] = core::ptr::addr_of!(DUTY_CYCLES);
+        let duty_cycles: *const u16 = duty_cycles.cast();
+        self.registers.seq0.seq_ptr.set(duty_cycles);
         self.registers.seq0.seq_cnt.write(SEQ_CNT::CNT.val(1));
         self.registers
             .seq0

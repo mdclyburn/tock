@@ -9,16 +9,12 @@ use core::ptr::addr_of_mut;
 use kernel::ErrorCode;
 
 use kernel::debug;
-use kernel::debug::IoWrite;
 use kernel::hil::led;
 use kernel::hil::uart::Transmit;
 use kernel::hil::uart::{self};
 use kernel::utilities::cells::VolatileCell;
+use kernel::utilities::io_write::IoWrite;
 use nrf52840::gpio::Pin;
-
-use crate::CHIP;
-use crate::PROCESSES;
-use crate::PROCESS_PRINTER;
 
 struct Writer {
     initialized: bool,
@@ -129,16 +125,14 @@ impl IoWrite for Writer {
 #[cfg(not(test))]
 #[panic_handler]
 pub unsafe fn panic_fmt(pi: &PanicInfo) -> ! {
-    let led_kernel_pin = &nrf52840::gpio::GPIOPin::new(Pin::P1_01);
+    let led_kernel_pin = &nrf52840::gpio::nrf52840_gpio_create_pin(Pin::P1_01);
     let led = &mut led::LedHigh::new(led_kernel_pin);
     let writer = &mut *addr_of_mut!(WRITER);
-    debug::panic(
+    debug::panic_old(
         &mut [led],
         writer,
         pi,
         &cortexm4::support::nop,
-        PROCESSES.unwrap().as_slice(),
-        &*addr_of!(CHIP),
-        &*addr_of!(PROCESS_PRINTER),
+        crate::PANIC_RESOURCES.get(),
     )
 }

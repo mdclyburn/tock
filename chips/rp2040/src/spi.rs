@@ -5,19 +5,20 @@
 use crate::clocks;
 use core::cell::Cell;
 use core::cmp;
+use kernel::ErrorCode;
 use kernel::hil;
-use kernel::hil::spi::cs::ChipSelectPolar;
 use kernel::hil::spi::SpiMaster;
 use kernel::hil::spi::SpiMasterClient;
+use kernel::hil::spi::cs::ChipSelectPolar;
 use kernel::hil::spi::{ClockPhase, ClockPolarity};
+use kernel::utilities::StaticRef;
 use kernel::utilities::cells::MapCell;
 use kernel::utilities::cells::OptionalCell;
 use kernel::utilities::leasable_buffer::SubSliceMut;
 use kernel::utilities::registers::interfaces::{ReadWriteable, Readable, Writeable};
-use kernel::utilities::registers::{register_bitfields, register_structs, ReadOnly, ReadWrite};
-use kernel::utilities::StaticRef;
-use kernel::ErrorCode;
+use kernel::utilities::registers::{ReadOnly, ReadWrite, register_bitfields, register_structs};
 
+// It is assumed that the state values are represented uniquely by a single bit
 const SPI_READ_IN_PROGRESS: u8 = 0b001;
 const SPI_WRITE_IN_PROGRESS: u8 = 0b010;
 const SPI_IN_PROGRESS: u8 = 0b100;
@@ -238,7 +239,7 @@ const SPI1_BASE: StaticRef<SpiRegisters> =
 
 pub struct Spi<'a> {
     registers: StaticRef<SpiRegisters>,
-    clocks: OptionalCell<&'a clocks::Clocks>,
+    clocks: &'a clocks::Clocks,
     master_client: OptionalCell<&'a dyn hil::spi::SpiMasterClient>,
     active_slave: OptionalCell<ChipSelectPolar<'a, crate::gpio::RPGpioPin<'a>>>,
 
@@ -254,10 +255,10 @@ pub struct Spi<'a> {
 }
 
 impl<'a> Spi<'a> {
-    pub fn new_spi0() -> Self {
+    pub fn new_spi0(clocks: &'a clocks::Clocks) -> Self {
         Self {
             registers: SPI0_BASE,
-            clocks: OptionalCell::empty(),
+            clocks,
             master_client: OptionalCell::empty(),
             active_slave: OptionalCell::empty(),
 
@@ -274,10 +275,10 @@ impl<'a> Spi<'a> {
         }
     }
 
-    pub fn new_spi1() -> Self {
+    pub fn new_spi1(clocks: &'a clocks::Clocks) -> Self {
         Self {
             registers: SPI1_BASE,
-            clocks: OptionalCell::empty(),
+            clocks,
             master_client: OptionalCell::empty(),
             active_slave: OptionalCell::empty(),
 
@@ -292,10 +293,6 @@ impl<'a> Spi<'a> {
             transfers: Cell::new(SPI_IDLE),
             active_after: Cell::new(false),
         }
-    }
-
-    pub(crate) fn set_clocks(&self, clocks: &'a clocks::Clocks) {
-        self.clocks.set(clocks);
     }
 
     fn enable(&self) {
@@ -329,23 +326,27 @@ impl<'a> Spi<'a> {
                 self.registers.sspimsc.modify(SSPIMSC::TXIM::CLEAR);
             }
         }
-
+        // if still recieving data (receive fifo not empty) store to the buffer until full
         while self.registers.sspsr.is_set(SSPSR::RNE) {
             let byte = self.registers.sspdr.read(SSPDR::DATA) as u8;
-            if self.rx_buffer.is_some() {
-                if self.rx_position.get() < self.len.get() {
-                    self.rx_buffer.map(|buf| {
-                        buf[self.rx_position.get()] = byte;
-                    });
-                    self.rx_position.set(self.rx_position.get() + 1);
-                } else {
-                    self.transfers
-                        .set(self.transfers.get() & !SPI_READ_IN_PROGRESS);
-                }
+            if self.rx_buffer.is_some() && self.rx_position.get() < self.len.get() {
+                self.rx_buffer.map(|buf| {
+                    buf[self.rx_position.get()] = byte;
+                });
+                self.rx_position.set(self.rx_position.get() + 1);
             }
         }
+        // if the buffer is full, clear the read in progress flag so the client callback can fire
+        if self.rx_position.get() >= self.len.get() {
+            self.transfers
+                .set(self.transfers.get() & !SPI_READ_IN_PROGRESS);
+        }
 
-        if self.transfers.get() == SPI_IN_PROGRESS {
+        // The SPI state should be changed to IDLE if the transmit FIFO is empty (TFE) and the SPI is not busy (BSY))
+        if self.transfers.get() == SPI_IN_PROGRESS
+            && self.registers.sspsr.is_set(SSPSR::TFE)
+            && !self.registers.sspsr.is_set(SSPSR::BSY)
+        {
             if !self.active_after.get() {
                 self.active_slave.map(|p| {
                     p.deactivate();
@@ -477,10 +478,17 @@ impl<'a> Spi<'a> {
         }
     }
 
+    // Currently the format is set to Motorola SPI frame format, 8 bit mode (octets), MSSPCLKOUT polarity and phase on 0 SPO=0, SPH=0
+    // This means that in the case of continuous back-to-back transmissions of octets, the SSPFSSOUT signal will be pulsed HIGH between the octets.
+    // If your slave device requires the SSPFSSOUT signal to be held LOW for the entire transmission, you will need to either:
+    // 1. Set the chip select pin as a GPIO and hold it low for the duration of the octets
+    // 2. In Motorola SPI frame format set SPO=0, SPH=1 and make sure the buffer is continuous
+    // Ref: 4.4.3.13. Motorola SPI Format in the RP2040 Datasheet
     fn set_format(&self) {
         self.registers.sspcr0.modify(SSPCR0::DSS::DATA_8_BIT);
         self.registers.sspcr0.modify(SSPCR0::SPO::CLEAR);
         self.registers.sspcr0.modify(SSPCR0::SPH::CLEAR);
+        self.registers.sspcr0.modify(SSPCR0::FRF::MOTOROLA_SPI);
     }
 }
 
@@ -496,7 +504,7 @@ impl<'a> SpiMaster<'a> for Spi<'a> {
             Err(error) => Err(error),
             Ok(_) => Ok(()),
         }?;
-        // set format: 8 bit mode, SSPCLKOUT polarity and phase on 0
+        // This sets the default format for the SPI bus
         self.set_format();
 
         // Always enable DREQ signals -- harmless if DMA is not listening
@@ -577,9 +585,7 @@ impl<'a> SpiMaster<'a> for Spi<'a> {
     }
 
     fn set_rate(&self, baudrate: u32) -> Result<u32, ErrorCode> {
-        let freq_in = self.clocks.map_or(125_000_000, |clocks| {
-            clocks.get_frequency(clocks::Clock::Peripheral)
-        });
+        let freq_in = self.clocks.get_frequency(clocks::Clock::Peripheral);
 
         if baudrate > freq_in {
             return Err(ErrorCode::INVAL);
@@ -615,9 +621,7 @@ impl<'a> SpiMaster<'a> for Spi<'a> {
     }
 
     fn get_rate(&self) -> u32 {
-        let freq_in = self.clocks.map_or(125_000_000, |clocks| {
-            clocks.get_frequency(clocks::Clock::Peripheral)
-        });
+        let freq_in = self.clocks.get_frequency(clocks::Clock::Peripheral);
         let prescale = self.registers.sspcpsr.read(SSPCPSR::CPSDVSR);
         let postdiv = self.registers.sspcr0.read(SSPCR0::SCR) + 1;
         freq_in / (prescale * postdiv)

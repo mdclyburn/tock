@@ -8,12 +8,9 @@ use kernel::utilities::cells::OptionalCell;
 use psoc62xa::gpio::GpioPin;
 use psoc62xa::scb::Scb;
 
-use kernel::debug::{self, IoWrite};
+use kernel::debug;
 use kernel::hil::led::LedHigh;
-
-use crate::CHIP;
-use crate::PROCESSES;
-use crate::PROCESS_PRINTER;
+use kernel::utilities::io_write::IoWrite;
 
 /// Writer is used by kernel::debug to panic message to the serial port.
 pub struct Writer {
@@ -47,18 +44,16 @@ pub static mut WRITER: Writer = Writer {
 /// Panic handler for the CY8CPROTO-062-4343 board.
 #[panic_handler]
 pub unsafe fn panic_fmt(panic_info: &PanicInfo) -> ! {
-    use core::ptr::{addr_of, addr_of_mut};
+    use core::ptr::addr_of_mut;
     let writer = &mut *addr_of_mut!(WRITER);
     let led_kernel_pin = &GpioPin::new(psoc62xa::gpio::PsocPin::P13_7);
     let led = &mut LedHigh::new(led_kernel_pin);
 
-    debug::panic(
+    debug::panic_old(
         &mut [led],
         writer,
         panic_info,
         &cortexm0p::support::nop,
-        PROCESSES.unwrap().as_slice(),
-        &*addr_of!(CHIP),
-        &*addr_of!(PROCESS_PRINTER),
+        crate::PANIC_RESOURCES.get(),
     );
 }

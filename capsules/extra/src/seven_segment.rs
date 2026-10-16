@@ -150,12 +150,12 @@
 
 use core::cell::Cell;
 
+use kernel::ErrorCode;
+use kernel::ProcessId;
 use kernel::hil::gpio::{ActivationMode, Pin};
 use kernel::hil::time::{Alarm, AlarmClient, ConvertTicks};
 use kernel::syscall::{CommandReturn, SyscallDriver};
 use kernel::utilities::cells::TakeCell;
-use kernel::ErrorCode;
-use kernel::ProcessId;
 
 /// Syscall driver number.
 use capsules_core::driver;
@@ -184,7 +184,6 @@ const DIGITS: [u8; 10] = [
 ];
 
 /// Holds an array of digits and an array of segments for each digit.
-
 pub struct SevenSegmentDriver<'a, P: Pin, A: Alarm<'a>, const NUM_DIGITS: usize> {
     /// An array of 8 segment pins (7 for digit segments and one dot segment)
     segments: &'a [&'a P; 8],

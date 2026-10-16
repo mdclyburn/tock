@@ -10,6 +10,7 @@ use kernel::platform::chip::InterruptService;
 
 use crate::adc;
 use crate::clocks::Clocks;
+use crate::dma;
 use crate::gpio::{RPGpio, RPPins, SIO};
 use crate::i2c;
 use crate::interrupts;
@@ -24,7 +25,7 @@ use crate::uart::Uart;
 use crate::usb;
 use crate::watchdog::Watchdog;
 use crate::xosc::Xosc;
-use cortexm0p::{interrupt_mask, CortexM0P, CortexMVariant};
+use cortexm0p::{CortexM0P, CortexMVariant, interrupt_mask};
 
 #[repr(u8)]
 pub enum Processor {
@@ -59,6 +60,21 @@ impl<I: InterruptService> Chip for Rp2040<'_, I> {
     type UserspaceKernelBoundary = cortexm0p::syscall::SysCall;
     type ThreadIdProvider = cortexm0p::thread_id::CortexMThreadIdProvider;
 
+    fn init() {
+        cortexm0p::nvic::disable_all();
+        cortexm0p::nvic::clear_all_pending();
+
+        let sio = crate::gpio::SIO::new();
+        let processor = sio.get_processor();
+        match processor {
+            crate::chip::Processor::Processor0 => {}
+            _ => panic!(
+                "Kernel should run only using processor 0 (now processor {})",
+                processor as u8
+            ),
+        }
+    }
+
     fn service_pending_interrupts(&self) {
         unsafe {
             let mask = match self.sio.get_processor() {
@@ -87,7 +103,7 @@ impl<I: InterruptService> Chip for Rp2040<'_, I> {
             Processor::Processor0 => self.processor0_interrupt_mask,
             Processor::Processor1 => self.processor1_interrupt_mask,
         };
-        unsafe { cortexm0p::nvic::has_pending_with_mask(mask) }
+        cortexm0p::nvic::has_pending_with_mask(mask)
     }
 
     fn mpu(&self) -> &Self::MPU {
@@ -118,13 +134,12 @@ impl<I: InterruptService> Chip for Rp2040<'_, I> {
 
 pub struct Rp2040DefaultPeripherals<'a> {
     pub adc: adc::Adc<'a>,
-    pub clocks: Clocks,
+    pub dma: dma::Dma<'a>,
     pub i2c0: i2c::I2c<'a, 'a>,
     pub pins: RPPins<'a>,
     pub pio0: Pio,
     pub pio1: Pio,
     pub pwm: pwm::Pwm<'a>,
-    pub resets: Resets,
     pub sio: SIO,
     pub spi0: spi::Spi<'a>,
     pub sysinfo: sysinfo::SysInfo,
@@ -138,40 +153,33 @@ pub struct Rp2040DefaultPeripherals<'a> {
 }
 
 impl Rp2040DefaultPeripherals<'_> {
-    pub fn new() -> Self {
+    pub fn new(clocks: &'static Clocks, resets: &'static Resets) -> Self {
         Self {
             adc: adc::Adc::new(),
-            clocks: Clocks::new(),
-            i2c0: i2c::I2c::new_i2c0(),
+            dma: dma::Dma::new(),
+            i2c0: i2c::I2c::new_i2c0(clocks, resets),
             pins: RPPins::new(),
             pio0: Pio::new_pio0(),
             pio1: Pio::new_pio1(),
-            pwm: pwm::Pwm::new(),
-            resets: Resets::new(),
+            pwm: pwm::Pwm::new(clocks),
             sio: SIO::new(),
-            spi0: spi::Spi::new_spi0(),
+            spi0: spi::Spi::new_spi0(clocks),
             sysinfo: sysinfo::SysInfo::new(),
             timer: RPTimer::new(),
-            uart0: Uart::new_uart0(),
-            uart1: Uart::new_uart1(),
+            uart0: Uart::new_uart0(clocks),
+            uart1: Uart::new_uart1(clocks),
             usb: usb::UsbCtrl::new(),
-            watchdog: Watchdog::new(),
+            watchdog: Watchdog::new(resets),
             xosc: Xosc::new(),
-            rtc: rtc::Rtc::new(),
+            rtc: rtc::Rtc::new(clocks),
         }
     }
 
-    pub fn resolve_dependencies(&'static self) {
-        self.pwm.set_clocks(&self.clocks);
-        self.watchdog.resolve_dependencies(&self.resets);
-        self.spi0.set_clocks(&self.clocks);
-        self.uart0.set_clocks(&self.clocks);
+    pub fn init(&'static self) {
         kernel::deferred_call::DeferredCallClient::register(&self.uart0);
         kernel::deferred_call::DeferredCallClient::register(&self.uart1);
         kernel::deferred_call::DeferredCallClient::register(&self.rtc);
-        self.i2c0.resolve_dependencies(&self.clocks, &self.resets);
         self.usb.set_gpio(self.pins.get_pin(RPGpio::GPIO15));
-        self.rtc.set_clocks(&self.clocks);
     }
 }
 
@@ -224,6 +232,14 @@ impl InterruptService for Rp2040DefaultPeripherals<'_> {
                 // simply ignored.
                 //
                 // Note that PWM interrupts are raised only during unit tests.
+                true
+            }
+            interrupts::DMA_IRQ_0 => {
+                self.dma.handle_interrupt0();
+                true
+            }
+            interrupts::DMA_IRQ_1 => {
+                self.dma.handle_interrupt1();
                 true
             }
             _ => false,

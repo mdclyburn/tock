@@ -7,11 +7,7 @@ use core::panic::PanicInfo;
 use core::str;
 use earlgrey::chip_config::EarlGreyConfig;
 use kernel::debug;
-use kernel::debug::IoWrite;
-
-use crate::CHIP;
-use crate::PROCESSES;
-use crate::PROCESS_PRINTER;
+use kernel::utilities::io_write::IoWrite;
 
 struct Writer {}
 
@@ -46,7 +42,7 @@ use kernel::hil::led;
 #[cfg(not(test))]
 #[panic_handler]
 pub unsafe fn panic_fmt(pi: &PanicInfo) -> ! {
-    use core::ptr::{addr_of, addr_of_mut};
+    use core::ptr::addr_of_mut;
     let first_led_pin = &mut earlgrey::gpio::GpioPin::new(
         earlgrey::gpio::GPIO_BASE,
         earlgrey::pinmux::PadConfig::Output(
@@ -60,25 +56,21 @@ pub unsafe fn panic_fmt(pi: &PanicInfo) -> ! {
     let writer = &mut *addr_of_mut!(WRITER);
 
     #[cfg(feature = "sim_verilator")]
-    debug::panic(
+    debug::panic_old(
         &mut [first_led],
         writer,
         pi,
         &|| {},
-        PROCESSES.unwrap().as_slice(),
-        &*addr_of!(CHIP),
-        &*addr_of!(PROCESS_PRINTER),
+        crate::PANIC_RESOURCES.get(),
     );
 
     #[cfg(not(feature = "sim_verilator"))]
-    debug::panic(
+    debug::panic_old(
         &mut [first_led],
         writer,
         pi,
         &rv32i::support::nop,
-        PROCESSES.unwrap().as_slice(),
-        &*addr_of!(CHIP),
-        &*addr_of!(PROCESS_PRINTER),
+        crate::PANIC_RESOURCES.get(),
     );
 }
 
@@ -88,22 +80,13 @@ pub unsafe fn panic_fmt(pi: &PanicInfo) -> ! {
     let writer = &mut WRITER;
 
     #[cfg(feature = "sim_verilator")]
-    debug::panic_print(
-        writer,
-        pi,
-        &|| {},
-        PROCESSES.unwrap().as_slice(),
-        &CHIP,
-        &PROCESS_PRINTER,
-    );
+    debug::panic_print_old(writer, pi, &|| {}, crate::PANIC_RESOURCES.get());
     #[cfg(not(feature = "sim_verilator"))]
-    debug::panic_print(
+    debug::panic_print_old(
         writer,
         pi,
         &rv32i::support::nop,
-        PROCESSES.unwrap().as_slice(),
-        &CHIP,
-        &PROCESS_PRINTER,
+        crate::PANIC_RESOURCES.get(),
     );
 
     let _ = writeln!(writer, "{}", pi);

@@ -13,13 +13,13 @@ readme = "README.md"
 keywords = ["tock", "embedded", "riscv", "bare-metal"]
 categories = ["data-structures", "embedded", "no-std"]
 license = "MIT/Apache-2.0"
-edition = "2021"
+edition = "2024"
 
 [badges]
 travis-ci = { repository = "tock/tock", branch = "master" }
 
 [dependencies]
-tock-registers = {version = "0.10.0", default-features = false }
+tock-registers.workspace = true
 
 [lints]
 workspace = true

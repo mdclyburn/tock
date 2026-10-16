@@ -6,6 +6,7 @@
 
 use crate::platform::mpu;
 use crate::syscall;
+use crate::utilities::io_write::IoWrite;
 use core::fmt::Write;
 
 /// Interface for individual MCUs.
@@ -27,6 +28,27 @@ pub trait Chip {
     /// this specific chip. Likely this is architecture specific, but individual
     /// chips may have various custom requirements.
     type UserspaceKernelBoundary: syscall::UserspaceKernelBoundary;
+
+    /// Run any necessary initialization for this chip.
+    ///
+    /// This should be called first by the board in its `main()` function.
+    ///
+    /// This should contain any necessary initialization steps, including:
+    ///
+    /// - Any architecture-specific setup
+    /// - Any errata fixes
+    /// - Any configuration needed for the chip to continue booting the kernel
+    ///
+    /// `init()` does not use `&self` so it can be called before the actual
+    /// `Chip` is instantiated. These initializations may be needed very soon
+    /// after the chip boots, and potentially much before the actual `Chip` can
+    /// be created.
+    ///
+    /// `init()` is marked safe as the implementation must handle any safety
+    /// requirements of the underlying initialization steps. As this will be
+    /// called very early when the chip boots, it is not useful or reasonable
+    /// for the kernel's main function to address any safety requirements.
+    fn init();
 
     /// The kernel calls this function to tell the chip to check for all pending
     /// interrupts and to correctly dispatch them to the peripheral drivers for
@@ -176,3 +198,25 @@ impl ClockInterface for NoClockControl {
 /// Instance of NoClockControl for things that need references to
 /// `ClockInterface` objects.
 pub const NO_CLOCK_CONTROL: NoClockControl = NoClockControl {};
+
+/// Interface for chips to create a synchronous writer for panics.
+///
+/// Any mechanism that can output a panic message during a panic must implement
+/// [`PanicWriter`] to enable the `panic()` functions to write the output. This
+/// requires the mechanism to provide a new constructor for the writer that
+/// creates a synchronous writer that implements [`IoWrite`].
+///
+/// This is a dedicated trait because synchronous I/O is only used for panic
+/// handling. This allows chips to clearly separate synchronous implementations
+/// that are a special case only for panics.
+pub trait PanicWriter {
+    /// The configuration data the mechanism needs to configure the writer for
+    /// panic output.
+    type Config;
+
+    /// Create a new synchronous writer capable of sending panic messages.
+    ///
+    /// The writer must implement [`IoWrite`] (which is just `std:io::Write`
+    /// implemented for no_std).
+    unsafe fn create_panic_writer(config: Self::Config) -> impl IoWrite + core::fmt::Write;
+}

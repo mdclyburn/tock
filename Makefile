@@ -288,6 +288,7 @@ ci-runner-github:\
 	ci-runner-github-clippy\
 	ci-runner-github-build\
 	ci-runner-github-tests\
+	ci-runner-github-flux\
 	ci-runner-github-qemu
 	$(call banner,CI-Runner: All GitHub runners DONE)
 
@@ -323,6 +324,11 @@ ci-runner-github-tests:\
 	ci-job-cargo-test-build\
 	ci-job-miri # EXPERIMENTAL
 	$(call banner,CI-Runner: GitHub tests runner DONE)
+
+.PHONY: ci-runner-github-flux
+ci-runner-github-flux:\
+	ci-job-flux
+	$(call banner,CI-Runner: GitHub flux runner DONE)
 
 .PHONY: ci-runner-github-qemu
 ci-runner-github-qemu:\
@@ -401,9 +407,15 @@ ci-job-clippy:
 	@cargo clippy -- -D warnings
 	# Run `cargo clippy` in select boards so we run clippy with targets that
 	# actually check the arch-specific functions.
+	# 
+	# - nrf52840dk: cortex-m4
+	# - raspberry_pi_pico: cortex-m0
+	# - hifive1: riscv
+	# - qemu_i486_q35: x86
 	@cd boards/nordic/nrf52840dk && cargo clippy -- -D warnings
+	@cd boards/raspberry_pi_pico && cargo clippy -- -D warnings
 	@cd boards/hifive1 && cargo clippy -- -D warnings
-	@cd boards/qemu_i486_q35 && cargo clippy -- -D warnings
+	@cd boards/qemu_i486_q35 && cargo clippy -Zjson-target-spec -- -D warnings
 
 
 
@@ -572,6 +584,32 @@ ci-job-cargo-test-build:
 	@$(MAKE) NO_RUN="--no-run" -C "boards/apollo3/redboard_artemis_atp" test
 	@$(MAKE) NO_RUN="--no-run" -C "boards/apollo3/redboard_artemis_nano" test
 
+
+
+### ci-runner-github-flux jobs:
+define ci_setup_flux
+	$(call banner,CI-Setup: Build Flux and its dependencies)
+	@cd tools/ci/flux-ci-runner; ./deps.sh install
+endef
+
+.PHONY: ci-setup-flux
+ci-setup-flux:
+	$(call ci_setup_helper,\
+		cd tools/ci/flux-ci-runner && ./deps.sh check > /dev/null 2>&1 && echo yes,\
+		Build Flux and install (or build) its dependencies,\
+		ci_setup_flux,\
+		CI_JOB_FLUX)
+	$(if $(CI_JOB_FLUX),$(eval CI_JOB_FLUX := true))
+
+define ci_job_flux
+	$(call banner,CI-Job: Flux)
+	source tools/ci/flux-ci-runner/deps.sh check && cargo flux --features=flux
+	$(call banner,CI-Job: Flux - Complete; all verification rules satisfied!)
+endef
+
+.PHONY: ci-job-flux
+ci-job-flux: ci-setup-flux
+	$(if $(CI_JOB_FLUX),$(call ci_job_flux))
 
 
 ### ci-runner-github-qemu jobs:

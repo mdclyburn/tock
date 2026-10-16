@@ -23,19 +23,20 @@ use capsules_extra::net::ieee802154::MacAddress;
 use capsules_extra::net::ipv6::ip_utils::IPAddr;
 use kernel::capabilities;
 use kernel::component::Component;
+use kernel::debug::PanicResources;
 use kernel::deferred_call::DeferredCallClient;
 use kernel::hil::i2c::I2CMaster;
 use kernel::hil::radio;
 #[allow(unused_imports)]
 use kernel::hil::radio::{RadioConfig, RadioData};
-use kernel::hil::symmetric_encryption::AES128;
+use kernel::hil::symmetric_encryption::AES;
+use kernel::platform::chip::Chip;
 use kernel::platform::{KernelResources, SyscallDriverLookup};
-use kernel::process::ProcessArray;
-use kernel::scheduler::round_robin::RoundRobinSched;
+use kernel::utilities::single_thread_value::SingleThreadValue;
 
 //use kernel::hil::time::Alarm;
-use kernel::hil::led::LedHigh;
 use kernel::hil::Controller;
+use kernel::hil::led::LedHigh;
 #[allow(unused_imports)]
 use kernel::{create_capability, debug, debug_gpio, static_buf, static_init};
 use sam4l::chip::Sam4lDefaultPeripherals;
@@ -95,12 +96,14 @@ const FAULT_RESPONSE: capsules_system::process_policies::StopFaultPolicy =
     capsules_system::process_policies::StopFaultPolicy {};
 
 type ChipHw = sam4l::chip::Sam4l<Sam4lDefaultPeripherals>;
+type ProcessPrinterInUse = capsules_system::process_printer::ProcessPrinterText;
 
-/// Static variables used by io.rs.
-static mut PROCESSES: Option<&'static ProcessArray<NUM_PROCS>> = None;
+// TODO: remove once panic UART doesn't require an existing instance any more
 static mut CHIP: Option<&'static sam4l::chip::Sam4l<Sam4lDefaultPeripherals>> = None;
-static mut PROCESS_PRINTER: Option<&'static capsules_system::process_printer::ProcessPrinterText> =
-    None;
+
+/// Resources for when a board panics used by io.rs.
+static PANIC_RESOURCES: SingleThreadValue<PanicResources<ChipHw, ProcessPrinterInUse>> =
+    SingleThreadValue::new();
 
 kernel::stack_size! {0x2000}
 
@@ -119,6 +122,13 @@ type Rf233 = capsules_extra::rf233::RF233<
 type Ieee802154MacDevice =
     components::ieee802154::Ieee802154ComponentMacDeviceType<Rf233, sam4l::aes::Aes<'static>>;
 
+type SchedulerInUse = components::sched::round_robin::RoundRobinComponentType;
+
+kernel::declare_capability!(ProcessConsoleCap:
+    kernel::capabilities::ProcessManagementCapability,
+    kernel::capabilities::ProcessStartCapability
+);
+
 struct Imix {
     pconsole: &'static capsules_core::process_console::ProcessConsole<
         'static,
@@ -127,7 +137,7 @@ struct Imix {
             'static,
             sam4l::ast::Ast<'static>,
         >,
-        components::process_console::Capability,
+        ProcessConsoleCap,
     >,
     console: &'static capsules_core::console_ordered::ConsoleOrdered<
         'static,
@@ -165,7 +175,7 @@ struct Imix {
     nrf51822: &'static capsules_extra::nrf51822_serialization::Nrf51822Serialization<'static>,
     nonvolatile_storage:
         &'static capsules_extra::nonvolatile_storage_driver::NonvolatileStorage<'static>,
-    scheduler: &'static RoundRobinSched<'static>,
+    scheduler: &'static SchedulerInUse,
     systick: cortexm4::systick::SysTick,
 }
 
@@ -205,7 +215,7 @@ impl KernelResources<sam4l::chip::Sam4l<Sam4lDefaultPeripherals>> for Imix {
     type SyscallDriverLookup = Self;
     type SyscallFilter = ();
     type ProcessFault = ();
-    type Scheduler = RoundRobinSched<'static>;
+    type Scheduler = SchedulerInUse;
     type SchedulerTimer = cortexm4::systick::SysTick;
     type WatchDog = ();
     type ContextSwitchCallback = ();
@@ -278,14 +288,14 @@ unsafe fn set_pin_primary_functions(peripherals: &Sam4lDefaultPeripherals) {
     peripherals.pc[06].configure(Some(A)); // SCK         --  SPI CLK
     peripherals.pc[07].configure(Some(B)); // RTS2 (BLE)  -- USART2_RTS
     peripherals.pc[08].configure(Some(E)); // CTS2 (BLE)  -- USART2_CTS
-                                           //peripherals.pc[09].configure(None); //... NRF GPIO    -- GPIO
-                                           //peripherals.pc[10].configure(None); //... USER LED    -- GPIO
+    //peripherals.pc[09].configure(None); //... NRF GPIO    -- GPIO
+    //peripherals.pc[10].configure(None); //... USER LED    -- GPIO
     peripherals.pc[09].configure(Some(E)); // ACAN1       -- ACIFC comparator
     peripherals.pc[10].configure(Some(E)); // ACAP1       -- ACIFC comparator
     peripherals.pc[11].configure(Some(B)); // RX2 (BLE)   -- USART2_RX
     peripherals.pc[12].configure(Some(B)); // TX2 (BLE)   -- USART2_TX
-                                           //peripherals.pc[13].configure(None); //... ACC_INT1    -- GPIO
-                                           //peripherals.pc[14].configure(None); //... ACC_INT2    -- GPIO
+    //peripherals.pc[13].configure(None); //... ACC_INT1    -- GPIO
+    //peripherals.pc[14].configure(None); //... ACC_INT2    -- GPIO
     peripherals.pc[13].configure(Some(E)); //... ACBN1    -- ACIFC comparator
     peripherals.pc[14].configure(Some(E)); //... ACBP1    -- ACIFC comparator
     peripherals.pc[16].configure(None); //... SENSE_PWR   --  GPIO pin
@@ -312,12 +322,18 @@ unsafe fn start() -> (
     Imix,
     &'static sam4l::chip::Sam4l<Sam4lDefaultPeripherals>,
 ) {
-    sam4l::init();
+    ChipHw::init();
 
     // Initialize deferred calls very early.
     kernel::deferred_call::initialize_deferred_call_state::<
         <ChipHw as kernel::platform::chip::Chip>::ThreadIdProvider,
     >();
+
+    // Bind global variables to this thread.
+    let _ = PANIC_RESOURCES
+        .bind_to_thread::<<ChipHw as kernel::platform::chip::Chip>::ThreadIdProvider>(
+            PanicResources::new(),
+        );
 
     let pm = static_init!(sam4l::pm::PowerManager, sam4l::pm::PowerManager::new());
     let peripherals = static_init!(Sam4lDefaultPeripherals, Sam4lDefaultPeripherals::new(pm));
@@ -341,6 +357,9 @@ unsafe fn start() -> (
         sam4l::chip::Sam4l::new(pm, peripherals)
     );
     CHIP = Some(chip);
+    PANIC_RESOURCES.get().map(|resources| {
+        resources.chip.put(chip);
+    });
 
     // Create capabilities that the board needs to call certain protected kernel
     // functions.
@@ -361,14 +380,18 @@ unsafe fn start() -> (
     // Create an array to hold process references.
     let processes = components::process_array::ProcessArrayComponent::new()
         .finalize(components::process_array_component_static!(NUM_PROCS));
-    PROCESSES = Some(processes);
+    PANIC_RESOURCES.get().map(|resources| {
+        resources.processes.put(processes.as_slice());
+    });
 
     // Setup space to store the core kernel data structure.
     let board_kernel = static_init!(kernel::Kernel, kernel::Kernel::new(processes.as_slice()));
 
     let process_printer = components::process_printer::ProcessPrinterTextComponent::new()
         .finalize(components::process_printer_text_component_static!());
-    PROCESS_PRINTER = Some(process_printer);
+    PANIC_RESOURCES.get().map(|resources| {
+        resources.printer.put(process_printer);
+    });
 
     // # CONSOLE
     // Create a shared UART channel for the consoles and for kernel debug.
@@ -381,9 +404,13 @@ unsafe fn start() -> (
         .finalize(components::alarm_mux_component_static!(sam4l::ast::Ast));
     peripherals.ast.configure(mux_alarm);
 
-    let alarm =
-        AlarmDriverComponent::new(board_kernel, capsules_core::alarm::DRIVER_NUM, mux_alarm)
-            .finalize(components::alarm_component_static!(sam4l::ast::Ast));
+    let alarm = AlarmDriverComponent::new(
+        board_kernel,
+        capsules_core::alarm::DRIVER_NUM,
+        mux_alarm,
+        create_capability!(capabilities::MemoryAllocationCapability),
+    )
+    .finalize(components::alarm_component_static!(sam4l::ast::Ast));
 
     let pconsole = ProcessConsoleComponent::new(
         board_kernel,
@@ -391,9 +418,11 @@ unsafe fn start() -> (
         mux_alarm,
         process_printer,
         Some(cortexm4::support::reset),
+        ProcessConsoleCap,
     )
     .finalize(components::process_console_component_static!(
-        sam4l::ast::Ast
+        sam4l::ast::Ast,
+        ProcessConsoleCap
     ));
 
     let console = ConsoleOrderedComponent::new(
@@ -404,6 +433,7 @@ unsafe fn start() -> (
         200,
         5,
         5,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::console_ordered_component_static!(
         sam4l::ast::Ast
@@ -421,6 +451,7 @@ unsafe fn start() -> (
         capsules_extra::nrf51822_serialization::DRIVER_NUM,
         &peripherals.usart2,
         &peripherals.pb[07],
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::nrf51822_component_static!());
 
@@ -439,6 +470,7 @@ unsafe fn start() -> (
         board_kernel,
         capsules_extra::ambient_light::DRIVER_NUM,
         isl29035,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::ambient_light_component_static!());
 
@@ -449,12 +481,14 @@ unsafe fn start() -> (
         board_kernel,
         capsules_extra::temperature::DRIVER_NUM,
         si7021,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::temperature_component_static!(SI7021Sensor));
     let humidity = components::humidity::HumidityComponent::new(
         board_kernel,
         capsules_extra::humidity::DRIVER_NUM,
         si7021,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::humidity_component_static!(SI7021Sensor));
 
@@ -466,6 +500,7 @@ unsafe fn start() -> (
     let ninedof = components::ninedof::NineDofComponent::new(
         board_kernel,
         capsules_extra::ninedof::DRIVER_NUM,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::ninedof_component_static!(fxos8700));
 
@@ -479,6 +514,7 @@ unsafe fn start() -> (
         mux_spi,
         sam4l::spi::Peripheral::Peripheral2,
         capsules_core::spi_controller::DRIVER_NUM,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::spi_syscall_component_static!(
         sam4l::spi::SpiHw<'static>
@@ -515,6 +551,7 @@ unsafe fn start() -> (
         adc_channels,
         board_kernel,
         capsules_core::adc::DRIVER_NUM,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::adc_dedicated_component_static!(sam4l::adc::Adc));
 
@@ -531,6 +568,7 @@ unsafe fn start() -> (
             5 => &peripherals.pc[26],
             6 => &peripherals.pa[20]
         ),
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::gpio_component_static!(sam4l::gpio::GPIOPin));
 
@@ -550,6 +588,7 @@ unsafe fn start() -> (
                 kernel::hil::gpio::FloatingState::PullNone
             )
         ),
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::button_component_static!(sam4l::gpio::GPIOPin));
 
@@ -557,36 +596,22 @@ unsafe fn start() -> (
         board_kernel,
         capsules_extra::crc::DRIVER_NUM,
         &peripherals.crccu,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::crc_component_static!(sam4l::crccu::Crccu));
 
-    let ac_0 = static_init!(
-        sam4l::acifc::AcChannel,
-        sam4l::acifc::AcChannel::new(sam4l::acifc::Channel::AC0)
-    );
-    let ac_1 = static_init!(
-        sam4l::acifc::AcChannel,
-        sam4l::acifc::AcChannel::new(sam4l::acifc::Channel::AC0)
-    );
-    let ac_2 = static_init!(
-        sam4l::acifc::AcChannel,
-        sam4l::acifc::AcChannel::new(sam4l::acifc::Channel::AC0)
-    );
-    let ac_3 = static_init!(
-        sam4l::acifc::AcChannel,
-        sam4l::acifc::AcChannel::new(sam4l::acifc::Channel::AC0)
-    );
     let analog_comparator = components::analog_comparator::AnalogComparatorComponent::new(
         &peripherals.acifc,
         components::analog_comparator_component_helper!(
             <sam4l::acifc::Acifc as kernel::hil::analog_comparator::AnalogComparator>::Channel,
-            ac_0,
-            ac_1,
-            ac_2,
-            ac_3
+            sam4l::acifc::AcChannel::new(sam4l::acifc::Channel::AC0),
+            sam4l::acifc::AcChannel::new(sam4l::acifc::Channel::AC0),
+            sam4l::acifc::AcChannel::new(sam4l::acifc::Channel::AC0),
+            sam4l::acifc::AcChannel::new(sam4l::acifc::Channel::AC0),
         ),
         board_kernel,
         capsules_extra::analog_comparator::DRIVER_NUM,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::analog_comparator_component_static!(
         sam4l::acifc::Acifc
@@ -595,6 +620,7 @@ unsafe fn start() -> (
         board_kernel,
         capsules_core::rng::DRIVER_NUM,
         &peripherals.trng,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::rng_component_static!(sam4l::trng::Trng));
 
@@ -623,6 +649,7 @@ unsafe fn start() -> (
         PAN_ID,
         serial_num_bottom_16,
         DEFAULT_EXT_SRC_MAC,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::ieee802154_component_static!(
         capsules_extra::rf233::RF233<
@@ -636,6 +663,7 @@ unsafe fn start() -> (
         board_kernel,
         capsules_extra::usb::usb_user::DRIVER_NUM,
         &peripherals.usbc,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::usb_component_static!(sam4l::usbc::Usbc));
 
@@ -655,6 +683,7 @@ unsafe fn start() -> (
         0x20000, // Length of userspace accessible region
         core::ptr::addr_of!(_sstorage) as usize, //start address of kernel region
         core::ptr::addr_of!(_estorage) as usize - core::ptr::addr_of!(_sstorage) as usize, // length of kernel region
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::nonvolatile_storage_component_static!(
         sam4l::flashcalw::FLASHCALW
@@ -684,6 +713,8 @@ unsafe fn start() -> (
         //MacAddress::Short(49138), //comment in for dual rx test only
         local_ip_ifaces,
         mux_alarm,
+        create_capability!(capabilities::NetworkCapabilityCreationCapability),
+        create_capability!(capabilities::CreatePortTableCapability),
     )
     .finalize(components::udp_mux_component_static!(
         sam4l::ast::Ast,
@@ -691,6 +722,7 @@ unsafe fn start() -> (
     ));
 
     // UDP driver initialization happens here
+    kernel::declare_capability!(UdpDriverCap: kernel::capabilities::UdpDriverCapability);
     let udp_driver = components::udp_driver::UDPDriverComponent::new(
         board_kernel,
         capsules_extra::net::udp::driver::DRIVER_NUM,
@@ -698,8 +730,14 @@ unsafe fn start() -> (
         udp_recv_mux,
         udp_port_table,
         local_ip_ifaces,
+        UdpDriverCap,
+        create_capability!(capabilities::MemoryAllocationCapability),
+        create_capability!(capabilities::NetworkCapabilityCreationCapability),
     )
-    .finalize(components::udp_driver_component_static!(sam4l::ast::Ast));
+    .finalize(components::udp_driver_component_static!(
+        sam4l::ast::Ast,
+        UdpDriverCap
+    ));
 
     let scheduler = components::sched::round_robin::RoundRobinComponent::new(processes)
         .finalize(components::round_robin_component_static!(NUM_PROCS));
@@ -724,14 +762,18 @@ unsafe fn start() -> (
     // STORAGE PERMISSIONS
     //--------------------------------------------------------------------------
 
+    kernel::declare_capability!(AppStoreCap: kernel::capabilities::ApplicationStorageCapability);
     let storage_permissions_policy =
-        components::storage_permissions::individual::StoragePermissionsIndividualComponent::new()
-            .finalize(
-                components::storage_permissions_individual_component_static!(
-                    sam4l::chip::Sam4l<Sam4lDefaultPeripherals>,
-                    kernel::process::ProcessStandardDebugFull,
-                ),
-            );
+        components::storage_permissions::individual::StoragePermissionsIndividualComponent::new(
+            AppStoreCap,
+        )
+        .finalize(
+            components::storage_permissions_individual_component_static!(
+                sam4l::chip::Sam4l<Sam4lDefaultPeripherals>,
+                kernel::process::ProcessStandardDebugFull,
+                AppStoreCap,
+            ),
+        );
 
     //--------------------------------------------------------------------------
     // PROCESS LOADING
@@ -768,6 +810,7 @@ unsafe fn start() -> (
         storage_permissions_policy,
         app_flash,
         app_memory,
+        create_capability!(capabilities::ProcessManagementCapability),
     )
     .finalize(components::process_loader_sequential_component_static!(
         sam4l::chip::Sam4l<Sam4lDefaultPeripherals>,

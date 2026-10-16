@@ -77,6 +77,7 @@ but the approximate definitions:
 | [Pico Explorer Base](pico_explorer_base/README.md)                | ARM Cortex-M0+   | RP2040         | openocd    | openocd                     | No            |
 | [Nano RP2040 Connect](nano_rp2040_connect/README.md)              | ARM Cortex-M0+   | RP2040         | custom     | custom                      | No            |
 | [Raspberry Pi Pico](raspberry_pi_pico/README.md)                  | ARM Cortex-M0+   | RP2040         | openocd    | openocd                     | No            |
+| [Raspberry Pi Pico W](raspberry_pi_pico_w/README.md)              | ARM Cortex-M0+   | RP2040         | openocd    | openocd                     | No            |
 | [SparkFun RedBoard Artemis Nano](apollo3/redboard_artemis_nano/README.md) | ARM Cortex-M4 | Apollo3   | custom     | custom                      | No            |
 | [SparkFun LoRa Thing Plus - expLoRaBLE](apollo3/lora_things_plus/README.md) | ARM Cortex-M4 | Apollo3 | custom     | custom                      | No            |
 | [SparkFun RedBoard Artemis ATP](apollo3/redboard_artemis_atp/README.md) | ARM Cortex-M4 | Apollo3     | custom     | custom                      | No            |
@@ -88,6 +89,7 @@ but the approximate definitions:
 | Board                                                             | Architecture     | MCU            | Interface  | App deployment              | QEMU Support? |
 |-------------------------------------------------------------------|------------------|----------------|------------|-----------------------------|---------------|
 | [WeAct F401CCU6 Core Board](weact_f401ccu6/README.md)             | ARM Cortex-M4    | STM32F401CCU6  | openocd    | custom                      | No            |
+| [ST Nucleo U545RE-Q (skeleton)](nucleo_u545re_q/README.md)        | ARM Cortex-M33   | STM32U545RE-Q  | openocd    | custom                      | No            |
 | [SparkFun RedBoard Red-V](redboard_redv/README.md)                | RISC-V           | FE310-G002     | openocd    | tockloader                  | Yes (5.1)     |
 | [SiFive HiFive1 Rev B](hifive1/README.md)                         | RISC-V           | FE310-G002     | openocd    | tockloader                  | Yes (5.1)     |
 | [BBC HiFive Inventor](hifive_inventor/README.md)                  | RISC-V           | FE310-G003     | tockloader | tockloader                  | No            |
@@ -98,6 +100,8 @@ but the approximate definitions:
 | [MSP432 Evaluation kit MSP432P401R](msp_exp432p401r/README.md)    | ARM Cortex-M4    | MSP432P401R    | openocd    | custom                      | No            |
 | [CY8CPROTO-062-4343W](cy8cproto_62_4343_w/README.md)              | ARM Cortex-M0+   | PSoC62         | openocd    | custom                      | No            |
 | [Raspberry Pi Pico 2](raspberry_pi_pico_2/README.md)              | ARM Cortex-M33   | RP2350         | openocd    | openocd                     | No            |
+| [LPCXpresso55S69 Development Board](lpc55s69-evk/README.md)       | ARM Cortex-M33   | LPC55S6x       | probe-rs   | probe-rs                    | No            |
+| [PSOC™ Control C3M5 Evaluation Kit](psc3m5_evk/README.md)         | ARM Cortex-M33   | PSC3M5         | openocd    | probe-rs                    | No            |
 
 
 ### Other
@@ -113,11 +117,12 @@ Virtual hardware platforms that are regularly tested as part of the CI.
 | Board                                                             | Architecture     | MCU            | Interface  | App deployment              | QEMU Support? |
 |-------------------------------------------------------------------|------------------|----------------|------------|-----------------------------|---------------|
 | [QEMU RISC-V 32 bit `virt` platform](qemu_rv32_virt/README.md)    | RISC-V RV32IMAC  | QEMU           | custom     | custom                      | Yes (7.2.0)   |
+| [QEMU RISC-V 64 bit `virt` platform](qemu_rv64_virt/README.md)    | RISC-V RV64IMAC  | QEMU           | custom     | custom                      | Yes           |
 | [LiteX on Digilent Arty A-7](litex/arty/README.md)                | RISC-V RV32IMC   | LiteX+VexRiscV | custom     | tockloader (flash-file)[^1] | No            |
 | [Verilated LiteX Simulation](litex/sim/README.md)                 | RISC-V RV32IMC   | LiteX+VexRiscv | custom     | tockloader (flash-file)[^1] | No            |
 | [VeeR EL2 simulation](veer_el2_sim/README.md)                     | RISC-V RV32IMC   | VeeR EL2       | custom     | custom                      | No            |
 | [QEMU i486 Q53](qemu_i486_q35/README.md)                          | i468             | Q35            | custom     | custom                      | Yes           |
-
+| [Seeed Studio LoRa E5 Mini](lora_e5_mini/README.md)               | ARM Cortex-M4    | STM32WLE5JC    | openocd    | tockloader                  | No            |
 [^1]: Tockloader is not able to interact with this board directly, but
       can be used to work on a flash-image of the board, which can in
       turn be flashed onto / read from the board. For more specific

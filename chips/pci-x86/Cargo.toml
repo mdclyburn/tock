@@ -6,10 +6,10 @@
 name = "pci-x86"
 version.workspace = true
 authors.workspace = true
-edition.workspace = true
+edition = "2024"
 
 [dependencies]
-tock-registers = "0.10.0"
+tock-registers.workspace = true
 x86 = { path = "../../arch/x86" }
 
 [lints]

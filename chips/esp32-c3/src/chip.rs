@@ -8,11 +8,11 @@ use core::fmt::Write;
 use core::ptr::addr_of;
 
 use kernel::platform::chip::{Chip, InterruptService};
-use kernel::utilities::registers::interfaces::{ReadWriteable, Readable, Writeable};
 use kernel::utilities::StaticRef;
+use kernel::utilities::registers::interfaces::{ReadWriteable, Readable, Writeable};
 
-use rv32i::csr::{self, mcause, mtvec::mtvec, CSR};
-use rv32i::pmp::{simple::SimplePMP, PMPUserMPU};
+use rv32i::csr::{self, CSR, mcause, mtvec::mtvec};
+use rv32i::pmp::{PMPUserMPU, simple::SimplePMP};
 use rv32i::syscall::SysCall;
 
 use crate::intc::{Intc, IntcRegisters};
@@ -112,6 +112,8 @@ impl<'a, I: InterruptService + 'a> Chip for Esp32C3<'a, I> {
     type MPU = PMPUserMPU<8, SimplePMP<16>>;
     type UserspaceKernelBoundary = SysCall;
     type ThreadIdProvider = rv32i::thread_id::RiscvThreadIdProvider;
+
+    fn init() {}
 
     fn service_pending_interrupts(&self) {
         loop {
@@ -283,15 +285,17 @@ pub unsafe extern "C" fn disable_interrupt_trap_handler(mcause_val: u32) {
 /// The ESP32C3 should support non-vectored and vectored interrupts, but
 /// vectored interrupts seem more reliable so let's use that.
 pub unsafe fn configure_trap_handler() {
-    CSR.mtvec
-        .write(mtvec::trap_addr.val(_start_trap_vectored as usize >> 2) + mtvec::mode::Vectored)
+    CSR.mtvec.write(
+        mtvec::trap_addr.val(_start_trap_vectored as extern "C" fn() -> ! as usize >> 2)
+            + mtvec::mode::Vectored,
+    )
 }
 
 // Mock implementation for crate tests that does not include the section
 // specifier, as the test will not use our linker script, and the host
 // compilation environment may not allow the section name.
 #[cfg(not(any(doc, all(target_arch = "riscv32", target_os = "none"))))]
-pub extern "C" fn _start_trap_vectored() {
+pub extern "C" fn _start_trap_vectored() -> ! {
     use core::hint::unreachable_unchecked;
     unsafe {
         unreachable_unchecked();

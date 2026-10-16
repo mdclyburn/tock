@@ -9,15 +9,15 @@ use core::marker::PhantomData;
 use core::ptr::addr_of;
 use kernel::platform::chip::{Chip, InterruptService};
 use kernel::utilities::registers::interfaces::{ReadWriteable, Readable, Writeable};
-use rv32i::csr::{mcause, mie::mie, mtvec::mtvec, CSR};
+use rv32i::csr::{CSR, mcause, mie::mie, mtvec::mtvec};
 use rv32i::pmp::{PMPUserMPU, TORUserPMP};
 use rv32i::syscall::SysCall;
 
 use crate::chip_config::EarlGreyConfig;
 use crate::interrupts;
 use crate::pinmux_config::EarlGreyPinmuxConfig;
-use crate::plic::Plic;
 use crate::plic::PLIC;
+use crate::plic::Plic;
 
 pub struct EarlGrey<
     'a,
@@ -138,13 +138,13 @@ impl<CFG: EarlGreyConfig, PINMUX: EarlGreyPinmuxConfig> InterruptService
 }
 
 impl<
-        'a,
-        const MPU_REGIONS: usize,
-        I: InterruptService + 'a,
-        CFG: EarlGreyConfig,
-        PINMUX: EarlGreyPinmuxConfig,
-        PMP: TORUserPMP<{ MPU_REGIONS }> + Display + 'static,
-    > EarlGrey<'a, MPU_REGIONS, I, CFG, PINMUX, PMP>
+    'a,
+    const MPU_REGIONS: usize,
+    I: InterruptService + 'a,
+    CFG: EarlGreyConfig,
+    PINMUX: EarlGreyPinmuxConfig,
+    PMP: TORUserPMP<{ MPU_REGIONS }> + Display + 'static,
+> EarlGrey<'a, MPU_REGIONS, I, CFG, PINMUX, PMP>
 {
     pub unsafe fn new(
         plic_interrupt_service: &'a I,
@@ -254,17 +254,19 @@ impl<
 }
 
 impl<
-        'a,
-        const MPU_REGIONS: usize,
-        I: InterruptService + 'a,
-        CFG: EarlGreyConfig,
-        PINMUX: EarlGreyPinmuxConfig,
-        PMP: TORUserPMP<{ MPU_REGIONS }> + Display + 'static,
-    > kernel::platform::chip::Chip for EarlGrey<'a, MPU_REGIONS, I, CFG, PINMUX, PMP>
+    'a,
+    const MPU_REGIONS: usize,
+    I: InterruptService + 'a,
+    CFG: EarlGreyConfig,
+    PINMUX: EarlGreyPinmuxConfig,
+    PMP: TORUserPMP<{ MPU_REGIONS }> + Display + 'static,
+> kernel::platform::chip::Chip for EarlGrey<'a, MPU_REGIONS, I, CFG, PINMUX, PMP>
 {
     type MPU = PMPUserMPU<MPU_REGIONS, PMP>;
     type UserspaceKernelBoundary = SysCall;
     type ThreadIdProvider = rv32i::thread_id::RiscvThreadIdProvider;
+
+    fn init() {}
 
     fn mpu(&self) -> &Self::MPU {
         &self.mpu
@@ -439,7 +441,8 @@ pub unsafe fn configure_trap_handler() {
 
     // The Ibex CPU does not support non-vectored trap entries.
     CSR.mtvec.write(
-        mtvec::trap_addr.val(_earlgrey_start_trap_vectored as usize >> 2) + mtvec::mode::Vectored,
+        mtvec::trap_addr.val(_earlgrey_start_trap_vectored as extern "C" fn() -> ! as usize >> 2)
+            + mtvec::mode::Vectored,
     );
 }
 
@@ -447,7 +450,7 @@ pub unsafe fn configure_trap_handler() {
 // specifier, as the test will not use our linker script, and the host
 // compilation environment may not allow the section name.
 #[cfg(not(any(doc, all(target_arch = "riscv32", target_os = "none"))))]
-pub extern "C" fn _earlgrey_start_trap_vectored() {
+pub extern "C" fn _earlgrey_start_trap_vectored() -> ! {
     use core::hint::unreachable_unchecked;
     unsafe {
         unreachable_unchecked();

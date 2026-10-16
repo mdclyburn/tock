@@ -6,12 +6,8 @@ use core::fmt::Write;
 use core::panic::PanicInfo;
 use core::str;
 use kernel::debug;
-use kernel::debug::IoWrite;
 use kernel::hil::led;
-
-use crate::CHIP;
-use crate::PROCESSES;
-use crate::PROCESS_PRINTER;
+use kernel::utilities::io_write::IoWrite;
 
 struct Writer {}
 
@@ -36,7 +32,7 @@ impl IoWrite for Writer {
 #[cfg(not(test))]
 #[panic_handler]
 pub unsafe fn panic_fmt(pi: &PanicInfo) -> ! {
-    use core::ptr::{addr_of, addr_of_mut};
+    use core::ptr::addr_of_mut;
 
     let led = sifive::gpio::GpioPin::new(
         e310_g003::gpio::GPIO0_BASE,
@@ -47,13 +43,11 @@ pub unsafe fn panic_fmt(pi: &PanicInfo) -> ! {
     let led = &mut led::LedLow::new(&led);
     let writer = &mut *addr_of_mut!(WRITER);
 
-    debug::panic(
+    debug::panic_old(
         &mut [led],
         writer,
         pi,
         &rv32i::support::nop,
-        PROCESSES.unwrap().as_slice(),
-        &*addr_of!(CHIP),
-        &*addr_of!(PROCESS_PRINTER),
+        crate::PANIC_RESOURCES.get(),
     )
 }

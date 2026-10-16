@@ -11,12 +11,11 @@ use kernel::platform::chip::InterruptService;
 use crate::clocks::Clocks;
 use crate::gpio::{RPPins, SIO};
 use crate::interrupts;
-use crate::resets::Resets;
 use crate::ticks::Ticks;
 use crate::timer::RPTimer;
 use crate::uart::Uart;
 use crate::xosc::Xosc;
-use cortexm33::{interrupt_mask, CortexM33, CortexMVariant};
+use cortexm33::{CortexM33, CortexMVariant, interrupt_mask};
 
 #[repr(u8)]
 pub enum Processor {
@@ -51,6 +50,20 @@ impl<I: InterruptService> Chip for Rp2350<'_, I> {
     type UserspaceKernelBoundary = cortexm33::syscall::SysCall;
     type ThreadIdProvider = cortexm33::thread_id::CortexMThreadIdProvider;
 
+    fn init() {
+        cortexm33::nvic::disable_all();
+        cortexm33::nvic::clear_all_pending();
+        let sio = crate::gpio::SIO::new();
+        let processor = sio.get_processor();
+        match processor {
+            crate::chip::Processor::Processor0 => {}
+            _ => panic!(
+                "Kernel should run only using processor 0 (now processor {})",
+                processor as u8
+            ),
+        }
+    }
+
     fn service_pending_interrupts(&self) {
         unsafe {
             let mask = match self.sio.get_processor() {
@@ -76,7 +89,7 @@ impl<I: InterruptService> Chip for Rp2350<'_, I> {
             Processor::Processor0 => self.processor0_interrupt_mask,
             Processor::Processor1 => self.processor1_interrupt_mask,
         };
-        unsafe { cortexm33::nvic::has_pending_with_mask(mask) }
+        cortexm33::nvic::has_pending_with_mask(mask)
     }
 
     fn mpu(&self) -> &Self::MPU {
@@ -106,9 +119,7 @@ impl<I: InterruptService> Chip for Rp2350<'_, I> {
 }
 
 pub struct Rp2350DefaultPeripherals<'a> {
-    pub clocks: Clocks,
     pub pins: RPPins<'a>,
-    pub resets: Resets,
     pub sio: SIO,
     pub ticks: Ticks,
     pub timer0: RPTimer<'a>,
@@ -118,22 +129,19 @@ pub struct Rp2350DefaultPeripherals<'a> {
 }
 
 impl Rp2350DefaultPeripherals<'_> {
-    pub fn new() -> Self {
+    pub fn new(clocks: &'static Clocks) -> Self {
         Self {
-            clocks: Clocks::new(),
             pins: RPPins::new(),
-            resets: Resets::new(),
             sio: SIO::new(),
             ticks: Ticks::new(),
             timer0: RPTimer::new_timer0(),
-            uart0: Uart::new_uart0(),
-            uart1: Uart::new_uart1(),
+            uart0: Uart::new_uart0(clocks),
+            uart1: Uart::new_uart1(clocks),
             xosc: Xosc::new(),
         }
     }
 
-    pub fn resolve_dependencies(&'static self) {
-        self.uart0.set_clocks(&self.clocks);
+    pub fn init(&'static self) {
         self.ticks.set_timer0_generator();
         self.ticks.set_timer1_generator();
         kernel::deferred_call::DeferredCallClient::register(&self.uart0);

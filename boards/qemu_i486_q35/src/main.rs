@@ -19,20 +19,22 @@ use core::ptr;
 use kernel::capabilities;
 use kernel::component::Component;
 use kernel::debug;
+use kernel::debug::PanicResources;
 use kernel::deferred_call::DeferredCallClient;
 use kernel::hil;
+use kernel::hil::keyboard::Keyboard;
 use kernel::ipc::IPC;
 use kernel::platform::chip::InterruptService;
 use kernel::platform::{KernelResources, SyscallDriverLookup};
-use kernel::process::ProcessArray;
-use kernel::scheduler::cooperative::CooperativeSched;
 use kernel::syscall::SyscallDriver;
 use kernel::utilities::cells::OptionalCell;
+use kernel::utilities::single_thread_value::SingleThreadValue;
 use kernel::{create_capability, static_init};
-use virtio::devices::virtio_rng::VirtIORng;
 use virtio::devices::VirtIODeviceType;
+use virtio::devices::virtio_rng::VirtIORng;
 use virtio_pci_x86::VirtIOPCIDevice;
-use x86::registers::bits32::paging::{PDEntry, PTEntry, PD, PT};
+use x86::dma_fence::X86DmaFence;
+use x86::registers::bits32::paging::{PD, PDEntry, PT, PTEntry};
 use x86::registers::irq;
 use x86_q35::pit::{Pit, RELOAD_1KHZ};
 use x86_q35::{Pc, PcDefaultPeripherals};
@@ -53,26 +55,23 @@ static MULTIBOOT_V1_HEADER: MultibootV1Header = MultibootV1Header::new(0);
 
 const NUM_PROCS: usize = 4;
 
-type ChipHw = Pc<'static, (), ()>;
+type ChipHw = Pc<'static, PcDefaultPeripherals, VirtioDevices>;
 type AlarmHw = Pit<'static, RELOAD_1KHZ>;
 type SchedulerTimerHw =
     components::virtual_scheduler_timer::VirtualSchedulerTimerComponentType<AlarmHw>;
+type ProcessPrinterInUse = capsules_system::process_printer::ProcessPrinterText;
 
-/// Static variables used by io.rs.
-static mut PROCESSES: Option<&'static ProcessArray<NUM_PROCS>> = None;
-
-// Reference to the chip for panic dumps
-static mut CHIP: Option<&'static ChipHw> = None;
-
-// Reference to the process printer for panic dumps.
-static mut PROCESS_PRINTER: Option<&'static capsules_system::process_printer::ProcessPrinterText> =
-    None;
+/// Resources for when a board panics used by io.rs.
+static PANIC_RESOURCES: SingleThreadValue<PanicResources<ChipHw, ProcessPrinterInUse>> =
+    SingleThreadValue::new();
 
 // How should the kernel respond when a process faults.
 const FAULT_RESPONSE: capsules_system::process_policies::PanicFaultPolicy =
     capsules_system::process_policies::PanicFaultPolicy {};
 
 kernel::stack_size! {0x1000}
+
+type SchedulerInUse = components::sched::cooperative::CooperativeComponentType;
 
 // Static allocations used for page tables
 //
@@ -120,6 +119,11 @@ fn init_virtio_dev(
     Some((int_line, dev))
 }
 
+kernel::declare_capability!(ProcessConsoleCap:
+    kernel::capabilities::ProcessManagementCapability,
+    kernel::capabilities::ProcessStartCapability
+);
+
 /// Provides interrupt servicing logic for Virtio devices which may or may not be present at
 /// runtime.
 struct VirtioDevices {
@@ -146,7 +150,7 @@ pub struct QemuI386Q35Platform {
         'static,
         { capsules_core::process_console::DEFAULT_COMMAND_HISTORY_LEN },
         VirtualMuxAlarm<'static, Pit<'static, RELOAD_1KHZ>>,
-        components::process_console::Capability,
+        ProcessConsoleCap,
     >,
     console: &'static Console<'static>,
     lldb: &'static capsules_core::low_level_debug::LowLevelDebug<
@@ -158,9 +162,9 @@ pub struct QemuI386Q35Platform {
         VirtualMuxAlarm<'static, Pit<'static, RELOAD_1KHZ>>,
     >,
     ipc: IPC<{ NUM_PROCS as u8 }>,
-    scheduler: &'static CooperativeSched<'static>,
+    scheduler: &'static SchedulerInUse,
     scheduler_timer: &'static SchedulerTimerHw,
-    rng: Option<&'static RngDriver<'static, VirtIORng<'static, 'static>>>,
+    rng: Option<&'static RngDriver<'static, VirtIORng<'static, 'static, X86DmaFence>>>,
 }
 
 impl SyscallDriverLookup for QemuI386Q35Platform {
@@ -201,7 +205,7 @@ impl<C: kernel::platform::chip::Chip> KernelResources<C> for QemuI386Q35Platform
         &()
     }
 
-    type Scheduler = CooperativeSched<'static>;
+    type Scheduler = SchedulerInUse;
     fn scheduler(&self) -> &Self::Scheduler {
         self.scheduler
     }
@@ -221,6 +225,19 @@ impl<C: kernel::platform::chip::Chip> KernelResources<C> for QemuI386Q35Platform
         &()
     }
 }
+
+impl kernel::hil::keyboard::KeyboardClient for QemuI386Q35Platform {
+    fn keys_pressed(&self, keys: &[(u16, bool)], result: Result<(), kernel::ErrorCode>) {
+        if result.is_ok() {
+            for (key, pressed) in keys {
+                if *pressed {
+                    kernel::debug!("Keyboard Key Pressed: {}", key);
+                }
+            }
+        }
+    }
+}
+
 // `allow(unsupported_calling_conventions)`: cdecl is not valid when testing
 // this code on an x86_64 machine. This avoids a warning until a more permanent
 // fix is decided. See: https://github.com/tock/tock/pull/4662
@@ -234,6 +251,12 @@ unsafe extern "cdecl" fn main() {
         <ChipHw as kernel::platform::chip::Chip>::ThreadIdProvider,
     >();
 
+    // Bind global variables to this thread.
+    let _ = PANIC_RESOURCES
+        .bind_to_thread::<<ChipHw as kernel::platform::chip::Chip>::ThreadIdProvider>(
+            PanicResources::new(),
+        );
+
     // Basic setup of the i486 platform
     // Allocate statics for default peripherals and build them via the chip helper
     let default_peripherals = unsafe {
@@ -246,6 +269,8 @@ unsafe extern "cdecl" fn main() {
                     (kernel::static_buf!(x86_q35::serial::SerialPort<'static>),),
                     (kernel::static_buf!(x86_q35::serial::SerialPort<'static>),),
                     kernel::static_buf!(x86_q35::vga_uart_driver::VgaText<'static>),
+                    kernel::static_buf!(x86_q35::ps2::Ps2Controller),
+                    kernel::static_buf!(x86_q35::keyboard::Ps2Keyboard<'static>),
                 ),
                 &mut *ptr::addr_of_mut!(PAGE_DIR),
             )
@@ -269,6 +294,9 @@ unsafe extern "cdecl" fn main() {
             ),
         )
     };
+    PANIC_RESOURCES.get().map(|resources| {
+        resources.chip.put(chip);
+    });
 
     // Acquire required capabilities
     let process_mgmt_cap = create_capability!(capabilities::ProcessManagementCapability);
@@ -278,10 +306,15 @@ unsafe extern "cdecl" fn main() {
     // Create an array to hold process references.
     let processes = components::process_array::ProcessArrayComponent::new()
         .finalize(components::process_array_component_static!(NUM_PROCS));
-    PROCESSES = Some(processes);
+    PANIC_RESOURCES.get().map(|resources| {
+        resources.processes.put(processes.as_slice());
+    });
 
     // Setup space to store the core kernel data structure.
     let board_kernel = static_init!(kernel::Kernel, kernel::Kernel::new(processes.as_slice()));
+
+    // We use the default x86 implementation of `DmaFence`:
+    let dma_fence = X86DmaFence::new();
 
     // ---------- QEMU-SYSTEM-I386 "Q35" MACHINE PERIPHERALS ----------
 
@@ -368,11 +401,12 @@ unsafe extern "cdecl" fn main() {
 
     // If there is a VirtIO EntropySource present, use the appropriate VirtIORng
     // driver and expose it to userspace though the RngDriver
-    let virtio_rng: Option<&'static VirtIORng> = if let Some(rng_dev) = virtio_rng_dev {
+    let virtio_rng: Option<&'static VirtIORng<X86DmaFence>> = if let Some(rng_dev) = virtio_rng_dev
+    {
+        use virtio::queues::Virtqueue;
         use virtio::queues::split_queue::{
             SplitVirtqueue, VirtqueueAvailableRing, VirtqueueDescriptors, VirtqueueUsedRing,
         };
-        use virtio::queues::Virtqueue;
         use virtio::transports::VirtIOTransport;
 
         // Initialize PCI transport driver
@@ -386,13 +420,13 @@ unsafe extern "cdecl" fn main() {
             static_init!(VirtqueueAvailableRing<1>, VirtqueueAvailableRing::default(),);
         let used_ring = static_init!(VirtqueueUsedRing<1>, VirtqueueUsedRing::default(),);
         let queue = static_init!(
-            SplitVirtqueue<1>,
-            SplitVirtqueue::new(descriptors, available_ring, used_ring),
+            SplitVirtqueue<1, X86DmaFence>,
+            SplitVirtqueue::new(descriptors, available_ring, used_ring, dma_fence),
         );
         queue.set_transport(transport);
 
         // VirtIO EntropySource device driver instantiation
-        let rng = static_init!(VirtIORng, VirtIORng::new(queue));
+        let rng = static_init!(VirtIORng<X86DmaFence>, VirtIORng::new(queue));
         DeferredCallClient::register(rng);
         queue.set_client(rng);
 
@@ -428,7 +462,9 @@ unsafe extern "cdecl" fn main() {
     // Create the process printer used in panic prints, etc.
     let process_printer = components::process_printer::ProcessPrinterTextComponent::new()
         .finalize(components::process_printer_text_component_static!());
-    PROCESS_PRINTER = Some(process_printer);
+    PANIC_RESOURCES.get().map(|resources| {
+        resources.printer.put(process_printer);
+    });
 
     // ProcessConsole stays on COM1 because we have no keyboard input yet.
     // As soon as keyboard support will be added, the process console
@@ -448,14 +484,21 @@ unsafe extern "cdecl" fn main() {
         mux_alarm,
         process_printer,
         None,
+        ProcessConsoleCap,
     )
     .finalize(components::process_console_component_static!(
-        Pit<'static, RELOAD_1KHZ>
+        Pit<'static, RELOAD_1KHZ>,
+        ProcessConsoleCap,
     ));
 
     // Setup the console.
-    let console = ConsoleComponent::new(board_kernel, console::DRIVER_NUM, console_uart_device)
-        .finalize(components::console_component_static!());
+    let console = ConsoleComponent::new(
+        board_kernel,
+        console::DRIVER_NUM,
+        console_uart_device,
+        create_capability!(capabilities::MemoryAllocationCapability),
+    )
+    .finalize(components::console_component_static!());
 
     // Create the debugger object that handles calls to `debug!()`.
     DebugWriterComponent::new::<<ChipHw as kernel::platform::chip::Chip>::ThreadIdProvider>(
@@ -468,6 +511,7 @@ unsafe extern "cdecl" fn main() {
         board_kernel,
         capsules_core::low_level_debug::DRIVER_NUM,
         uart_mux,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::low_level_debug_component_static!());
 
@@ -475,8 +519,15 @@ unsafe extern "cdecl" fn main() {
 
     // Userspace RNG driver over the VirtIO EntropySource
     let rng_driver = virtio_rng.map(|rng| {
-        components::rng::RngRandomComponent::new(board_kernel, capsules_core::rng::DRIVER_NUM, rng)
-            .finalize(components::rng_random_component_static!(VirtIORng))
+        components::rng::RngRandomComponent::new(
+            board_kernel,
+            capsules_core::rng::DRIVER_NUM,
+            rng,
+            create_capability!(capabilities::MemoryAllocationCapability),
+        )
+        .finalize(components::rng_random_component_static!(
+            VirtIORng<X86DmaFence>
+        ))
     });
 
     let scheduler = components::sched::cooperative::CooperativeComponent::new(processes)
@@ -488,23 +539,29 @@ unsafe extern "cdecl" fn main() {
                 AlarmHw
             ));
 
-    let platform = QemuI386Q35Platform {
-        pconsole,
-        console,
-        alarm,
-        lldb,
-        scheduler,
-        scheduler_timer,
-        rng: rng_driver,
-        ipc: kernel::ipc::IPC::new(
-            board_kernel,
-            kernel::ipc::DRIVER_NUM,
-            &memory_allocation_cap,
-        ),
-    };
+    let platform = static_init!(
+        QemuI386Q35Platform,
+        QemuI386Q35Platform {
+            pconsole,
+            console,
+            alarm,
+            lldb,
+            scheduler,
+            scheduler_timer,
+            rng: rng_driver,
+            ipc: kernel::ipc::IPC::new(
+                board_kernel,
+                kernel::ipc::DRIVER_NUM,
+                &memory_allocation_cap,
+            ),
+        }
+    );
 
     // Start the process console:
     let _ = platform.pconsole.start();
+
+    // Attach the keyboard button press callback to ourself.
+    default_peripherals.keyboard.set_client(platform);
 
     debug!("QEMU i486 \"Q35\" machine, initialization complete.");
     debug!("Entering main loop.");
@@ -542,5 +599,5 @@ unsafe extern "cdecl" fn main() {
         debug!("{:?}", err);
     });
 
-    board_kernel.kernel_loop(&platform, chip, Some(&platform.ipc), &main_loop_cap);
+    board_kernel.kernel_loop(platform, chip, Some(&platform.ipc), &main_loop_cap);
 }

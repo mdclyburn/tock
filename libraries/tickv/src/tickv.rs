@@ -394,7 +394,7 @@ impl<'a, C: FlashController<S>, const S: usize> TicKV<'a, C, S> {
         let package_length = HEADER_LENGTH + value.len();
         let object_length = HEADER_LENGTH + value.len() + CHECK_SUM_LEN;
 
-        if object_length > 0xFFF {
+        if object_length >= 0xFFF {
             return Err(ErrorCode::ObjectTooLarge);
         }
 
@@ -1102,10 +1102,8 @@ impl<'a, C: FlashController<S>, const S: usize> TicKV<'a, C, S> {
         };
 
         for i in start..num_region {
-            match self.garbage_collect_region(i, flash_freed) {
-                Ok(freed) => flash_freed += freed,
-                Err(e) => return Err(e),
-            }
+            let freed = self.garbage_collect_region(i, flash_freed)?;
+            flash_freed += freed
         }
 
         Ok(flash_freed)

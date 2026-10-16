@@ -5,12 +5,12 @@
 // todo: this module needs some polish
 
 use crate::registers::bits32::paging::{
-    PAddr, PDEntry, PTEntry, PTFlags, PD, PDFLAGS, PT, PTFLAGS,
+    PAddr, PD, PDEntry, PDFLAGS, PT, PTEntry, PTFLAGS, PTFlags,
 };
 use crate::registers::controlregs::{self, CR0, CR4};
 use crate::registers::tlb;
 use core::{cmp, fmt, mem};
-use kernel::platform::mpu::{Permissions, Region, MPU};
+use kernel::platform::mpu::{MPU, Permissions, Region};
 use kernel::utilities::cells::MapCell;
 use tock_registers::LocalRegisterCopy;
 
@@ -152,7 +152,7 @@ fn calc_page_index(memory_address: usize) -> usize {
 
 // It will calculate the required pages doing a round up to Page size.
 fn calc_alloc_pages(memory_size: usize) -> usize {
-    memory_size.next_multiple_of(PAGE_SIZE_4K) / PAGE_SIZE_4K
+    memory_size.div_ceil(PAGE_SIZE_4K)
 }
 
 impl<'a> PagingMPU<'a> {
@@ -274,7 +274,7 @@ impl<'a> PagingMPU<'a> {
 
 impl fmt::Display for PagingMPU<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Num_regions: {:?}, ...", self.num_regions,)
+        write!(f, "Num_regions: {:?}, ...", self.num_regions)
     }
 }
 
@@ -384,19 +384,14 @@ unsafe impl MPU for PagingMPU<'_> {
                 .page_information
                 .alloc_regions
                 .iter_mut()
-                .position(|r| r.is_none());
+                .position(|r| r.is_none())?;
 
-            match index {
-                Some(i) => {
-                    config.page_information.alloc_regions[i] = Some(AllocateRegion {
-                        flags_set: pages_attr,
-                        flags_clear: pages_clear,
-                        start_index_page: page_index,
-                        pages: pages_alloc_requested,
-                    });
-                }
-                None => return None,
-            }
+            config.page_information.alloc_regions[index] = Some(AllocateRegion {
+                flags_set: pages_attr,
+                flags_clear: pages_clear,
+                start_index_page: page_index,
+                pages: pages_alloc_requested,
+            });
 
             let last_page = page_index + pages_alloc_requested;
 

@@ -83,6 +83,7 @@ dependencies = [
 name = "capsules-system"
 version = "0.2.3-dev"
 dependencies = [
+ "capsules-core",
  "kernel",
  "tock-tbf",
 ]
@@ -200,6 +201,7 @@ dependencies = [
 name = "cortexv7m"
 version = "0.2.3-dev"
 dependencies = [
+ "cortexm",
  "kernel",
 ]
 
@@ -411,6 +413,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "flux-attrs"
+version = "0.1.0"
+source = "git+https://github.com/flux-rs/flux.git?rev=8256bd03c72f4ba4633ff969fac6c53928969edc#8256bd03c72f4ba4633ff969fac6c53928969edc"
+dependencies = [
+ "flux-attrs-impl",
+]
+
+[[package]]
+name = "flux-attrs-impl"
+version = "0.1.0"
+source = "git+https://github.com/flux-rs/flux.git?rev=8256bd03c72f4ba4633ff969fac6c53928969edc#8256bd03c72f4ba4633ff969fac6c53928969edc"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "flux-rs"
+version = "0.1.0"
+source = "git+https://github.com/flux-rs/flux.git?rev=8256bd03c72f4ba4633ff969fac6c53928969edc#8256bd03c72f4ba4633ff969fac6c53928969edc"
+dependencies = [
+ "flux-attrs",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -536,6 +564,7 @@ dependencies = [
 name = "kernel"
 version = "0.2.3-dev"
 dependencies = [
+ "flux-rs",
  "tock-cells",
  "tock-registers",
  "tock-tbf",
@@ -593,6 +622,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "lora_e5_mini"
+version = "0.2.3-dev"
+dependencies = [
+ "capsules-core",
+ "capsules-extra",
+ "capsules-system",
+ "components",
+ "cortexm4",
+ "kernel",
+ "stm32wle5jc",
+ "tock_build_scripts",
+]
+
+[[package]]
 name = "lora_things_plus"
 version = "0.2.3-dev"
 dependencies = [
@@ -613,6 +656,30 @@ version = "0.2.3-dev"
 dependencies = [
  "kernel",
  "rv32i",
+]
+
+[[package]]
+name = "lpc55s69-evk"
+version = "0.2.3-dev"
+dependencies = [
+ "capsules-core",
+ "capsules-system",
+ "components",
+ "cortexm33",
+ "enum_primitive",
+ "kernel",
+ "lpc55s6x",
+ "segger",
+ "tock_build_scripts",
+]
+
+[[package]]
+name = "lpc55s6x"
+version = "0.2.3-dev"
+dependencies = [
+ "cortexm33",
+ "enum_primitive",
+ "kernel",
 ]
 
 [[package]]
@@ -861,6 +928,7 @@ dependencies = [
  "ecdsa-sw",
  "kernel",
  "nrf52840",
+ "nrf52840dk-test-base",
  "nrf52_components",
  "segger",
  "tock-tbf",
@@ -878,6 +946,7 @@ dependencies = [
  "cortexm4",
  "kernel",
  "nrf52840",
+ "nrf52840dk-test-base",
  "nrf52_components",
  "segger",
  "tock_build_scripts",
@@ -894,9 +963,25 @@ dependencies = [
  "cortexm4",
  "kernel",
  "nrf52840",
+ "nrf52840dk-test-base",
  "nrf52_components",
  "segger",
  "tock_build_scripts",
+]
+
+[[package]]
+name = "nrf52840dk-test-base"
+version = "0.2.3-dev"
+dependencies = [
+ "capsules-core",
+ "capsules-extra",
+ "capsules-system",
+ "components",
+ "cortexm4",
+ "kernel",
+ "nrf52840",
+ "nrf52_components",
+ "segger",
 ]
 
 [[package]]
@@ -926,6 +1011,7 @@ dependencies = [
  "cortexm4",
  "kernel",
  "nrf52840",
+ "nrf52840dk-test-base",
  "nrf52_components",
  "segger",
  "tock_build_scripts",
@@ -949,7 +1035,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "nrf52840dk-test-sha256"
+version = "0.2.3-dev"
+dependencies = [
+ "capsules-core",
+ "capsules-extra",
+ "capsules-system",
+ "components",
+ "cortexm4",
+ "kernel",
+ "nrf52840",
+ "nrf52840dk-test-base",
+ "nrf52_components",
+ "segger",
+ "tock_build_scripts",
+]
+
+[[package]]
 name = "nrf52840dk-thread-tutorial"
+version = "0.2.3-dev"
+dependencies = [
+ "capsules-core",
+ "capsules-extra",
+ "capsules-system",
+ "components",
+ "kernel",
+ "nrf52840",
+ "nrf52840dk",
+ "tock_build_scripts",
+]
+
+[[package]]
+name = "nrf52840dk-userv-tutorial"
 version = "0.2.3-dev"
 dependencies = [
  "capsules-core",
@@ -998,6 +1115,15 @@ version = "0.2.3-dev"
 dependencies = [
  "enum_primitive",
  "kernel",
+ "nrf5x-unsafe",
+]
+
+[[package]]
+name = "nrf5x-unsafe"
+version = "0.2.3-dev"
+dependencies = [
+ "cortexm4f",
+ "kernel",
 ]
 
 [[package]]
@@ -1025,6 +1151,20 @@ dependencies = [
  "cortexm4",
  "kernel",
  "stm32f446re",
+ "tock_build_scripts",
+]
+
+[[package]]
+name = "nucleo_u545re_q"
+version = "0.2.3-dev"
+dependencies = [
+ "capsules-core",
+ "capsules-extra",
+ "capsules-system",
+ "components",
+ "cortexm33",
+ "kernel",
+ "stm32u545",
  "tock_build_scripts",
 ]
 
@@ -1108,6 +1248,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "proc-macro2"
+version = "1.0.101"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "89ae43fd86e4158d6db51ad8e2b80f313af9cc74f5c0e03ccb87de09998732de"
+dependencies = [
+ "unicode-ident",
+]
+
+[[package]]
+name = "psc3"
+version = "0.2.3-dev"
+dependencies = [
+ "cortexm33",
+ "enum_primitive",
+ "kernel",
+]
+
+[[package]]
+name = "psc3m5_evk"
+version = "0.2.3-dev"
+dependencies = [
+ "capsules-core",
+ "capsules-extra",
+ "capsules-system",
+ "components",
+ "cortexm33",
+ "kernel",
+ "psc3",
+ "tock_build_scripts",
+]
+
+[[package]]
 name = "psoc62xa"
 version = "0.2.3-dev"
 dependencies = [
@@ -1171,9 +1343,68 @@ name = "qemu_rv32_virt_chip"
 version = "0.2.3-dev"
 dependencies = [
  "kernel",
+ "qemu_virt_chip",
  "rv32i",
  "sifive",
  "virtio",
+]
+
+[[package]]
+name = "qemu_rv64_virt"
+version = "0.2.3-dev"
+dependencies = [
+ "capsules-core",
+ "capsules-extra",
+ "capsules-system",
+ "components",
+ "kernel",
+ "qemu_rv64_virt_chip",
+ "rv64i",
+ "sifive",
+ "tock_build_scripts",
+]
+
+[[package]]
+name = "qemu_rv64_virt-test-ci"
+version = "0.2.3-dev"
+dependencies = [
+ "capsules-core",
+ "capsules-extra",
+ "capsules-system",
+ "components",
+ "kernel",
+ "qemu_rv64_virt",
+ "qemu_rv64_virt_chip",
+ "rv64i",
+ "sifive",
+ "tock_build_scripts",
+]
+
+[[package]]
+name = "qemu_rv64_virt_chip"
+version = "0.2.3-dev"
+dependencies = [
+ "kernel",
+ "qemu_virt_chip",
+ "rv64i",
+ "sifive",
+ "virtio",
+]
+
+[[package]]
+name = "qemu_virt_chip"
+version = "0.2.3-dev"
+dependencies = [
+ "kernel",
+]
+
+[[package]]
+name = "quote"
+version = "1.0.41"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce25767e7b499d1b604768e7cde645d14cc8584231ea6b295e9c9eb22c02e1d1"
+dependencies = [
+ "proc-macro2",
 ]
 
 [[package]]
@@ -1209,6 +1440,22 @@ dependencies = [
  "enum_primitive",
  "kernel",
  "rp2350",
+ "tock_build_scripts",
+]
+
+[[package]]
+name = "raspberry_pi_pico_w"
+version = "0.2.3-dev"
+dependencies = [
+ "capsules-core",
+ "capsules-extra",
+ "capsules-system",
+ "components",
+ "cortexm0p",
+ "kernel",
+ "raspberry_pi_pico",
+ "rp2040",
+ "tock-firmware-cyw43",
  "tock_build_scripts",
 ]
 
@@ -1301,6 +1548,16 @@ dependencies = [
 
 [[package]]
 name = "rv32i"
+version = "0.2.3-dev"
+dependencies = [
+ "kernel",
+ "riscv",
+ "riscv-csr",
+ "tock-registers",
+]
+
+[[package]]
+name = "rv64i"
 version = "0.2.3-dev"
 dependencies = [
  "kernel",
@@ -1484,10 +1741,57 @@ dependencies = [
 ]
 
 [[package]]
+name = "stm32u545"
+version = "0.2.3-dev"
+dependencies = [
+ "cortexm33",
+ "kernel",
+ "stm32u5xx",
+]
+
+[[package]]
+name = "stm32u5xx"
+version = "0.2.3-dev"
+dependencies = [
+ "cortexm33",
+ "kernel",
+]
+
+[[package]]
+name = "stm32wle5jc"
+version = "0.2.3-dev"
+dependencies = [
+ "cortexm4",
+ "enum_primitive",
+ "kernel",
+ "stm32wle5xx",
+]
+
+[[package]]
+name = "stm32wle5xx"
+version = "0.2.3-dev"
+dependencies = [
+ "cortexm4",
+ "enum_primitive",
+ "kernel",
+]
+
+[[package]]
 name = "subtle"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6bdef32e8150c2a081110b42772ffe7d7c9032b606bc226c8260fd97e0976601"
+
+[[package]]
+name = "syn"
+version = "2.0.110"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a99801b5bd34ede4cf3fc688c5919368fea4e4814a4664359503e6015b280aea"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
 
 [[package]]
 name = "teensy40"
@@ -1512,6 +1816,11 @@ name = "tock-cells"
 version = "0.1.0"
 
 [[package]]
+name = "tock-firmware-cyw43"
+version = "0.1.0"
+source = "git+https://github.com/tock/firmware.git#86ad8b00315dc5f44593722ece80ad077d7ebdb7"
+
+[[package]]
 name = "tock-registers"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1530,6 +1839,12 @@ name = "typenum"
 version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1dccffe3ce07af9386bfd29e80c0ab1a8205a2fc34e4bcd40364df902cfa8f3f"
+
+[[package]]
+name = "unicode-ident"
+version = "1.0.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f63a545481291138910575129486daeaf8ac54aee4387fe7906919f7830c7d9d"
 
 [[package]]
 name = "universal-hash"

@@ -87,6 +87,8 @@ Support for wireless radios, network stacks and related infrastructure.
 - **[Ethernet Tap Driver](src/ethernet_tap.rs)**: Forwarding raw IEEE
   802.3 Ethernet frames from / to userspace. Useful for running
   network stacks in userspace.
+- **[WiFi Driver](src/wifi)**: Support for WiFi devices.
+- **[CYW4343x Driver](src/cyw4343)**: Support for Infineon CYW4343x WiFi chips.
 
 Libraries
 ---------
@@ -140,7 +142,7 @@ These provide common and better abstractions for userspace.
 - **[Read Only State](src/read_only_state.rs)**: Read-only state sharing.
 - **[Screen](src/screen/screen.rs)**: Displays and screens.
 - **[Screen Shared](src/screen/screen_shared.rs)**: App-specific screen windows.
-- **[SHA](src/sha.rs)**: SHA hashes.
+- **[SHA](src/sha256_driver.rs)**: SHA256 hashes.
 - **[Sound Pressure](src/sound_pressure.rs)**: Query sound pressure levels.
 - **[Temperature](src/temperature.rs)**: Query temperature sensors.
 - **[Text Screen](src/text_screen.rs)**: Text-based displays.
@@ -180,7 +182,7 @@ Other capsules that implement reusable logic.
 - **[Log Storage](src/log.rs)**: Log storage abstraction on flash devices.
 - **[Nonvolatile to Pages](src/nonvolatile_to_pages.rs)**: Map arbitrary reads
   and writes to flash pages.
-- **[Screen Adapters](src/screen/screen_adapters.rs)**: Adapters to convert
+- **[Screen Adapters](src/screen/screen_adapters)**: Adapters to convert
   pixel formats for implementations of the `Screen` HIL, such as
   `ScreenARGB8888ToMono8BitPage`.
 - **[Screen On Led](src/screen/screen_on_led.rs)**: Draw fake LEDs on the screen.

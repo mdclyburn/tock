@@ -6,11 +6,11 @@
 
 use core::cell::Cell;
 use core::ops::{Index, IndexMut};
+use kernel::ErrorCode;
 use kernel::deferred_call::{DeferredCall, DeferredCallClient};
 use kernel::hil;
 use kernel::utilities::cells::OptionalCell;
 use kernel::utilities::cells::TakeCell;
-use kernel::ErrorCode;
 
 pub const PAGE_SIZE: usize = 8 * 1024;
 pub const FLASH_INSTANCE_SIZE: usize = 512 * 1024;
@@ -26,7 +26,10 @@ enum FlashInstance {
     MAIN0 = 0,
     MAIN1 = 1,
 }
-
+/// A flash page aligned for use with the Apollo3 ROM flash programming API.
+///
+/// `flash_program_main` requires its source buffer to be word-aligned.
+#[repr(C, align(4))]
 pub struct Apollo3Page(pub [u8; PAGE_SIZE]);
 
 impl Default for Apollo3Page {
@@ -241,7 +244,10 @@ impl hil::flash::Flash for FlashCtrl<'_> {
         let addr = (page_number * PAGE_SIZE) as u32;
         let addr_ptr = addr as *mut u32;
 
-        let source_ptr = buf.0.as_mut_ptr() as *mut u32;
+        // flash_program_main takes a *mut u32 but buf.0 is a [u8; _], so we need to cast the
+        // source pointer.
+        let source_ptr: *mut u8 = buf.0.as_mut_ptr();
+        let source_ptr: *mut u32 = source_ptr.cast();
 
         let ret = unsafe {
             flash_program_main(

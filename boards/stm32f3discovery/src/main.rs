@@ -14,17 +14,17 @@ use core::ptr::addr_of_mut;
 
 use capsules_core::virtualizers::virtual_alarm::VirtualMuxAlarm;
 use capsules_extra::lsm303xx;
-use capsules_system::process_printer::ProcessPrinterText;
 use components::gpio::GpioComponent;
 use kernel::capabilities;
 use kernel::component::Component;
+use kernel::debug::PanicResources;
 use kernel::hil::gpio::Configure;
 use kernel::hil::gpio::Output;
 use kernel::hil::led::LedHigh;
 use kernel::hil::time::Counter;
+use kernel::platform::chip::Chip;
 use kernel::platform::{KernelResources, SyscallDriverLookup};
-use kernel::process::ProcessArray;
-use kernel::scheduler::round_robin::RoundRobinSched;
+use kernel::utilities::single_thread_value::SingleThreadValue;
 use kernel::{create_capability, debug, static_init};
 use stm32f303xc::chip::Stm32f3xxDefaultPeripherals;
 use stm32f303xc::wdt;
@@ -40,14 +40,11 @@ mod virtual_uart_rx_test;
 const NUM_PROCS: usize = 4;
 
 type ChipHw = stm32f303xc::chip::Stm32f3xx<'static, Stm32f3xxDefaultPeripherals<'static>>;
+type ProcessPrinterInUse = capsules_system::process_printer::ProcessPrinterText;
 
-/// Static variables used by io.rs.
-static mut PROCESSES: Option<&'static ProcessArray<NUM_PROCS>> = None;
-
-// Static reference to chip for panic dumps.
-static mut CHIP: Option<&'static ChipHw> = None;
-// Static reference to process printer for panic dumps.
-static mut PROCESS_PRINTER: Option<&'static ProcessPrinterText> = None;
+/// Resources for when a board panics used by io.rs.
+static PANIC_RESOURCES: SingleThreadValue<PanicResources<ChipHw, ProcessPrinterInUse>> =
+    SingleThreadValue::new();
 
 // How should the kernel respond when a process faults.
 const FAULT_RESPONSE: capsules_system::process_policies::PanicFaultPolicy =
@@ -62,6 +59,8 @@ type L3GD20Sensor = components::l3gd20::L3gd20ComponentType<
     >,
 >;
 type TemperatureDriver = components::temperature::TemperatureComponentType<L3GD20Sensor>;
+
+type SchedulerInUse = components::sched::round_robin::RoundRobinComponentType;
 
 /// A structure representing this platform that holds references to all
 /// capsules for this platform.
@@ -93,7 +92,7 @@ struct STM32F3Discovery {
     nonvolatile_storage:
         &'static capsules_extra::nonvolatile_storage_driver::NonvolatileStorage<'static>,
 
-    scheduler: &'static RoundRobinSched<'static>,
+    scheduler: &'static SchedulerInUse,
     systick: cortexm4::systick::SysTick,
     watchdog: &'static wdt::WindoWdg<'static>,
 }
@@ -135,7 +134,7 @@ impl
     type SyscallDriverLookup = Self;
     type SyscallFilter = ();
     type ProcessFault = ();
-    type Scheduler = RoundRobinSched<'static>;
+    type Scheduler = SchedulerInUse;
     type SchedulerTimer = cortexm4::systick::SysTick;
     type WatchDog = wdt::WindoWdg<'static>;
     type ContextSwitchCallback = ();
@@ -374,12 +373,18 @@ unsafe fn start() -> (
     STM32F3Discovery,
     &'static stm32f303xc::chip::Stm32f3xx<'static, Stm32f3xxDefaultPeripherals<'static>>,
 ) {
-    stm32f303xc::init();
+    ChipHw::init();
 
     // Initialize deferred calls very early.
     kernel::deferred_call::initialize_deferred_call_state::<
         <ChipHw as kernel::platform::chip::Chip>::ThreadIdProvider,
     >();
+
+    // Bind global variables to this thread.
+    let _ = PANIC_RESOURCES
+        .bind_to_thread::<<ChipHw as kernel::platform::chip::Chip>::ThreadIdProvider>(
+            PanicResources::new(),
+        );
 
     // We use the default HSI 8Mhz clock
     let rcc = static_init!(stm32f303xc::rcc::Rcc, stm32f303xc::rcc::Rcc::new());
@@ -411,7 +416,9 @@ unsafe fn start() -> (
     // Create an array to hold process references.
     let processes = components::process_array::ProcessArrayComponent::new()
         .finalize(components::process_array_component_static!(NUM_PROCS));
-    PROCESSES = Some(processes);
+    PANIC_RESOURCES.get().map(|resources| {
+        resources.processes.put(processes.as_slice());
+    });
 
     // Setup space to store the core kernel data structure.
     let board_kernel = static_init!(kernel::Kernel, kernel::Kernel::new(processes.as_slice()));
@@ -420,7 +427,9 @@ unsafe fn start() -> (
         stm32f303xc::chip::Stm32f3xx<Stm32f3xxDefaultPeripherals>,
         stm32f303xc::chip::Stm32f3xx::new(peripherals)
     );
-    CHIP = Some(chip);
+    PANIC_RESOURCES.get().map(|resources| {
+        resources.chip.put(chip);
+    });
 
     // UART
 
@@ -446,6 +455,7 @@ unsafe fn start() -> (
         board_kernel,
         capsules_core::console::DRIVER_NUM,
         uart_mux,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::console_component_static!());
     // Create the debugger object that handles calls to `debug!()`.
@@ -528,9 +538,10 @@ unsafe fn start() -> (
                 kernel::hil::gpio::FloatingState::PullNone
             )
         ),
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::button_component_static!(
-        stm32f303xc::gpio::Pin<'static>
+        stm32f303xc::gpio::Pin<'static>,
     ));
 
     // ALARM
@@ -544,6 +555,7 @@ unsafe fn start() -> (
         board_kernel,
         capsules_core::alarm::DRIVER_NUM,
         mux_alarm,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::alarm_component_static!(stm32f303xc::tim2::Tim2));
 
@@ -646,9 +658,10 @@ unsafe fn start() -> (
             85 => gpio_ports.get_pin(stm32f303xc::gpio::PinId::PA09).unwrap(),
             86 => gpio_ports.get_pin(stm32f303xc::gpio::PinId::PC09).unwrap()
         ),
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::gpio_component_static!(
-        stm32f303xc::gpio::Pin<'static>
+        stm32f303xc::gpio::Pin<'static>,
     ));
 
     // L3GD20 sensor
@@ -660,6 +673,7 @@ unsafe fn start() -> (
         gpio_ports.get_pin(stm32f303xc::gpio::PinId::PE03).unwrap(),
         board_kernel,
         capsules_extra::l3gd20::DRIVER_NUM,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::l3gd20_component_static!(
         // spi type
@@ -673,6 +687,7 @@ unsafe fn start() -> (
         board_kernel,
         capsules_extra::temperature::DRIVER_NUM,
         l3gd20,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::temperature_component_static!(L3GD20Sensor));
 
@@ -687,6 +702,7 @@ unsafe fn start() -> (
         None,
         board_kernel,
         capsules_extra::lsm303dlhc::DRIVER_NUM,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::lsm303dlhc_component_static!(
         stm32f303xc::i2c::I2C
@@ -707,6 +723,7 @@ unsafe fn start() -> (
     let ninedof = components::ninedof::NineDofComponent::new(
         board_kernel,
         capsules_extra::ninedof::DRIVER_NUM,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::ninedof_component_static!(l3gd20, lsm303dlhc));
 
@@ -753,14 +770,17 @@ unsafe fn start() -> (
         components::adc::AdcComponent::new(adc_mux, stm32f303xc::adc::Channel::Channel5)
             .finalize(components::adc_component_static!(stm32f303xc::adc::Adc));
 
-    let adc_syscall =
-        components::adc::AdcVirtualComponent::new(board_kernel, capsules_core::adc::DRIVER_NUM)
-            .finalize(components::adc_syscall_component_helper!(
-                adc_channel_2,
-                adc_channel_3,
-                adc_channel_4,
-                adc_channel_5,
-            ));
+    let adc_syscall = components::adc::AdcVirtualComponent::new(
+        board_kernel,
+        capsules_core::adc::DRIVER_NUM,
+        create_capability!(capabilities::MemoryAllocationCapability),
+    )
+    .finalize(components::adc_syscall_component_helper!(
+        adc_channel_2,
+        adc_channel_3,
+        adc_channel_4,
+        adc_channel_5,
+    ));
 
     // Kernel storage region, allocated with the storage_volume!
     // macro in common/utils.rs
@@ -778,6 +798,7 @@ unsafe fn start() -> (
         0x8000,     // Length of userspace accesible region (16 pages)
         core::ptr::addr_of!(_sstorage) as usize,
         core::ptr::addr_of!(_estorage) as usize - core::ptr::addr_of!(_sstorage) as usize,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::nonvolatile_storage_component_static!(
         stm32f303xc::flash::Flash
@@ -785,18 +806,26 @@ unsafe fn start() -> (
 
     let process_printer = components::process_printer::ProcessPrinterTextComponent::new()
         .finalize(components::process_printer_text_component_static!());
-    PROCESS_PRINTER = Some(process_printer);
+    PANIC_RESOURCES.get().map(|resources| {
+        resources.printer.put(process_printer);
+    });
 
     // PROCESS CONSOLE
+    kernel::declare_capability!(ProcessConsoleCap:
+        kernel::capabilities::ProcessManagementCapability,
+        kernel::capabilities::ProcessStartCapability
+    );
     let process_console = components::process_console::ProcessConsoleComponent::new(
         board_kernel,
         uart_mux,
         mux_alarm,
         process_printer,
         Some(cortexm4::support::reset),
+        ProcessConsoleCap,
     )
     .finalize(components::process_console_component_static!(
-        stm32f303xc::tim2::Tim2
+        stm32f303xc::tim2::Tim2,
+        ProcessConsoleCap
     ));
     let _ = process_console.start();
 

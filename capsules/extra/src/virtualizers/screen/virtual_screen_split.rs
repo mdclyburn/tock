@@ -9,12 +9,12 @@
 //! settings (e.g., brightness).
 
 use core::cell::Cell;
+use kernel::ErrorCode;
 use kernel::collections::list::{List, ListLink, ListNode};
 use kernel::deferred_call::{DeferredCall, DeferredCallClient};
 use kernel::hil;
 use kernel::utilities::cells::OptionalCell;
 use kernel::utilities::leasable_buffer::SubSliceMut;
-use kernel::ErrorCode;
 
 /// Pending asynchronous screen operation from a user.
 enum ScreenSplitOperation {
@@ -60,8 +60,8 @@ pub struct ScreenSplitUser<'a, S: hil::screen::Screen<'a>> {
     /// The frame inside of the split that is active. Defaults to the entire
     /// frame.
     write_frame: Cell<Frame>,
-    /// What operation this section would like to do.[`ScreenSplitSection`] sets
-    /// its intended operation here and then asks the [`ScreenSplit`] to
+    /// What operation this section would like to do.[`ScreenSplitUser`] sets
+    /// its intended operation here and then asks the [`ScreenSplitMux`] to
     /// execute it.
     pending: OptionalCell<ScreenSplitOperation>,
     /// Screen client.

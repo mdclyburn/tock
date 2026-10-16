@@ -29,6 +29,7 @@ pub enum NUM {
     Ipc                   = 0x10000,
     AppLoader             = 0x10001,
     ProcessInfo           = 0x10002,
+    UserspaceServices     = 0x10003,
 
     // userv
     UservCrypto           = 0x10800,
@@ -50,6 +51,7 @@ pub enum NUM {
     Thread                = 0x30005,
     Eui64                 = 0x30006,
     EthernetTap           = 0x30007,
+    Wifi                  = 0x30008,
     Isle                  = 0x30999,
 
     // Cryptography

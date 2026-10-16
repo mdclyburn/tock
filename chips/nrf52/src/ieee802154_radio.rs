@@ -65,14 +65,14 @@
 
 use crate::timer::TimerAlarm;
 use core::cell::Cell;
+use kernel::ErrorCode;
 use kernel::deferred_call::{DeferredCall, DeferredCallClient};
 use kernel::hil::radio::{self, PowerClient, RadioChannel, RadioConfig, RadioData};
 use kernel::hil::time::{Alarm, AlarmClient, Time};
+use kernel::utilities::StaticRef;
 use kernel::utilities::cells::{OptionalCell, TakeCell};
 use kernel::utilities::registers::interfaces::{Readable, Writeable};
-use kernel::utilities::registers::{register_bitfields, ReadOnly, ReadWrite, WriteOnly};
-use kernel::utilities::StaticRef;
-use kernel::ErrorCode;
+use kernel::utilities::registers::{ReadOnly, ReadWrite, WriteOnly, register_bitfields};
 
 use crate::constants::TxPower;
 
@@ -1271,7 +1271,7 @@ impl<'a> kernel::hil::radio::RadioConfig<'a> for Radio<'a> {
     }
 
     //#################################################
-    /// Accessors
+    // Accessors
     //#################################################
 
     fn get_address(&self) -> u16 {
@@ -1298,7 +1298,7 @@ impl<'a> kernel::hil::radio::RadioConfig<'a> for Radio<'a> {
     }
 
     //#################################################
-    /// Mutators
+    // Mutators
     //#################################################
 
     fn set_address(&self, addr: u16) {

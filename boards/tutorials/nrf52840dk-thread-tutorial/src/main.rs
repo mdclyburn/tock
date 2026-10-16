@@ -8,8 +8,6 @@
 #![no_main]
 #![deny(missing_docs)]
 
-use core::ptr::addr_of;
-
 use kernel::component::Component;
 use kernel::platform::{KernelResources, SyscallDriverLookup};
 use kernel::{capabilities, create_capability, static_init};
@@ -108,11 +106,14 @@ pub unsafe fn main() {
     let (board_kernel, base_platform, chip, nrf52840_peripherals, _mux_alarm) =
         nrf52840dk_lib::start();
 
+    // Get FICR instance to read chip properties.
+    let ficr = nrf52840::ficr::Ficr::new();
+
     //--------------------------------------------------------------------------
     // RAW 802.15.4
     //--------------------------------------------------------------------------
 
-    let device_id = (*addr_of!(nrf52840::ficr::FICR_INSTANCE)).id();
+    let device_id = ficr.id();
 
     let eui64 = components::eui64::Eui64Component::new(u64::from_le_bytes(device_id))
         .finalize(components::eui64_component_static!());
@@ -121,6 +122,7 @@ pub unsafe fn main() {
         board_kernel,
         capsules_extra::ieee802154::DRIVER_NUM,
         &nrf52840_peripherals.ieee802154_radio,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::ieee802154_raw_component_static!(
         nrf52840::ieee802154_radio::Radio,
@@ -177,9 +179,9 @@ pub unsafe fn main() {
     //--------------------------------------------------------------------------
     // AES Encryption Oracle
     //--------------------------------------------------------------------------
-    // const CRYPT_SIZE: usize = 7 * kernel::hil::symmetric_encryption::AES128_BLOCK_SIZE;
-    // let aes_src_buffer = kernel::static_init!([u8; 16], [0; 16]);
-    // let aes_dst_buffer = kernel::static_init!([u8; CRYPT_SIZE], [0; CRYPT_SIZE]);
+    const CRYPT_SIZE: usize = 7 * kernel::hil::symmetric_encryption::AES_BLOCK_SIZE;
+    let aes_src_buffer = kernel::static_init!([u8; 16], [0; 16]);
+    let aes_dst_buffer = kernel::static_init!([u8; CRYPT_SIZE], [0; CRYPT_SIZE]);
 
     // let encryption_oracle = static_init!(
     //     AES128CTREncryptionOracleDriver,
@@ -209,8 +211,8 @@ pub unsafe fn main() {
     let i2c_bus = components::i2c::I2CMuxComponent::new(&nrf52840_peripherals.nrf52.twi1, None)
         .finalize(components::i2c_mux_component_static!(nrf52840::i2c::TWI));
     nrf52840_peripherals.nrf52.twi1.configure(
-        nrf52840::pinmux::Pinmux::new(SCREEN_I2C_SCL_PIN as u32),
-        nrf52840::pinmux::Pinmux::new(SCREEN_I2C_SDA_PIN as u32),
+        nrf52840::pinmux::Pinmux::new(SCREEN_I2C_SCL_PIN),
+        nrf52840::pinmux::Pinmux::new(SCREEN_I2C_SDA_PIN),
     );
     nrf52840_peripherals
         .nrf52
@@ -235,6 +237,7 @@ pub unsafe fn main() {
         capsules_extra::screen::screen::DRIVER_NUM,
         ssd1306_sh1106,
         None,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::screen_component_static!(1032));
 
@@ -252,7 +255,8 @@ pub unsafe fn main() {
         capsules_extra::isolated_nonvolatile_storage_driver::DRIVER_NUM,
         &nrf52840_peripherals.nrf52.nvmc,
         core::ptr::addr_of!(APP_STORAGE) as usize,
-        APP_STORAGE.len()
+        APP_STORAGE.len(),
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::isolated_nonvolatile_storage_component_static!(
         nrf52840::nvmc::Nvmc,
@@ -293,14 +297,18 @@ pub unsafe fn main() {
     // STORAGE PERMISSIONS
     //--------------------------------------------------------------------------
 
+    kernel::declare_capability!(AppStoreCap: kernel::capabilities::ApplicationStorageCapability);
     let storage_permissions_policy =
-        components::storage_permissions::individual::StoragePermissionsIndividualComponent::new()
-            .finalize(
-                components::storage_permissions_individual_component_static!(
-                    nrf52840::chip::NRF52<Nrf52840DefaultPeripherals>,
-                    kernel::process::ProcessStandardDebugFull,
-                ),
-            );
+        components::storage_permissions::individual::StoragePermissionsIndividualComponent::new(
+            AppStoreCap,
+        )
+        .finalize(
+            components::storage_permissions_individual_component_static!(
+                nrf52840::chip::NRF52<Nrf52840DefaultPeripherals>,
+                kernel::process::ProcessStandardDebugFull,
+                AppStoreCap,
+            ),
+        );
 
     //--------------------------------------------------------------------------
     // PROCESS LOADING
@@ -337,6 +345,7 @@ pub unsafe fn main() {
         storage_permissions_policy,
         app_flash,
         app_memory,
+        create_capability!(capabilities::ProcessManagementCapability),
     )
     .finalize(components::process_loader_sequential_component_static!(
         nrf52840::chip::NRF52<Nrf52840DefaultPeripherals>,

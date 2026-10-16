@@ -7,12 +7,12 @@
 use core::cell::Cell;
 use core::cmp;
 use core::ptr::addr_of;
+use kernel::ErrorCode;
 use kernel::hil;
+use kernel::utilities::StaticRef;
 use kernel::utilities::cells::{OptionalCell, TakeCell, VolatileCell};
 use kernel::utilities::registers::interfaces::{Readable, Writeable};
-use kernel::utilities::registers::{register_bitfields, ReadOnly, ReadWrite, WriteOnly};
-use kernel::utilities::StaticRef;
-use kernel::ErrorCode;
+use kernel::utilities::registers::{ReadOnly, ReadWrite, WriteOnly, register_bitfields};
 
 #[repr(C)]
 struct AdcRegisters {
@@ -399,7 +399,9 @@ impl Adc<'_> {
                     self.setup_sample_count(1);
 
                     // Where to put the reading.
-                    self.registers.result_ptr.set(addr_of!(SAMPLE) as *const _);
+                    let sample: *const [u16; 1] = addr_of!(SAMPLE);
+                    let sample: *const u16 = sample.cast();
+                    self.registers.result_ptr.set(sample);
 
                     // No automatic sampling, will trigger manually.
                     self.registers.samplerate.write(SAMPLERATE::MODE::Task);
@@ -580,7 +582,9 @@ impl<'a> hil::adc::Adc<'a> for Adc<'a> {
             .result_maxcnt
             .write(RESULT_MAXCNT::MAXCNT.val(1));
         // Where to put the reading.
-        self.registers.result_ptr.set(addr_of!(SAMPLE) as *const _);
+        let sample: *const [u16; 1] = addr_of!(SAMPLE);
+        let sample: *const u16 = sample.cast();
+        self.registers.result_ptr.set(sample);
 
         // No automatic sampling, will trigger manually.
         self.registers.samplerate.write(SAMPLERATE::MODE::Task);

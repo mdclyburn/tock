@@ -20,7 +20,7 @@ use nrf52840::gpio::Pin;
 const FAULT_RESPONSE: capsules_system::process_policies::PanicFaultPolicy =
     capsules_system::process_policies::PanicFaultPolicy {};
 
-const CRYPT_SIZE: usize = 7 * kernel::hil::symmetric_encryption::AES128_BLOCK_SIZE;
+const CRYPT_SIZE: usize = 7 * kernel::hil::symmetric_encryption::AES_BLOCK_SIZE;
 
 // Screen
 type ScreenDriver = components::screen::ScreenComponentType;
@@ -101,8 +101,8 @@ pub unsafe fn main() {
     let i2c_bus = components::i2c::I2CMuxComponent::new(&nrf52840_peripherals.nrf52.twi1, None)
         .finalize(components::i2c_mux_component_static!(nrf52840::i2c::TWI));
     nrf52840_peripherals.nrf52.twi1.configure(
-        nrf52840::pinmux::Pinmux::new(SCREEN_I2C_SCL_PIN as u32),
-        nrf52840::pinmux::Pinmux::new(SCREEN_I2C_SDA_PIN as u32),
+        nrf52840::pinmux::Pinmux::new(SCREEN_I2C_SCL_PIN),
+        nrf52840::pinmux::Pinmux::new(SCREEN_I2C_SDA_PIN),
     );
     nrf52840_peripherals
         .nrf52
@@ -127,6 +127,7 @@ pub unsafe fn main() {
         capsules_extra::screen::screen::DRIVER_NUM,
         ssd1306_sh1106,
         None,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::screen_component_static!(1032));
 
@@ -155,7 +156,7 @@ pub unsafe fn main() {
         ),
     );
 
-    kernel::hil::symmetric_encryption::AES128::set_client(&nrf52840_peripherals.nrf52.ecb, oracle);
+    kernel::hil::symmetric_encryption::AES::set_client(&nrf52840_peripherals.nrf52.ecb, oracle);
 
     //--------------------------------------------------------------------------
     // PLATFORM SETUP, SCHEDULER, AND START KERNEL LOOP

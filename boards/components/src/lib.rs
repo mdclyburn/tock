@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 // Copyright Tock Contributors 2022.
 
+#![forbid(unsafe_code)]
 #![no_std]
 
 pub mod adc;
@@ -22,6 +23,7 @@ pub mod bmp280;
 pub mod bus;
 pub mod button;
 pub mod button_keyboard;
+pub mod buzzer;
 pub mod can;
 pub mod ccs811;
 pub mod cdc;
@@ -29,6 +31,7 @@ pub mod chirp_i2c_moisture;
 pub mod console;
 pub mod crc;
 pub mod ctap;
+pub mod cyw4343;
 pub mod dac;
 pub mod date_time;
 pub mod debug_writer;
@@ -111,3 +114,4 @@ pub mod udp_driver;
 pub mod udp_mux;
 pub mod usb;
 pub mod virtual_scheduler_timer;
+pub mod wifi;

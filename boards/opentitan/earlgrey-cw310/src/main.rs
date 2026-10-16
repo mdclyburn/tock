@@ -12,7 +12,6 @@
 #![test_runner(test_runner)]
 #![reexport_test_harness_main = "test_main"]
 
-use crate::hil::symmetric_encryption::AES128_BLOCK_SIZE;
 use crate::otbn::OtbnComponent;
 use crate::pinmux_layout::BoardPinmuxLayout;
 use capsules_aes_gcm::aes_gcm;
@@ -24,17 +23,17 @@ use earlgrey::chip_config::EarlGreyConfig;
 use earlgrey::pinmux_config::EarlGreyPinmuxConfig;
 use kernel::capabilities;
 use kernel::component::Component;
+use kernel::debug::PanicResources;
 use kernel::hil;
 use kernel::hil::entropy::Entropy32;
 use kernel::hil::hasher::Hasher;
 use kernel::hil::i2c::I2CMaster;
 use kernel::hil::led::LedHigh;
 use kernel::hil::rng::Rng;
-use kernel::hil::symmetric_encryption::AES128;
+use kernel::hil::symmetric_encryption::{AES, AES_BLOCK_SIZE, AES128};
 use kernel::platform::{KernelResources, SyscallDriverLookup};
-use kernel::process::ProcessArray;
-use kernel::scheduler::priority::PrioritySched;
 use kernel::utilities::registers::interfaces::ReadWriteable;
+use kernel::utilities::single_thread_value::SingleThreadValue;
 use kernel::{create_capability, debug, static_init};
 use lowrisc::flash_ctrl::FlashMPConfig;
 use rv32i::csr;
@@ -108,9 +107,11 @@ type ChipHw = EarlGreyChip;
 type AlarmHw = earlgrey::timer::RvTimer<'static, ChipConfig>;
 type SchedulerTimerHw =
     components::virtual_scheduler_timer::VirtualSchedulerTimerComponentType<AlarmHw>;
+type ProcessPrinterInUse = capsules_system::process_printer::ProcessPrinterText;
 
-/// Static variables used by io.rs.
-static mut PROCESSES: Option<&'static ProcessArray<NUM_PROCS>> = None;
+/// Resources for when a board panics used by io.rs.
+static PANIC_RESOURCES: SingleThreadValue<PanicResources<ChipHw, ProcessPrinterInUse>> =
+    SingleThreadValue::new();
 
 // Test access to the peripherals
 #[cfg(test)]
@@ -157,15 +158,17 @@ static mut RSA_HARDWARE: Option<&lowrisc::rsa::OtbnRsa<'static>> = None;
 #[cfg(test)]
 static mut SHA256SOFT: Option<&capsules_extra::sha256::Sha256Software<'static>> = None;
 
-static mut CHIP: Option<&'static EarlGreyChip> = None;
-static mut PROCESS_PRINTER: Option<&'static capsules_system::process_printer::ProcessPrinterText> =
-    None;
-
 // How should the kernel respond when a process faults.
 const FAULT_RESPONSE: capsules_system::process_policies::PanicFaultPolicy =
     capsules_system::process_policies::PanicFaultPolicy {};
 
 kernel::stack_size! {0x1400}
+
+struct ProcessManagementCapabilityObj {}
+unsafe impl capabilities::ProcessManagementCapability for ProcessManagementCapabilityObj {}
+
+type SchedulerInUse =
+    components::sched::priority::PriorityComponentType<ProcessManagementCapabilityObj>;
 
 /// A structure representing this platform that holds references to all
 /// capsules for this platform. We've included an alarm and console.
@@ -208,6 +211,7 @@ struct EarlGrey {
             'static,
             virtual_aes_ccm::VirtualAES128CCM<'static, earlgrey::aes::Aes<'static>>,
         >,
+        AES128,
     >,
     kv_driver: &'static capsules_extra::kv_driver::KVStoreDriver<
         'static,
@@ -232,7 +236,7 @@ struct EarlGrey {
         >,
     >,
     syscall_filter: &'static TbfHeaderFilterDefaultAllow,
-    scheduler: &'static PrioritySched,
+    scheduler: &'static SchedulerInUse,
     scheduler_timer: &'static SchedulerTimerHw,
     watchdog: &'static lowrisc::aon_timer::AonTimer,
 }
@@ -264,7 +268,7 @@ impl KernelResources<EarlGreyChip> for EarlGrey {
     type SyscallDriverLookup = Self;
     type SyscallFilter = TbfHeaderFilterDefaultAllow;
     type ProcessFault = ();
-    type Scheduler = PrioritySched;
+    type Scheduler = SchedulerInUse;
     type SchedulerTimer = SchedulerTimerHw;
     type WatchDog = lowrisc::aon_timer::AonTimer;
     type ContextSwitchCallback = ();
@@ -332,6 +336,12 @@ unsafe fn setup() -> (
         <ChipHw as kernel::platform::chip::Chip>::ThreadIdProvider,
     >();
 
+    // Bind global variables to this thread.
+    let _ = PANIC_RESOURCES
+        .bind_to_thread_unsafe::<<ChipHw as kernel::platform::chip::Chip>::ThreadIdProvider>(
+            PanicResources::new(),
+        );
+
     // Set up memory protection immediately after setting the trap handler, to
     // ensure that much of the board initialization routine runs with ePMP
     // protection.
@@ -388,7 +398,9 @@ unsafe fn setup() -> (
     // Create an array to hold process references.
     let processes = components::process_array::ProcessArrayComponent::new()
         .finalize(components::process_array_component_static!(NUM_PROCS));
-    PROCESSES = Some(processes);
+    PANIC_RESOURCES.get().map(|resources| {
+        resources.processes.put(processes.as_slice());
+    });
 
     // Setup space to store the core kernel data structure.
     let board_kernel = static_init!(kernel::Kernel, kernel::Kernel::new(processes.as_slice()));
@@ -445,6 +457,7 @@ unsafe fn setup() -> (
             6 => &peripherals.gpio_port[6],
             7 => &peripherals.gpio_port[15]
         ),
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::gpio_component_static!(
         earlgrey::gpio::GpioPin<earlgrey::pinmux::PadConfig>
@@ -495,7 +508,9 @@ unsafe fn setup() -> (
         EarlGreyChip,
         earlgrey::chip::EarlGrey::new(peripherals, hardware_alarm, earlgrey_epmp)
     );
-    CHIP = Some(chip);
+    PANIC_RESOURCES.get().map(|resources| {
+        resources.chip.put(chip);
+    });
 
     // Need to enable all interrupts for Tock Kernel
     chip.enable_plic_interrupts();
@@ -510,6 +525,7 @@ unsafe fn setup() -> (
         board_kernel,
         capsules_core::console::DRIVER_NUM,
         uart_mux,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::console_component_static!());
     // Create the debugger object that handles calls to `debug!()`.
@@ -528,6 +544,7 @@ unsafe fn setup() -> (
         board_kernel,
         capsules_core::low_level_debug::DRIVER_NUM,
         uart_mux,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::low_level_debug_component_static!());
 
@@ -535,6 +552,7 @@ unsafe fn setup() -> (
         board_kernel,
         capsules_extra::hmac::DRIVER_NUM,
         &peripherals.hmac,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::hmac_component_static!(lowrisc::hmac::Hmac, 32));
 
@@ -566,6 +584,7 @@ unsafe fn setup() -> (
         mux_spi,
         lowrisc::spi_host::CS(0),
         capsules_core::spi_controller::DRIVER_NUM,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::spi_syscall_component_static!(
         lowrisc::spi_host::SpiHost
@@ -573,7 +592,9 @@ unsafe fn setup() -> (
 
     let process_printer = components::process_printer::ProcessPrinterTextComponent::new()
         .finalize(components::process_printer_text_component_static!());
-    PROCESS_PRINTER = Some(process_printer);
+    PANIC_RESOURCES.get().map(|resources| {
+        resources.printer.put(process_printer);
+    });
 
     // USB support is currently broken in the OpenTitan hardware
     // See https://github.com/lowRISC/opentitan/issues/2598 for more details
@@ -648,7 +669,7 @@ unsafe fn setup() -> (
         // Region Size
         lowrisc::flash_ctrl::FLASH_PAGES_PER_BANK * lowrisc::flash_ctrl::PAGE_SIZE,
         flash_ctrl_read_buf, // Buffer used internally in TicKV
-        page_buffer,         // Buffer used with the flash controller
+        page_buffer,         // Buffer used with the flash controller,
     )
     .finalize(components::tickv_component_static!(
         lowrisc::flash_ctrl::FlashCtrl,
@@ -725,6 +746,7 @@ unsafe fn setup() -> (
         virtual_kv_driver,
         board_kernel,
         capsules_extra::kv_driver::DRIVER_NUM,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::kv_driver_component_static!(
         capsules_extra::virtualizers::virtual_kv::VirtualKVPermissions<
@@ -798,7 +820,7 @@ unsafe fn setup() -> (
     );
     entropy_to_random.set_client(rng);
 
-    const CRYPT_SIZE: usize = 7 * AES128_BLOCK_SIZE;
+    const CRYPT_SIZE: usize = 7 * AES_BLOCK_SIZE;
 
     let ccm_mux = static_init!(
         virtual_aes_ccm::MuxAES128CCM<'static, earlgrey::aes::Aes<'static>>,
@@ -825,12 +847,14 @@ unsafe fn setup() -> (
         board_kernel,
         capsules_extra::symmetric_encryption::aes::DRIVER_NUM,
         gcm_client,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::aes_driver_component_static!(
         aes_gcm::Aes128Gcm<
             'static,
             virtual_aes_ccm::VirtualAES128CCM<'static, earlgrey::aes::Aes<'static>>,
         >,
+        AES128
     ));
 
     AES = Some(gcm_client);
@@ -845,12 +869,17 @@ unsafe fn setup() -> (
         SHA256SOFT = Some(sha_soft);
     }
 
-    hil::symmetric_encryption::AES128GCM::set_client(gcm_client, aes);
-    hil::symmetric_encryption::AES128::set_client(gcm_client, ccm_client);
+    hil::symmetric_encryption::AESGCM::set_client(gcm_client, aes);
+    hil::symmetric_encryption::AES::set_client(gcm_client, ccm_client);
 
     let syscall_filter = static_init!(TbfHeaderFilterDefaultAllow, TbfHeaderFilterDefaultAllow {});
-    let scheduler = components::sched::priority::PriorityComponent::new(board_kernel)
-        .finalize(components::priority_component_static!());
+    let scheduler = components::sched::priority::PriorityComponent::new(
+        board_kernel,
+        ProcessManagementCapabilityObj {},
+    )
+    .finalize(components::priority_component_static!(
+        ProcessManagementCapabilityObj
+    ));
     let watchdog = &peripherals.watchdog;
 
     let earlgrey = static_init!(

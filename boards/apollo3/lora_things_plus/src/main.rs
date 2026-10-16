@@ -44,15 +44,16 @@ use components::bme280::Bme280Component;
 use components::ccs811::Ccs811Component;
 use kernel::capabilities;
 use kernel::component::Component;
+use kernel::debug::PanicResources;
 use kernel::hil::flash::HasClient;
 use kernel::hil::hasher::Hasher;
 use kernel::hil::i2c::I2CMaster;
 use kernel::hil::led::LedHigh;
 use kernel::hil::spi::SpiMaster;
 use kernel::hil::time::Counter;
+use kernel::platform::chip::Chip;
 use kernel::platform::{KernelResources, SyscallDriverLookup};
-use kernel::process::ProcessArray;
-use kernel::scheduler::round_robin::RoundRobinSched;
+use kernel::utilities::single_thread_value::SingleThreadValue;
 use kernel::{create_capability, debug, static_init};
 
 #[cfg(feature = "atecc508a")]
@@ -76,16 +77,12 @@ mod tests;
 // Number of concurrent processes this platform supports.
 const NUM_PROCS: usize = 4;
 
-/// Static variables used by io.rs.
-static mut PROCESSES: Option<&'static ProcessArray<NUM_PROCS>> = None;
-
 type ChipHw = apollo3::chip::Apollo3<Apollo3DefaultPeripherals>;
+type ProcessPrinterInUse = capsules_system::process_printer::ProcessPrinterText;
 
-// Static reference to chip for panic dumps.
-static mut CHIP: Option<&'static apollo3::chip::Apollo3<Apollo3DefaultPeripherals>> = None;
-// Static reference to process printer for panic dumps.
-static mut PROCESS_PRINTER: Option<&'static capsules_system::process_printer::ProcessPrinterText> =
-    None;
+/// Resources for when a board panics used by io.rs.
+static PANIC_RESOURCES: SingleThreadValue<PanicResources<ChipHw, ProcessPrinterInUse>> =
+    SingleThreadValue::new();
 
 // How should the kernel respond when a process faults.
 const FAULT_RESPONSE: capsules_system::process_policies::PanicFaultPolicy =
@@ -149,6 +146,8 @@ type SignatureVerifyInMemoryKeys =
         64,
     >;
 
+type SchedulerInUse = components::sched::round_robin::RoundRobinComponentType;
+
 /// A structure representing this platform that holds references to all
 /// capsules for this platform.
 struct LoRaThingsPlus {
@@ -194,7 +193,7 @@ struct LoRaThingsPlus {
             >,
         >,
     >,
-    scheduler: &'static RoundRobinSched<'static>,
+    scheduler: &'static SchedulerInUse,
     systick: cortexm4::systick::SysTick,
     kv_driver: &'static capsules_extra::kv_driver::KVStoreDriver<
         'static,
@@ -296,6 +295,7 @@ unsafe fn setup_chirp_i2c_moisture(
         board_kernel,
         capsules_extra::moisture::DRIVER_NUM,
         chirp_moisture,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::moisture_component_static!(ChirpI2cMoistureType));
 
@@ -322,6 +322,7 @@ unsafe fn setup_dfrobot_i2c_rainfall(
         board_kernel,
         capsules_extra::rainfall::DRIVER_NUM,
         dfrobot_rainfall,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::rainfall_component_static!(DFRobotRainFallType));
 
@@ -377,7 +378,7 @@ impl KernelResources<apollo3::chip::Apollo3<Apollo3DefaultPeripherals>> for LoRa
     type SyscallDriverLookup = Self;
     type SyscallFilter = ();
     type ProcessFault = ();
-    type Scheduler = RoundRobinSched<'static>;
+    type Scheduler = SchedulerInUse;
     type SchedulerTimer = cortexm4::systick::SysTick;
     type WatchDog = ();
     type ContextSwitchCallback = ();
@@ -418,6 +419,12 @@ unsafe fn setup() -> (
         <ChipHw as kernel::platform::chip::Chip>::ThreadIdProvider,
     >();
 
+    // Bind global variables to this thread.
+    let _ = PANIC_RESOURCES
+        .bind_to_thread::<<ChipHw as kernel::platform::chip::Chip>::ThreadIdProvider>(
+            PanicResources::new(),
+        );
+
     let peripherals = static_init!(Apollo3DefaultPeripherals, Apollo3DefaultPeripherals::new());
     PERIPHERALS = Some(peripherals);
 
@@ -434,7 +441,9 @@ unsafe fn setup() -> (
     // Create an array to hold process references.
     let processes = components::process_array::ProcessArrayComponent::new()
         .finalize(components::process_array_component_static!(NUM_PROCS));
-    PROCESSES = Some(processes);
+    PANIC_RESOURCES.get().map(|resources| {
+        resources.processes.put(processes.as_slice());
+    });
 
     let board_kernel = static_init!(kernel::Kernel, kernel::Kernel::new(processes.as_slice()));
 
@@ -484,6 +493,7 @@ unsafe fn setup() -> (
         board_kernel,
         capsules_core::console::DRIVER_NUM,
         uart_mux,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::console_component_static!());
     // Create the debugger object that handles calls to `debug!()`.
@@ -514,6 +524,7 @@ unsafe fn setup() -> (
             3 => &peripherals.gpio_port[35],  // A3
             4 => &peripherals.gpio_port[34],  // A4
         ),
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::gpio_component_static!(apollo3::gpio::GpioPin));
 
@@ -527,6 +538,7 @@ unsafe fn setup() -> (
         board_kernel,
         capsules_core::alarm::DRIVER_NUM,
         mux_alarm,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::alarm_component_static!(apollo3::stimer::STimer));
     ALARM = Some(mux_alarm);
@@ -534,7 +546,9 @@ unsafe fn setup() -> (
     // Create a process printer for panic.
     let process_printer = components::process_printer::ProcessPrinterTextComponent::new()
         .finalize(components::process_printer_text_component_static!());
-    PROCESS_PRINTER = Some(process_printer);
+    PANIC_RESOURCES.get().map(|resources| {
+        resources.printer.put(process_printer);
+    });
 
     // Enable SDA and SCL for I2C (exposed via Qwiic)
     peripherals
@@ -572,12 +586,14 @@ unsafe fn setup() -> (
         board_kernel,
         capsules_extra::temperature::DRIVER_NUM,
         bme280,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::temperature_component_static!(BME280Sensor));
     let humidity = components::humidity::HumidityComponent::new(
         board_kernel,
         capsules_extra::humidity::DRIVER_NUM,
         bme280,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::humidity_component_static!(BME280Sensor));
     BME280 = Some(bme280);
@@ -589,6 +605,7 @@ unsafe fn setup() -> (
         board_kernel,
         capsules_extra::temperature::DRIVER_NUM,
         ccs811,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::air_quality_component_static!());
     CCS811 = Some(ccs811);
@@ -633,6 +650,7 @@ unsafe fn setup() -> (
             &peripherals.gpio_port[11], // A5
         ),
         capsules_core::spi_controller::DRIVER_NUM,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::spi_syscall_component_static!(
         apollo3::iom::Iom<'static>
@@ -650,6 +668,7 @@ unsafe fn setup() -> (
             &peripherals.gpio_port[36], // H6 - SX1262 Slave Select
         ),
         LORA_SPI_DRIVER_NUM,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::spi_syscall_component_static!(
         apollo3::iom::Iom<'static>
@@ -675,6 +694,7 @@ unsafe fn setup() -> (
             3 => &peripherals.gpio_port[47], // H9 - SX1262 Multipurpose digital I/O (DIO3)
             4 => &peripherals.gpio_port[44], // J7 - SX1262 Reset
         ),
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::gpio_component_static!(apollo3::gpio::GpioPin));
 
@@ -786,6 +806,7 @@ unsafe fn setup() -> (
         virtual_kv_driver,
         board_kernel,
         capsules_extra::kv_driver::DRIVER_NUM,
+        create_capability!(capabilities::MemoryAllocationCapability),
     )
     .finalize(components::kv_driver_component_static!(
         capsules_extra::virtualizers::virtual_kv::VirtualKVPermissions<
@@ -856,7 +877,9 @@ unsafe fn setup() -> (
         apollo3::chip::Apollo3<Apollo3DefaultPeripherals>,
         apollo3::chip::Apollo3::new(peripherals)
     );
-    CHIP = Some(chip);
+    PANIC_RESOURCES.get().map(|resources| {
+        resources.chip.put(chip);
+    });
 
     let checking_policy;
     #[cfg(feature = "atecc508a")]
@@ -933,14 +956,18 @@ unsafe fn setup() -> (
     let checker = components::appid::checker::ProcessCheckerMachineComponent::new(checking_policy)
         .finalize(components::process_checker_machine_component_static!());
 
+    kernel::declare_capability!(AppStoreCap: kernel::capabilities::ApplicationStorageCapability);
     let storage_permissions_policy =
-        components::storage_permissions::tbf_header::StoragePermissionsTbfHeaderComponent::new()
-            .finalize(
-                components::storage_permissions_tbf_header_component_static!(
-                    apollo3::chip::Apollo3<Apollo3DefaultPeripherals>,
-                    kernel::process::ProcessStandardDebugFull,
-                ),
-            );
+        components::storage_permissions::tbf_header::StoragePermissionsTbfHeaderComponent::new(
+            AppStoreCap,
+        )
+        .finalize(
+            components::storage_permissions_tbf_header_component_static!(
+                apollo3::chip::Apollo3<Apollo3DefaultPeripherals>,
+                kernel::process::ProcessStandardDebugFull,
+                AppStoreCap,
+            ),
+        );
 
     let app_flash = core::slice::from_raw_parts(
         core::ptr::addr_of!(_sapps),
@@ -961,6 +988,7 @@ unsafe fn setup() -> (
         storage_permissions_policy,
         app_flash,
         app_memory,
+        create_capability!(capabilities::ProcessManagementCapability),
     )
     .finalize(components::process_loader_sequential_component_static!(
         apollo3::chip::Apollo3<Apollo3DefaultPeripherals>,
@@ -977,7 +1005,7 @@ unsafe fn setup() -> (
 /// setup and RAM initialization.
 #[no_mangle]
 pub unsafe fn main() {
-    apollo3::init();
+    ChipHw::init();
 
     #[cfg(test)]
     test_main();

@@ -9,6 +9,8 @@ pub mod debug_writer;
 pub mod process_checker;
 pub mod process_policies;
 pub mod process_printer;
+pub mod scheduler;
 pub mod storage_permissions;
 pub mod syscall_filter;
 pub mod virtual_scheduler_timer;
+pub mod write_to_binary;
