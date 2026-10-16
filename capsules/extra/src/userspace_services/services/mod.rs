@@ -10,6 +10,7 @@
 //! much of the implementation of the service interface is dedicated
 //! to mapping HIL trait functions to [`usercall()`](super::usercall::UserspaceServiceAccess::usercall()) calls.
 
+pub mod crypto;
 pub mod digest;
 
 /// Service function identifier.
@@ -18,5 +19,6 @@ pub mod digest;
 /// corresponding to the HIL the interface implements.
 #[derive(Debug, PartialEq)]
 pub enum Role {
+    Cryptography = 0xA0,
     Digest = 0x11,
 }

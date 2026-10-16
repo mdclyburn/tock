@@ -4,7 +4,7 @@
 use core::default::Default;
 
 
-pub use kernel::crypto::config::{
+pub use kernel::crypto::provider::{
     AAD_LEN_MAX,
     CKEY_LEN_MAX,
     MESSAGE_LEN_MAX,

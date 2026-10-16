@@ -3,16 +3,14 @@
 
 use core::convert::TryInto;
 
-use crate::crypto::config::{
+use crate::crypto::provider::{
     AAD_LEN_MAX,
+    AEADProvider,
+    AEADProviderClient,
     CKEY_LEN_MAX,
     MESSAGE_LEN_MAX,
     NONCE_LEN_MAX,
     TAG_LEN_MAX,
-};
-use crate::crypto::provider::{
-    AEADProvider,
-    AEADProviderClient,
 };
 use crate::errorcode::ErrorCode;
 use crate::hil::hasher::CryptographicHasher;

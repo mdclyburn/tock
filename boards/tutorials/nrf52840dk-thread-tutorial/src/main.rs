@@ -29,7 +29,7 @@ type Ieee802154RawDriver =
 
 struct Platform {
     base: nrf52840dk_lib::Platform,
-    uservs: &'static capsules_core::userv::Registry,
+    uservs: &'static capsules_extra::userspace_services::registry::Registry<2>,
     ieee802154: &'static Ieee802154RawDriver,
     eui64: &'static nrf52840dk_lib::Eui64Driver,
     screen: &'static ScreenDriver,
@@ -49,7 +49,7 @@ impl SyscallDriverLookup for Platform {
         F: FnOnce(Option<&dyn kernel::syscall::SyscallDriver>) -> R,
     {
         match driver_num {
-            capsules_core::userv::DRIVER_NO => f(Some(self.uservs)),
+            capsules_extra::userspace_services::registry::DRIVER_NUM => f(Some(self.uservs)),
             capsules_extra::eui64::DRIVER_NUM => f(Some(self.eui64)),
             capsules_extra::ieee802154::DRIVER_NUM => f(Some(self.ieee802154)),
             capsules_extra::screen::screen::DRIVER_NUM => f(Some(self.screen)),
@@ -133,10 +133,10 @@ pub unsafe fn main() {
     //--------------------------------------------------------------------------
 
     let userv_registry = static_init!(
-        capsules_core::userv::Registry,
-        capsules_core::userv::Registry::new(
+        capsules_extra::userspace_services::registry::Registry<2>,
+        capsules_extra::userspace_services::registry::Registry::<2>::new(
             board_kernel.create_grant(
-                capsules_core::userv::DRIVER_NO,
+                capsules_extra::userspace_services::registry::DRIVER_NUM,
                 &create_capability!(capabilities::MemoryAllocationCapability))));
 
     //--------------------------------------------------------------------------
@@ -153,8 +153,8 @@ pub unsafe fn main() {
 
         // Software-based Ascon128 in a userspace service.
         static_init!(
-            kernel::userv::role::crypto::ServiceInterface,
-            kernel::userv::role::crypto::ServiceInterface::new(
+            capsules_extra::userspace_services::services::crypto::ServiceInterface,
+            capsules_extra::userspace_services::services::crypto::ServiceInterface::new(
                 userv_registry))
     };
     aead_provider.init();
@@ -179,9 +179,9 @@ pub unsafe fn main() {
     //--------------------------------------------------------------------------
     // AES Encryption Oracle
     //--------------------------------------------------------------------------
-    const CRYPT_SIZE: usize = 7 * kernel::hil::symmetric_encryption::AES_BLOCK_SIZE;
-    let aes_src_buffer = kernel::static_init!([u8; 16], [0; 16]);
-    let aes_dst_buffer = kernel::static_init!([u8; CRYPT_SIZE], [0; CRYPT_SIZE]);
+    // const CRYPT_SIZE: usize = 7 * kernel::hil::symmetric_encryption::AES_BLOCK_SIZE;
+    // let aes_src_buffer = kernel::static_init!([u8; 16], [0; 16]);
+    // let aes_dst_buffer = kernel::static_init!([u8; CRYPT_SIZE], [0; CRYPT_SIZE]);
 
     // let encryption_oracle = static_init!(
     //     AES128CTREncryptionOracleDriver,

@@ -3,6 +3,9 @@
  * Interfaces providing cryptographic algorithm implementations that may be
  * either hardware- or software-based, promoting cryptographic agility.
  * Using these traits makes it simple to transparently switch algorithms.
+ * Cryptographic HILs, which may be specific to a particular algorithm,
+ * e.g., the AES-128 HILs,
+ * can all implement these traits to provide consumers to single interface.
  *
  * Trait objects backing these interfaces may either operate synchronously
  * or asynchronously, meaning that calling code (i.e., clients) must ensure
@@ -10,14 +13,23 @@
  * in the caller's code.
  */
 
-use crate::crypto::config::{
-    AAD_LEN_MAX,
-    CKEY_LEN_MAX,
-    MESSAGE_LEN_MAX,
-    NONCE_LEN_MAX,
-    TAG_LEN_MAX,
-};
 use crate::errorcode::ErrorCode;
+
+/// Maximum length for a cipher key.
+pub const CKEY_LEN_MAX: usize = 16;
+
+/// Maximum length of the plaintext and ciphertext buffers.
+pub const MESSAGE_LEN_MAX: usize = 80;
+
+/// Maximum length of the authenticated associated data (AAD) buffer.
+pub const AAD_LEN_MAX: usize = 32;
+
+/// Maximum length of the message authentication code tag buffer (<= 16).
+pub const TAG_LEN_MAX: usize = 8;
+
+/// Maximum length of the nonce buffer.
+pub const NONCE_LEN_MAX: usize = 16;
+
 
 pub type AEADTuple = (
     &'static mut [u8; NONCE_LEN_MAX],

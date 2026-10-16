@@ -1,29 +1,24 @@
 /*! Cryptography userspace service helpers.
  */
 
-use crate::crypto::config::{
+use kernel::crypto::provider::{
     AAD_LEN_MAX,
+    AEADProvider,
+    AEADProviderClient,
+    AEADTuple,
     CKEY_LEN_MAX,
     MESSAGE_LEN_MAX,
     NONCE_LEN_MAX,
     TAG_LEN_MAX,
 };
-use crate::crypto::provider::{
-    AEADProvider,
-    AEADProviderClient,
-    AEADTuple,
-};
-use crate::errorcode::ErrorCode;
-use crate::processbuffer::{
-    ReadableProcessBuffer,
-};
-use crate::userv::comm::{
-    ReturnValueReader,
-    UsercallArguments,
+use kernel::errorcode::ErrorCode;
+use crate::userspace_services::usercall::{
+    Arguments,
+    ReturnReader,
     UserspaceServiceAccess,
     UserspaceServiceClient,
 };
-use crate::utilities::cells::OptionalCell;
+use kernel::utilities::cells::OptionalCell;
 
 /// Cryptography userspace service role ID.
 pub const ROLE_ID: usize = 0xA0;
@@ -34,14 +29,27 @@ pub mod ops {
     pub const DECRYPT: usize = 0x20;
 }
 
+pub mod op_argbuffer {
+    pub const ENCRYPT_CT_OUTPUT: usize  = 0;
+    pub const ENCRYPT_AAD_OUTPUT: usize = 1;
+}
+
 // TODO: padding length should come from the userspace service.
 /// Plaintext buffer padding byte length.
 pub const PADDING_LEN: usize = 8;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Operation {
+    Encrypt,
+    Decrypt,
+}
 
 /// Cryptographic userspace service access provider.
 pub struct ServiceInterface {
     /// Self-reference to avoid needing &'static self in HILs.
     self_userv_client: OptionalCell<&'static dyn UserspaceServiceClient>,
+    /// Current executing operation in the userspace service.
+    current_op: OptionalCell<Operation>,
     /// Userspace service access interface.
     userv_access: &'static dyn UserspaceServiceAccess,
     /// The client for the cryptographic userspace service through this entity.
@@ -57,6 +65,7 @@ impl ServiceInterface {
     {
         ServiceInterface {
             self_userv_client: OptionalCell::empty(),
+            current_op: OptionalCell::empty(),
             userv_access,
             client: OptionalCell::empty(),
             aead_buffers: OptionalCell::empty(),
@@ -82,7 +91,7 @@ impl AEADProvider for ServiceInterface {
         message_len: usize,
         _aad_len: usize,
     ) -> Result<(), (ErrorCode, AEADTuple)> {
-        use crate::userv::data::{Bytes, Serialize};
+        use crate::userspace_services::data::{Bytes, Serialize};
 
         let encrypt_args: [&dyn Serialize; 4] = [
             &Bytes(ckey),
@@ -97,7 +106,7 @@ impl AEADProvider for ServiceInterface {
                     userv_client,
                     ROLE_ID,
                     ops::ENCRYPT,
-                    UsercallArguments::Extended(Some(message_len), None, &encrypt_args));
+                    Arguments::Extended(message_len, 0, &encrypt_args));
 
             if invoke_res.is_ok() {
                 // Take ownership of the buffers while the request is outstanding.
@@ -109,6 +118,7 @@ impl AEADProvider for ServiceInterface {
                     out_ciphertext,
                     out_tag,
                 ));
+                self.current_op.set(Operation::Encrypt);
 
                 Ok(())
             } else {
@@ -146,6 +156,7 @@ impl AEADProvider for ServiceInterface {
                                  &'static mut [u8; MESSAGE_LEN_MAX],
                                  &'static mut [u8; TAG_LEN_MAX]))>
     {
+        self.current_op.set(Operation::Decrypt);
         unimplemented!()
     }
 
@@ -156,29 +167,28 @@ impl AEADProvider for ServiceInterface {
 }
 
 impl UserspaceServiceClient for ServiceInterface {
-    fn usercall_done<'r, 'grant>(
+    fn usercall_done(
         &self,
-        _role_id: usize,
-        operation_id: usize,
-        args: Result<ReturnValueReader<'r, 'grant>, usize>,
+        args: Result<ReturnReader<'_>, (ErrorCode, ReturnReader<'_>)>,
     ) {
         let (nonce_buf, pt_buf, aad_buf, ct_buf, tag_buf) = self.aead_buffers.take()
         // Should have always taken ownership of AEAD buffers on call to encrypt/decrypt,
         // and should only get one callback from the userspace service.
             .unwrap();
 
-        if let Ok(args) = args {
-            match operation_id {
-                ops::ENCRYPT => {
-                    // Copy the ciphertext and the AAD into their respective buffers.
-                    let userv_ret = (
-                        args.buffer_n(0),
-                        args.buffer_n(1));
-                    if let (Some(ct), Some(aad)) = userv_ret {
-                        let _r = ct.enter(|ro_buf| ro_buf.copy_to_slice(&mut ct_buf[0..ct.len()]));
-                        let _r = aad.enter(|ro_buf| ro_buf.copy_to_slice(&mut aad_buf[0..aad.len()]));
+        if let Some(current_op) = self.current_op.take() {
+            if let Ok(args) = args {
+                match current_op {
+                    Operation::Encrypt => {
+                        // Copy the ciphertext and the AAD into their respective buffers.
+                        let _ = args.result_buffer_n(
+                            op_argbuffer::ENCRYPT_CT_OUTPUT,
+                            |ct_slice| ct_slice.copy_to_slice(&mut ct_buf[0..ct_slice.len()]));
+                        let _ = args.result_buffer_n(
+                            op_argbuffer::ENCRYPT_AAD_OUTPUT,
+                            |aad_slice| aad_slice.copy_to_slice(&mut aad_buf[0..aad_slice.len()]));
 
-                        // Provide the client with the resulting ciphertext and AAD.
+                        // Notify the client of the operation completion.
                         self.client.map(
                             |client| {
                                 client.encrypt_done(
@@ -188,31 +198,25 @@ impl UserspaceServiceClient for ServiceInterface {
                                     aad_buf,
                                     tag_buf)
                             });
-                    } else {
-                        // What happens if the userspace service does not abide by the expected return format?
-                        unimplemented!();
-                    }
-                },
+                    },
 
-                ops::DECRYPT => {
-                    self.client.map(
-                        |client| {
-                            client.decrypt_done(
-                                nonce_buf,
-                                ct_buf,
-                                pt_buf,
-                                aad_buf,
-                                tag_buf,
-                                true) // TODO: tag_matches should come from userspace service as return argument.
-                        });
-                },
-
-                // Ignore unknown operation codes.
-                _ => {  }
-            };
-        } else {
-            // Encrypt/decrypt operation failed.
-            unimplemented!();
+                    Operation::Decrypt => {
+                        self.client.map(
+                            |client| {
+                                client.decrypt_done(
+                                    nonce_buf,
+                                    ct_buf,
+                                    pt_buf,
+                                    aad_buf,
+                                    tag_buf,
+                                    true) // TODO: tag_matches should come from userspace service as return argument.
+                            });
+                    },
+                };
+            } else {
+                // Encrypt/decrypt operation failed.
+                unimplemented!();
+            }
         }
     }
 }
