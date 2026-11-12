@@ -72,11 +72,12 @@ pub struct Bytes<'a>(pub &'a [u8]);
 impl Serialize for Bytes<'_> {
     fn try_serialize(&self, slice: &WriteableProcessSlice) -> Result<(), Error> {
         let src = self.0;
-        if slice.len() < src.len() {
+        if slice.len() < src.len() + 1 { // One byte for length
             Err(Error::OutOfMemory)
         } else {
             slice[0..src.len()].copy_from_slice(src);
-
+            // Place the length of data copied in the last byte of the slice.
+            slice[src.len()-1..src.len()].copy_from_slice(&[src.len() as u8]);
             Ok(())
         }
     }
