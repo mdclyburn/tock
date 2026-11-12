@@ -93,15 +93,16 @@ impl AEADProvider for ServiceInterface {
     ) -> Result<(), (ErrorCode, AEADTuple)> {
         use crate::userspace_services::data::{Bytes, Serialize};
 
-        let encrypt_args: [&dyn Serialize; 4] = [
-            &Bytes(ckey),
-            &Bytes(nonce),
-            &Bytes(in_plaintext),
-            &Bytes(in_aad),
+        let encrypt_args: [(usize, &dyn Serialize); 4] = [
+            (0, &Bytes(in_plaintext)),
+            (3, &Bytes(ckey)),
+            (4, &Bytes(nonce)),
+            (2, &Bytes(in_aad)),
         ];
 
         // Send request via the userspace service capsule.
         if let Some(userv_client) = self.self_userv_client.get() {
+                kernel::debug!("[crypto] invoking usercall");
                 let invoke_res = self.userv_access.usercall(
                     userv_client,
                     ROLE_ID,
@@ -122,6 +123,7 @@ impl AEADProvider for ServiceInterface {
 
                 Ok(())
             } else {
+                kernel::debug!("[crypto] usercall failed: {:?}", invoke_res);
                 Err((ErrorCode::FAIL,
                      (nonce,
                       in_plaintext,

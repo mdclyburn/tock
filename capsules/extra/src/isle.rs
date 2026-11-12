@@ -269,7 +269,7 @@ impl Isle {
         let aad_len = self.build_aad(pid, realm_id, is_send)?;
 
         // Construct the nonce.
-        // debug!("[isle] constructing nonce");
+        debug!("[isle] constructing nonce");
         self.app_data.enter(
             pid,
             |ad, _kad| {
@@ -307,7 +307,7 @@ impl Isle {
 
         // Copy the message into the capsule buffer.
         // Assign the right buffer depending on if this is a send or receive.
-        // debug!("[isle] copying payload to capsule buffer");
+        debug!("[isle] copying payload to capsule buffer");
         let (src_buffer, _dst_buffer) = if is_send {
             (&self.pt_buffer, &self.ct_buffer)
         } else {
@@ -322,8 +322,10 @@ impl Isle {
                         // When sending a message, the entire buffer has the message.
                         // When receiving a message, the last TAG_LEN_MAX bytes are the authentication tag bytes.
                         if is_send {
+                            kernel::debug!("[isle] copying bytes to input buffer");
                             kad.get_readonly_processbuffer(ALLOW_RO_NO_IN_BUFFER)?
                                 .enter(|pbuf| pbuf.copy_to_slice(&mut src_buf[0..pbuf.len()]))?;
+                            kernel::debug!("[isle] copy finished");
                         } else {
                             kad.get_readonly_processbuffer(ALLOW_RO_NO_IN_BUFFER)?
                                 .enter(
@@ -350,7 +352,7 @@ impl Isle {
                     .flatten()
             })?;
 
-        // debug!("[isle] prepare_crypt_op() done (AAD len.: {} B)", aad_len);
+        debug!("[isle] prepare_crypt_op() done (AAD len.: {} B)", aad_len);
 
         Ok(aad_len)
     }
@@ -485,7 +487,7 @@ impl Isle {
             })??;
 
         // Perform the encryption.
-        // debug!("[isle] calling encryption provider");
+        debug!("[isle] calling encryption provider");
         let encrypt_result = self.aead.encrypt(
             &ckey,
             self.nonce_buffer.take().ok_or(Error::AlreadyInUse)?,
@@ -496,8 +498,8 @@ impl Isle {
             message_len,
             aad_len);
 
-        if let Err((_ec, (nonce_buf, pt_buf, aad_buf, ct_buf, tag_buf))) = encrypt_result {
-            debug!("[isle] encryption provider failed");
+        if let Err((ec, (nonce_buf, pt_buf, aad_buf, ct_buf, tag_buf))) = encrypt_result {
+            debug!("[isle] encryption provider failed {:?}", ec);
             self.nonce_buffer.put(Some(nonce_buf));
             self.pt_buffer.put(Some(pt_buf));
             self.aad_buffer.put(Some(aad_buf));
@@ -602,6 +604,7 @@ impl SyscallDriver for Isle {
     ) -> CommandReturn {
         // Make sure the application's Isle grant is initialized.
         if let Err(_kerr) = self.check_init_realms(pid) {
+            kernel::debug!("[isle] failed to initialize application's grant");
             CommandReturn::failure(ErrorCode::FAIL)
         } else {
             match (command_no, r2, r3) {
@@ -627,10 +630,10 @@ impl SyscallDriver for Isle {
                             let pad = self.aead.padding_size();
                             let padding_byte_count = pad - (pt_buffer_len % pad);
 
-                            // debug!("[isle] {} >= {} + {} ?",
-                            //        ct_buffer_len,
-                            //        pt_buffer_len,
-                            //        padding_byte_count);
+                            debug!("[isle] {} >= {} + {} ?",
+                                   ct_buffer_len,
+                                   pt_buffer_len,
+                                   padding_byte_count);
                             if ct_buffer_len >= pt_buffer_len + padding_byte_count {
                                 // Numbers from the network stack are big-endian.
                                 // So, the realm ID is actually in the lower two bytes.
@@ -640,7 +643,10 @@ impl SyscallDriver for Isle {
                                 match operation_res {
                                     Ok(_msg_len) => CommandReturn::success(),
 
-                                    Err(kerr) => CommandReturn::failure(ErrorCode::from(kerr)),
+                                    Err(kerr) => {
+                                        kernel::debug!("[isle] prepare_crypt_op failed");
+                                        CommandReturn::failure(ErrorCode::from(kerr))
+                                    }
                                 }
                             } else {
                                 CommandReturn::failure(ErrorCode::NOMEM)

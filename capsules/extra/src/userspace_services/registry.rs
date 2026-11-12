@@ -85,6 +85,7 @@ impl<const N: usize> Registry<N> {
             if can_replace {
                 // New instance of the userspace service replaces its older entry.
                 userv_ent.set(new_service);
+                kernel::debug!("[registry] registered service {:x}", userv_role_id);
                 Ok(())
             } else {
                 // A userspace service that is not the registering one already fulfills the role.
@@ -96,6 +97,7 @@ impl<const N: usize> Registry<N> {
             if let Some(empty_ent) = userv_ent {
                 // Place service entry in an empty slot.
                 empty_ent.set(new_service);
+                kernel::debug!("[registry] registered service {:x}", userv_role_id);
                 Ok(())
             } else {
                 Err(ErrorCode::NOMEM)
@@ -141,6 +143,7 @@ impl<const N: usize> Registry<N> {
                     .flatten()
             })
         } else {
+            kernel::debug!("[registry] no such userspace service {:x}", userv_role_id);
             Err(ErrorCode::NODEVICE)
         }
     }
@@ -168,6 +171,7 @@ mod upcall {
 
 impl<const N: usize> SyscallDriver for Registry<N> {
     fn command(&self, command_no: usize, r2: usize, r3: usize, pid: ProcessId) -> CommandReturn {
+        kernel::debug!("[registry] command {:x} - {:x} - {:x}", command_no, r2, r3);
         match (command_no, r2, r3) {
             (command::CHECK, _r2, _r3) => CommandReturn::success(),
 

@@ -73,6 +73,7 @@ impl Serialize for Bytes<'_> {
     fn try_serialize(&self, slice: &WriteableProcessSlice) -> Result<(), Error> {
         let src = self.0;
         if slice.len() < src.len() + 1 { // One byte for length
+            kernel::debug!("[data] dest slice too small: {} < {}", slice.len(), src.len() + 1);
             Err(Error::OutOfMemory)
         } else {
             slice[0..src.len()].copy_from_slice(src);

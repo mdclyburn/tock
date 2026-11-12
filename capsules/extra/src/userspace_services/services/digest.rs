@@ -151,7 +151,7 @@ impl<'a: 'static, const L: usize> DigestData<'a, L> for ServiceInterface<L> {
             Err((ErrorCode::BUSY, data))
         } else {
             if let Some(this) = self.this.get() {
-                let usercall_args: [&dyn Serialize; _] = [&Bytes(data.as_slice())];
+                let usercall_args: [(usize, &dyn Serialize); 1] = [(0, &Bytes(data.as_slice()))];
 
                 let usercall_result = self.userv_access.usercall(
                     this,
@@ -179,7 +179,7 @@ impl<'a: 'static, const L: usize> DigestData<'a, L> for ServiceInterface<L> {
             Err((ErrorCode::BUSY, data))
         } else {
             if let Some(this) = self.this.get() {
-                let usercall_args: [&dyn Serialize; _] = [&Bytes(data.as_slice())];
+                let usercall_args: [(usize, &dyn Serialize); 1] = [(0, &Bytes(data.as_slice()))];
 
                 let usercall_result = self.userv_access.usercall(
                     this,
@@ -252,7 +252,7 @@ impl<'a: 'static, const L: usize> DigestVerify<'a, L> for ServiceInterface<L> {
                     this,
                     ROLE_ID,
                     ops::VERIFY,
-                    Arguments::Extended(0, 0, &[&Bytes(expected_digest_buffer)]),
+                    Arguments::Extended(0, 0, &[(0, &Bytes(expected_digest_buffer))]),
                 );
 
                 if let Err(ec) = usercall_res {

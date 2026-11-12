@@ -39,7 +39,7 @@ pub enum Arguments<'arg, 'slice> {
     /// Short-format call arguments requiring only up to two words.
     Short(usize, usize),
     /// Arguments using up to two words and one or more buffers.
-    Extended(usize, usize, &'slice [&'arg dyn Serialize]),
+    Extended(usize, usize, &'slice [(usize, &'arg dyn Serialize)]),
 }
 
 /// Provides call access to userspace services.
@@ -92,11 +92,13 @@ pub fn place_arguments(
             // placing an argument into each buffer.
             let it = ext_args
                 .iter()
-                .enumerate()
-                .map(|(allow_no, arg)| (userv_kdata.get_readwrite_processbuffer(allow_no), arg));
+                .map(|(allow_no, arg)| (userv_kdata.get_readwrite_processbuffer(*allow_no), arg));
             for (res_allow_buffer, usercall_arg) in it {
                 res_allow_buffer?
-                    .mut_enter(|slice| usercall_arg.try_serialize(slice))
+                    .mut_enter(|slice| {
+                        kernel::debug!("[usercall] serializing into buffer of len {}", slice.len());
+                        usercall_arg.try_serialize(slice)
+                    })
                     .flatten()?;
             }
 

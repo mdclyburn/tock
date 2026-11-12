@@ -162,7 +162,7 @@ pub unsafe fn main() {
     let isle = static_init!(
         capsules_extra::isle::Isle,
         capsules_extra::isle::Isle::new(
-            static_init!(isle_config::FICRBasedIID, isle_config::FICRBasedIID::new(0x5AFE)),
+            static_init!(isle_config::FICRBasedIID, isle_config::FICRBasedIID::new(0xFE5A)),
             board_kernel.create_grant(
                 capsules_extra::isle::DRIVER_NO,
                 &create_capability!(capabilities::MemoryAllocationCapability)),
