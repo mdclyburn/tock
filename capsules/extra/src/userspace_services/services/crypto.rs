@@ -31,7 +31,7 @@ pub mod ops {
 
 pub mod op_argbuffer {
     pub const ENCRYPT_CT_OUTPUT: usize  = 0;
-    pub const ENCRYPT_AAD_OUTPUT: usize = 1;
+    pub const ENCRYPT_TAG_OUTPUT: usize = 1;
 }
 
 // TODO: padding length should come from the userspace service.
@@ -95,9 +95,9 @@ impl AEADProvider for ServiceInterface {
 
         let encrypt_args: [(usize, &dyn Serialize); 4] = [
             (0, &Bytes(in_plaintext)),
-            (3, &Bytes(ckey)),
-            (4, &Bytes(nonce)),
-            (2, &Bytes(in_aad)),
+            (1, &Bytes(in_aad)),
+            (2, &Bytes(ckey)),
+            (3, &Bytes(nonce)),
         ];
 
         // Send request via the userspace service capsule.
@@ -185,10 +185,18 @@ impl UserspaceServiceClient for ServiceInterface {
                         // Copy the ciphertext and the AAD into their respective buffers.
                         let _ = args.result_buffer_n(
                             op_argbuffer::ENCRYPT_CT_OUTPUT,
-                            |ct_slice| ct_slice.copy_to_slice(&mut ct_buf[0..ct_slice.len()]));
+                            |ct_slice| {
+                                let ct_len = ct_slice.get(ct_slice.len()-1).unwrap().get() as usize;
+                                kernel::debug!("[crypto] ct len {}", ct_len);
+                                ct_slice[0..ct_len].copy_to_slice(&mut ct_buf[0..ct_len])
+                            });
                         let _ = args.result_buffer_n(
-                            op_argbuffer::ENCRYPT_AAD_OUTPUT,
-                            |aad_slice| aad_slice.copy_to_slice(&mut aad_buf[0..aad_slice.len()]));
+                            op_argbuffer::ENCRYPT_TAG_OUTPUT,
+                            |aad_slice| {
+                                let tag_len = aad_slice.get(aad_slice.len()-1).unwrap().get() as usize;
+                                kernel::debug!("[crypto] tag len {}", tag_len);
+                                aad_slice[0..tag_len].copy_to_slice(&mut aad_buf[0..tag_len])
+                            });
 
                         // Notify the client of the operation completion.
                         self.client.map(
