@@ -89,7 +89,7 @@ impl AEADProvider for ServiceInterface {
         out_ciphertext: &'static mut [u8; MESSAGE_LEN_MAX],
         out_tag: &'static mut [u8; TAG_LEN_MAX],
         message_len: usize,
-        _aad_len: usize,
+        aad_len: usize,
     ) -> Result<(), (ErrorCode, AEADTuple)> {
         use crate::userspace_services::data::{Bytes, Serialize};
 
@@ -107,7 +107,7 @@ impl AEADProvider for ServiceInterface {
                     userv_client,
                     ROLE_ID,
                     ops::ENCRYPT,
-                    Arguments::Extended(message_len, 0, &encrypt_args));
+                    Arguments::Extended(message_len, aad_len, &encrypt_args));
 
             if invoke_res.is_ok() {
                 // Take ownership of the buffers while the request is outstanding.
@@ -182,20 +182,20 @@ impl UserspaceServiceClient for ServiceInterface {
             if let Ok(args) = args {
                 match current_op {
                     Operation::Encrypt => {
+                        // The ciphertext length and AAD tag length are in the direct return values.
+                        let (ct_len, tag_len) = args.direct_rvals();
+                                kernel::debug!("[crypto] ct len = {}, tag len = {}", ct_len, tag_len);
+
                         // Copy the ciphertext and the AAD into their respective buffers.
                         let _ = args.result_buffer_n(
                             op_argbuffer::ENCRYPT_CT_OUTPUT,
                             |ct_slice| {
-                                let ct_len = ct_slice.get(ct_slice.len()-1).unwrap().get() as usize;
-                                kernel::debug!("[crypto] ct len {}", ct_len);
                                 ct_slice[0..ct_len].copy_to_slice(&mut ct_buf[0..ct_len])
                             });
                         let _ = args.result_buffer_n(
                             op_argbuffer::ENCRYPT_TAG_OUTPUT,
-                            |aad_slice| {
-                                let tag_len = aad_slice.get(aad_slice.len()-1).unwrap().get() as usize;
-                                kernel::debug!("[crypto] tag len {}", tag_len);
-                                aad_slice[0..tag_len].copy_to_slice(&mut aad_buf[0..tag_len])
+                            |tag_slice| {
+                                tag_slice[0..tag_len].copy_to_slice(&mut tag_buf[0..tag_len])
                             });
 
                         // Notify the client of the operation completion.

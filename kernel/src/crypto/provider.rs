@@ -25,7 +25,7 @@ pub const MESSAGE_LEN_MAX: usize = 80;
 pub const AAD_LEN_MAX: usize = 32;
 
 /// Maximum length of the message authentication code tag buffer (<= 16).
-pub const TAG_LEN_MAX: usize = 8;
+pub const TAG_LEN_MAX: usize = 16;
 
 /// Maximum length of the nonce buffer.
 pub const NONCE_LEN_MAX: usize = 16;
