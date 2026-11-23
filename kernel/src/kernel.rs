@@ -1397,103 +1397,183 @@ impl Kernel {
                         descriptors_count,
                     } => {
                         // debug!("[kernel] processing a multiallow");
-                        use crate::processbuffer::ReadableProcessBuffer;
+                        use crate::processbuffer::{WriteableProcessBuffer, WriteableProcessSlice};
+                        const USIZE_BYTES: usize = core::mem::size_of::<usize>();
+                        const DESC_BYTES: usize = USIZE_BYTES * 2;
+                        const RW_BIT: usize = 1 << (usize::BITS - 1);
+
+                        fn decode_descriptor(chunk: &WriteableProcessSlice) -> (usize, usize, bool) {
+                            let mut buf = [0u8; DESC_BYTES];
+                            chunk.copy_to_slice(&mut buf);
+                            let addr =
+                                usize::from_le_bytes(buf[..USIZE_BYTES].try_into().unwrap());
+                            let raw_len =
+                                usize::from_le_bytes(buf[USIZE_BYTES..].try_into().unwrap());
+                            (addr, raw_len & !RW_BIT, (raw_len & RW_BIT) != 0)
+                        }
+
+                        fn encode_descriptor(
+                            chunk: &WriteableProcessSlice,
+                            addr: usize,
+                            len: usize,
+                            is_rw: bool,
+                        ) {
+                            let mut buf = [0u8; DESC_BYTES];
+                            let tagged_len = if is_rw { len | RW_BIT } else { len };
+                            buf[..USIZE_BYTES].copy_from_slice(&addr.to_le_bytes());
+                            buf[USIZE_BYTES..].copy_from_slice(&tagged_len.to_le_bytes());
+                            chunk.copy_from_slice(&buf);
+                        }
+
                         let res = match driver {
-                            Some(driver) => {
-                                // Try to create the buffer containing the allow pointers and lengths.
-                                let descriptors_len = core::mem::size_of::<usize>() * descriptors_count * 2;
-                                // debug!("[kernel] descriptors: {:#x}, {} B ({} items)", descriptors as usize, descriptors_len, descriptors_count);
-                                match process.build_readwrite_process_buffer(descriptors, descriptors_len) {
-                                    Ok(rw_descriptor_pbuf) => {
-                                        // Now, we can read and write the descriptor buffer the application handed to the kernel.
-                                        // Use the access to the buffer here not to swap in a buffer into an existing RW slot,
-                                        // but to build buffers described by the data in the buffer, placing _those_ in the RW and RO slots.
+                            Some(driver) => match descriptors_count.checked_mul(DESC_BYTES) {
+                                Some(descriptors_len) => {
+                                    // Try to create the buffer containing the allow pointers and lengths.
+                                    match process.build_readwrite_process_buffer(
+                                        descriptors,
+                                        descriptors_len,
+                                    ) {
+                                        Ok(rw_descriptor_pbuf) => {
+                                            // Now, we can read and write the descriptor buffer the application handed to the kernel.
+                                            // Swap each validated buffer into the grant in a single pass, writing the previous
+                                            // `(ptr, len)` back into the descriptor slot so any error can roll back `0..failed_idx`.
+                                            match rw_descriptor_pbuf.mut_enter(|descriptors_slice| {
+                                                let apply_buffers =
+                                                    |multi: &mut crate::grant::AllowMulti<'_>| -> SyscallReturn {
+                                                        let mut rw_allow_no = 0usize;
+                                                        let mut ro_allow_no = 0usize;
+                                                        let mut failed: Option<(usize, ErrorCode)> = None;
 
-                                        match rw_descriptor_pbuf.enter(|descriptors_slice| {
-                                            // Check all buffers to ensure they are valid for the allow operation.
-                                            const RW_BIT: usize = 1 << (usize::BITS - 1);
-                                            let mut all_buffers_valid = true;
-                                            for buffer_no in 0..descriptors_count {
-                                                let addr_idx = buffer_no * 8 + 0;    // 0 == ADDR
-                                                let len_idx = buffer_no * 8 + 4;     // 4 == LEN
-                                                let mut read_buffer = [0; 4];
-                                                descriptors_slice[addr_idx..addr_idx + 4]
-                                                    .copy_to_slice(&mut read_buffer);
-                                                let buffer_address = usize::from_le_bytes(read_buffer);
+                                                        for (buffer_no, chunk) in descriptors_slice
+                                                            .chunks(DESC_BYTES)
+                                                            .enumerate()
+                                                        {
+                                                            let (buffer_address, buffer_length, is_rw) =
+                                                                decode_descriptor(chunk);
 
-                                                descriptors_slice[len_idx..len_idx + 4]
-                                                    .copy_to_slice(&mut read_buffer);
-                                                let buffer_length = usize::from_le_bytes(read_buffer);
+                                                            let swap_res = if is_rw {
+                                                                match process.build_readwrite_process_buffer(
+                                                                    buffer_address as *mut u8,
+                                                                    buffer_length,
+                                                                ) {
+                                                                    Ok(in_pbuf) => match multi
+                                                                        .allow_rw(rw_allow_no, in_pbuf)
+                                                                    {
+                                                                        Ok(old_pbuf) => {
+                                                                            rw_allow_no += 1;
+                                                                            let (old_ptr, old_len) =
+                                                                                old_pbuf.consume();
+                                                                            Ok((old_ptr as usize, old_len))
+                                                                        }
+                                                                        Err((_, err)) => Err(err),
+                                                                    },
+                                                                    Err(err) => Err(err),
+                                                                }
+                                                            } else {
+                                                                match process.build_readonly_process_buffer(
+                                                                    buffer_address as *const u8,
+                                                                    buffer_length,
+                                                                ) {
+                                                                    Ok(in_pbuf) => match multi
+                                                                        .allow_ro(ro_allow_no, in_pbuf)
+                                                                    {
+                                                                        Ok(old_pbuf) => {
+                                                                            ro_allow_no += 1;
+                                                                            let (old_ptr, old_len) =
+                                                                                old_pbuf.consume();
+                                                                            Ok((old_ptr as usize, old_len))
+                                                                        }
+                                                                        Err((_, err)) => Err(err),
+                                                                    },
+                                                                    Err(err) => Err(err),
+                                                                }
+                                                            };
 
-                                                let is_rw = (buffer_length & RW_BIT) != 0;
-                                                let buffer_length = buffer_length & !RW_BIT;
-
-                                                if is_rw {
-                                                    // debug!("[kernel] check multiallow: rw @ 0x{:x}, {} B", buffer_address, buffer_length);
-                                                    if process.build_readwrite_process_buffer(
-                                                        buffer_address as *mut u8,
-                                                        buffer_length).is_err() {
-                                                        all_buffers_valid = false;
-                                                        break;
-                                                    }
-                                                } else {
-                                                    // debug!("[kernel] check multiallow: ro @ 0x{:x}, {} B", buffer_address, buffer_length);
-                                                    if process.build_readonly_process_buffer(
-                                                        buffer_address as *mut u8,
-                                                        buffer_length).is_err() {
-                                                        all_buffers_valid = false;
-                                                        break;
-                                                    }
-                                                }
-                                            }
-
-                                            if all_buffers_valid {
-                                                let apply_buffers = |multi: &mut crate::grant::AllowMulti<'_>| {
-                                                    // Track the allow numbers of the buffers being provided.
-                                                    let mut rw_allow_no = 0;
-                                                    let mut ro_allow_no = 0;
-                                                    // Now actually take ownership of the buffers being provided.
-                                                    for buffer_no in 0..descriptors_count {
-                                                        let addr_idx = buffer_no * 8 + 0;    // 0 == ADDR
-                                                        let len_idx = buffer_no * 8 + 4;     // 4 == LEN
-                                                        let mut read_buffer = [0; 4];
-                                                        descriptors_slice[addr_idx..addr_idx + 4]
-                                                            .copy_to_slice(&mut read_buffer);
-                                                        let buffer_address = usize::from_le_bytes(read_buffer);
-
-                                                        descriptors_slice[len_idx..len_idx + 4]
-                                                            .copy_to_slice(&mut read_buffer);
-                                                        let buffer_length = usize::from_le_bytes(read_buffer);
-
-                                                        let buffer_is_rw = (buffer_length & RW_BIT) != 0;
-                                                        let buffer_length = buffer_length & !RW_BIT;
-                                                        if buffer_is_rw {
-                                                            // debug!("[kernel] apply multiallow: rw @ 0x{:x}, {} B", buffer_address, buffer_length);
-                                                            let in_pbuf = process.build_readwrite_process_buffer(
-                                                                buffer_address as *mut u8,
-                                                                buffer_length)
-                                                                .unwrap();
-                                                            let _out_pbuf = multi.allow_rw(rw_allow_no, in_pbuf);
-
-                                                            rw_allow_no += 1;
-                                                        } else {
-                                                            // debug!("[kernel] apply multiallow: ro @ 0x{:x}, {} B", buffer_address, buffer_length);
-                                                            let in_pbuf = process.build_readonly_process_buffer(
-                                                                buffer_address as *mut u8,
-                                                                buffer_length)
-                                                                .unwrap();
-                                                            let _out_pbuf = multi.allow_ro(ro_allow_no, in_pbuf);
-                                                            ro_allow_no += 1;
+                                                            match swap_res {
+                                                                Ok((old_addr, old_len)) => {
+                                                                    encode_descriptor(
+                                                                        chunk, old_addr, old_len,
+                                                                        is_rw,
+                                                                    );
+                                                                }
+                                                                Err(err) => {
+                                                                    failed = Some((buffer_no, err));
+                                                                    break;
+                                                                }
+                                                            }
                                                         }
-                                                    }
-                                                };
+
+                                                        if let Some((failed_idx, err)) = failed {
+                                                            let mut rb_rw_no = 0usize;
+                                                            let mut rb_ro_no = 0usize;
+                                                            for chunk in descriptors_slice
+                                                                .chunks(DESC_BYTES)
+                                                                .take(failed_idx)
+                                                            {
+                                                                let (old_addr, old_len, is_rw) =
+                                                                    decode_descriptor(chunk);
+                                                                if is_rw {
+                                                                    if let Ok(restore_pbuf) = process
+                                                                        .build_readwrite_process_buffer(
+                                                                            old_addr as *mut u8,
+                                                                            old_len,
+                                                                        )
+                                                                    {
+                                                                        if let Ok(new_pbuf) = multi
+                                                                            .allow_rw(
+                                                                                rb_rw_no,
+                                                                                restore_pbuf,
+                                                                            )
+                                                                        {
+                                                                            let (new_ptr, new_len) =
+                                                                                new_pbuf.consume();
+                                                                            encode_descriptor(
+                                                                                chunk,
+                                                                                new_ptr as usize,
+                                                                                new_len,
+                                                                                true,
+                                                                            );
+                                                                        }
+                                                                    }
+                                                                    rb_rw_no += 1;
+                                                                } else {
+                                                                    if let Ok(restore_pbuf) = process
+                                                                        .build_readonly_process_buffer(
+                                                                            old_addr as *const u8,
+                                                                            old_len,
+                                                                        )
+                                                                    {
+                                                                        if let Ok(new_pbuf) = multi
+                                                                            .allow_ro(
+                                                                                rb_ro_no,
+                                                                                restore_pbuf,
+                                                                            )
+                                                                        {
+                                                                            let (new_ptr, new_len) =
+                                                                                new_pbuf.consume();
+                                                                            encode_descriptor(
+                                                                                chunk,
+                                                                                new_ptr as usize,
+                                                                                new_len,
+                                                                                false,
+                                                                            );
+                                                                        }
+                                                                    }
+                                                                    rb_ro_no += 1;
+                                                                }
+                                                            }
+                                                            SyscallReturn::MultiAllowFailure(err)
+                                                        } else {
+                                                            SyscallReturn::Success
+                                                        }
+                                                    };
 
                                                 match crate::grant::allow_multi(
                                                     process,
                                                     driver_number,
                                                     apply_buffers,
                                                 ) {
-                                                    Ok(()) => SyscallReturn::Success,
+                                                    Ok(syscall_ret) => syscall_ret,
                                                     Err((apply_buffers, err @ ErrorCode::NOMEM)) => {
                                                         match try_allocate_grant(driver, process) {
                                                             AllocResult::NewAllocation => {
@@ -1502,30 +1582,39 @@ impl Kernel {
                                                                     driver_number,
                                                                     apply_buffers,
                                                                 ) {
-                                                                    Ok(()) => SyscallReturn::Success,
-                                                                    Err((_, err)) => SyscallReturn::MultiAllowFailure(err),
+                                                                    Ok(syscall_ret) => syscall_ret,
+                                                                    Err((_, err)) => {
+                                                                        SyscallReturn::MultiAllowFailure(
+                                                                            err,
+                                                                        )
+                                                                    }
                                                                 }
                                                             }
-                                                            _ => SyscallReturn::MultiAllowFailure(err),
+                                                            _ => SyscallReturn::MultiAllowFailure(
+                                                                err,
+                                                            ),
                                                         }
                                                     }
-                                                    Err((_, err)) => SyscallReturn::MultiAllowFailure(err),
+                                                    Err((_, err)) => {
+                                                        SyscallReturn::MultiAllowFailure(err)
+                                                    }
                                                 }
-                                            } else {
-                                                SyscallReturn::MultiAllowFailure(ErrorCode::NOMEM)
+                                            }) {
+                                                Ok(syscall_ret) => syscall_ret,
+                                                Err(err) => {
+                                                    SyscallReturn::MultiAllowFailure(err.into())
+                                                }
                                             }
-                                        }) {
-                                            Ok(syscall_ret) => syscall_ret,
-                                            Err(err) => SyscallReturn::MultiAllowFailure(err.into()),
                                         }
-                                    },
 
-                                    // Could not create a valid descriptor buffer from what userspace provided.
-                                    Err(_) => SyscallReturn::MultiAllowFailure(ErrorCode::INVAL),
+                                        // Could not create a valid descriptor buffer from what userspace provided.
+                                        Err(_) => SyscallReturn::MultiAllowFailure(ErrorCode::INVAL),
+                                    }
                                 }
+                                None => SyscallReturn::MultiAllowFailure(ErrorCode::SIZE),
                             },
 
-                            None => SyscallReturn::MultiAllowFailure(ErrorCode::NODEVICE)
+                            None => SyscallReturn::MultiAllowFailure(ErrorCode::NODEVICE),
                         };
 
                         process.set_syscall_return_value(res);
