@@ -493,6 +493,21 @@ impl<'a> EnteredGrantKernelManagedLayout<'a> {
         unsafe { slice::from_raw_parts_mut(self.allow_rw_array, self.get_allow_rw_number()) }
     }
 
+    /// Return mutable access to both the read-only and read-write allow slices
+    /// for this grant.
+    fn get_allow_slices_mut(&mut self) -> (&mut [SavedAllowRo], &mut [SavedAllowRw]) {
+        // # Safety
+        //
+        // Creating an `EnteredGrantKernelManagedLayout` object ensures that the
+        // pointers to both allow arrays are valid, and the two arrays occupy
+        // disjoint regions of the grant allocation.
+        let allow_ro_slice =
+            unsafe { slice::from_raw_parts_mut(self.allow_ro_array, self.get_allow_ro_number()) };
+        let allow_rw_slice =
+            unsafe { slice::from_raw_parts_mut(self.allow_rw_array, self.get_allow_rw_number()) };
+        (allow_ro_slice, allow_rw_slice)
+    }
+
     /// Return slices to the kernel managed upcalls and allow buffers. This
     /// permits using upcalls and allow buffers when a capsule is accessing a
     /// grant.
@@ -925,6 +940,62 @@ pub(crate) fn subscribe(
     }
 }
 
+fn swap_allow_ro(
+    saved_allow_ro_slice: &mut [SavedAllowRo],
+    processid: ProcessId,
+    allow_num: usize,
+    buffer: ReadOnlyProcessBuffer,
+) -> Result<ReadOnlyProcessBuffer, (ReadOnlyProcessBuffer, ErrorCode)> {
+    // Index into the saved slice to get the old value. Use .get in case
+    // userspace passed us a bad allow number.
+    match saved_allow_ro_slice.get_mut(allow_num) {
+        Some(saved) => {
+            // # Safety
+            //
+            // The pointer has already been validated to be within application
+            // memory before storing the values in the saved slice.
+            let old_allow = unsafe { ReadOnlyProcessBuffer::new(saved.ptr, saved.len, processid) };
+
+            // Replace old values with current buffer.
+            let (ptr, len) = buffer.consume();
+            saved.ptr = ptr;
+            saved.len = len;
+
+            // Success!
+            Ok(old_allow)
+        }
+        None => Err((buffer, ErrorCode::NOSUPPORT)),
+    }
+}
+
+fn swap_allow_rw(
+    saved_allow_rw_slice: &mut [SavedAllowRw],
+    processid: ProcessId,
+    allow_num: usize,
+    buffer: ReadWriteProcessBuffer,
+) -> Result<ReadWriteProcessBuffer, (ReadWriteProcessBuffer, ErrorCode)> {
+    // Index into the saved slice to get the old value. Use .get in case
+    // userspace passed us a bad allow number.
+    match saved_allow_rw_slice.get_mut(allow_num) {
+        Some(saved) => {
+            // # Safety
+            //
+            // The pointer has already been validated to be within application
+            // memory before storing the values in the saved slice.
+            let old_allow = unsafe { ReadWriteProcessBuffer::new(saved.ptr, saved.len, processid) };
+
+            // Replace old values with current buffer.
+            let (ptr, len) = buffer.consume();
+            saved.ptr = ptr;
+            saved.len = len;
+
+            // Success!
+            Ok(old_allow)
+        }
+        None => Err((buffer, ErrorCode::NOSUPPORT)),
+    }
+}
+
 /// Stores the specified read-only process buffer in the kernel managed grant
 /// region for this process and driver. The previous read-only process buffer
 /// stored at the same allow_num id is returned.
@@ -949,28 +1020,7 @@ pub(crate) fn allow_ro(
     // and initialized. We are also holding the grant open until _grant_open
     // goes out of scope.
     let saved_allow_ro_slice = layout.get_allow_ro_slice();
-
-    // Index into the saved slice to get the old value. Use .get in case
-    // userspace passed us a bad allow number.
-    match saved_allow_ro_slice.get_mut(allow_num) {
-        Some(saved) => {
-            // # Safety
-            //
-            // The pointer has already been validated to be within application
-            // memory before storing the values in the saved slice.
-            let old_allow =
-                unsafe { ReadOnlyProcessBuffer::new(saved.ptr, saved.len, process.processid()) };
-
-            // Replace old values with current buffer.
-            let (ptr, len) = buffer.consume();
-            saved.ptr = ptr;
-            saved.len = len;
-
-            // Success!
-            Ok(old_allow)
-        }
-        None => Err((buffer, ErrorCode::NOSUPPORT)),
-    }
+    swap_allow_ro(saved_allow_ro_slice, process.processid(), allow_num, buffer)
 }
 
 /// Stores the specified read-write process buffer in the kernel managed grant
@@ -997,28 +1047,58 @@ pub(crate) fn allow_rw(
     // and initialized. We are also holding the grant open until `_grant_open`
     // goes out of scope.
     let saved_allow_rw_slice = layout.get_allow_rw_slice();
+    swap_allow_rw(saved_allow_rw_slice, process.processid(), allow_num, buffer)
+}
 
-    // Index into the saved slice to get the old value. Use .get in case
-    // userspace passed us a bad allow number.
-    match saved_allow_rw_slice.get_mut(allow_num) {
-        Some(saved) => {
-            // # Safety
-            //
-            // The pointer has already been validated to be within application
-            // memory before storing the values in the saved slice.
-            let old_allow =
-                unsafe { ReadWriteProcessBuffer::new(saved.ptr, saved.len, process.processid()) };
+/// Handle passed to the [`allow_multi`] closure to update multiple read-only
+/// and read-write allow slots within a single grant entry.
+pub(crate) struct AllowMulti<'a> {
+    processid: ProcessId,
+    allow_ro: &'a mut [SavedAllowRo],
+    allow_rw: &'a mut [SavedAllowRw],
+}
 
-            // Replace old values with current buffer.
-            let (ptr, len) = buffer.consume();
-            saved.ptr = ptr;
-            saved.len = len;
-
-            // Success!
-            Ok(old_allow)
-        }
-        None => Err((buffer, ErrorCode::NOSUPPORT)),
+impl AllowMulti<'_> {
+    /// Swap a read-only process buffer into `allow_num`, returning the previous
+    /// buffer.
+    pub(crate) fn allow_ro(
+        &mut self,
+        allow_num: usize,
+        buffer: ReadOnlyProcessBuffer,
+    ) -> Result<ReadOnlyProcessBuffer, (ReadOnlyProcessBuffer, ErrorCode)> {
+        swap_allow_ro(self.allow_ro, self.processid, allow_num, buffer)
     }
+
+    /// Swap a read-write process buffer into `allow_num`, returning the previous
+    /// buffer.
+    pub(crate) fn allow_rw(
+        &mut self,
+        allow_num: usize,
+        buffer: ReadWriteProcessBuffer,
+    ) -> Result<ReadWriteProcessBuffer, (ReadWriteProcessBuffer, ErrorCode)> {
+        swap_allow_rw(self.allow_rw, self.processid, allow_num, buffer)
+    }
+}
+
+/// Enter the kernel-managed grant for `process` and `driver_num` once and
+/// invoke `f` to update multiple allow slots. Returns `Err((f, err))` if the
+/// grant could not be entered (e.g., `ErrorCode::NOMEM` when unallocated).
+pub(crate) fn allow_multi<R, F: FnOnce(&mut AllowMulti<'_>) -> R>(
+    process: &dyn Process,
+    driver_num: usize,
+    f: F,
+) -> Result<R, (F, ErrorCode)> {
+    let mut layout = match enter_grant_kernel_managed(process, driver_num) {
+        Ok(val) => val,
+        Err(e) => return Err((f, e)),
+    };
+    let (allow_ro, allow_rw) = layout.get_allow_slices_mut();
+    let mut multi = AllowMulti {
+        processid: process.processid(),
+        allow_ro,
+        allow_rw,
+    };
+    Ok(f(&mut multi))
 }
 
 /// An instance of a grant allocated for a particular process.
