@@ -113,7 +113,8 @@ impl<const N: usize> Registry<N> {
         operation_id: usize,
         args: Arguments,
     ) -> Result<(), ErrorCode> {
-        if let Some(userv_ent) = self.find(userv_role_id) {
+        kernel::config::start_reg_call();
+        let res = if let Some(userv_ent) = self.find(userv_role_id) {
             userv_ent.map_or(Err(ErrorCode::NODEVICE), |userv| {
                 self.userv_data
                     .enter(userv.current_pid, |ad, kad| {
@@ -143,9 +144,11 @@ impl<const N: usize> Registry<N> {
                     .flatten()
             })
         } else {
-            kernel::debug!("[registry] no such userspace service {:x}", userv_role_id);
+            // kernel::debug!("[registry] no such userspace service {:x}", userv_role_id);
             Err(ErrorCode::NODEVICE)
-        }
+        };
+        kernel::config::end_reg_call();
+        res
     }
 }
 
@@ -171,7 +174,7 @@ mod upcall {
 
 impl<const N: usize> SyscallDriver for Registry<N> {
     fn command(&self, command_no: usize, r2: usize, r3: usize, pid: ProcessId) -> CommandReturn {
-        kernel::debug!("[registry] command {:x} - {:x} - {:x}", command_no, r2, r3);
+        // kernel::debug!("[registry] command {:x} - {:x} - {:x}", command_no, r2, r3);
         match (command_no, r2, r3) {
             (command::CHECK, _r2, _r3) => CommandReturn::success(),
 
@@ -184,21 +187,28 @@ impl<const N: usize> SyscallDriver for Registry<N> {
 
             // A userspace operation has completed a previously-requested operation.
             // Retrieve the result and send it to client.
-            (command::USERCALL_RETURN_SUCCESS, rv1, rv2) => self
-                .userv_data
-                .enter(pid, |ad, _kad| mem::take(&mut ad.op_state))
-                .map_err(|_kerr| ErrorCode::FAIL)
-                .and_then(|service_state| {
-                    if let ServiceState::Pending(client) = service_state {
-                        let rv_reader = ReturnReader::new(rv1, rv2, pid, &self.userv_data);
-                        client.usercall_done(Ok(rv_reader));
+            (command::USERCALL_RETURN_SUCCESS, rv1, rv2) => {
+                kernel::config::start_reg_ret();
+                let res = self
+                    .userv_data
+                    .enter(pid, |ad, _kad| mem::take(&mut ad.op_state))
+                    .map_err(|_kerr| ErrorCode::FAIL)
+                    .and_then(|service_state| {
+                        if let ServiceState::Pending(client) = service_state {
+                            let rv_reader = ReturnReader::new(rv1, rv2, pid, &self.userv_data);
+                            kernel::config::pause_reg_ret();
+                            client.usercall_done(Ok(rv_reader));
+                            kernel::config::resume_reg_ret();
 
-                        Ok(())
-                    } else {
-                        Err(ErrorCode::FAIL)
-                    }
-                })
-                .into(),
+                            Ok(())
+                        } else {
+                            Err(ErrorCode::FAIL)
+                        }
+                    })
+                    .into();
+                kernel::config::end_reg_ret();
+                res
+            }
 
             (command::USERCALL_RETURN_FAILURE, errno, rv1) => {
                 // Inform the client that the operation completed in failure.

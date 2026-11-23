@@ -96,7 +96,7 @@ pub fn place_arguments(
             for (res_allow_buffer, usercall_arg) in it {
                 res_allow_buffer?
                     .mut_enter(|slice| {
-                        kernel::debug!("[usercall] serializing into buffer of len {}", slice.len());
+                        // kernel::debug!("[usercall] serializing into buffer of len {}", slice.len());
                         usercall_arg.try_serialize(slice)
                     })
                     .flatten()?;

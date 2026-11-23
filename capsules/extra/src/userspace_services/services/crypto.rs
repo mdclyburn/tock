@@ -92,6 +92,7 @@ impl AEADProvider for ServiceInterface {
         aad_len: usize,
     ) -> Result<(), (ErrorCode, AEADTuple)> {
         use crate::userspace_services::data::{Bytes, Serialize};
+        kernel::config::start_si_prep();
 
         let encrypt_args: [(usize, &dyn Serialize); 4] = [
             (0, &Bytes(in_plaintext)),
@@ -102,12 +103,14 @@ impl AEADProvider for ServiceInterface {
 
         // Send request via the userspace service capsule.
         if let Some(userv_client) = self.self_userv_client.get() {
-                kernel::debug!("[crypto] invoking usercall");
+                // kernel::debug!("[crypto] invoking usercall");
+                kernel::config::pause_si_prep();
                 let invoke_res = self.userv_access.usercall(
                     userv_client,
                     ROLE_ID,
                     ops::ENCRYPT,
                     Arguments::Extended(message_len, aad_len, &encrypt_args));
+                kernel::config::resume_si_prep();
 
             if invoke_res.is_ok() {
                 // Take ownership of the buffers while the request is outstanding.
@@ -120,10 +123,12 @@ impl AEADProvider for ServiceInterface {
                     out_tag,
                 ));
                 self.current_op.set(Operation::Encrypt);
+                kernel::config::end_si_prep();
 
                 Ok(())
             } else {
-                kernel::debug!("[crypto] usercall failed: {:?}", invoke_res);
+                // kernel::debug!("[crypto] usercall failed: {:?}", invoke_res);
+                kernel::config::end_si_prep();
                 Err((ErrorCode::FAIL,
                      (nonce,
                       in_plaintext,
@@ -132,6 +137,7 @@ impl AEADProvider for ServiceInterface {
                       out_tag)))
             }
         } else {
+            kernel::config::end_si_prep();
             Err((ErrorCode::FAIL,
                  (nonce,
                   in_plaintext,
@@ -173,6 +179,7 @@ impl UserspaceServiceClient for ServiceInterface {
         &self,
         args: Result<ReturnReader<'_>, (ErrorCode, ReturnReader<'_>)>,
     ) {
+        kernel::config::start_si_res();
         let (nonce_buf, pt_buf, aad_buf, ct_buf, tag_buf) = self.aead_buffers.take()
         // Should have always taken ownership of AEAD buffers on call to encrypt/decrypt,
         // and should only get one callback from the userspace service.
@@ -184,7 +191,7 @@ impl UserspaceServiceClient for ServiceInterface {
                     Operation::Encrypt => {
                         // The ciphertext length and AAD tag length are in the direct return values.
                         let (ct_len, tag_len) = args.direct_rvals();
-                                kernel::debug!("[crypto] ct len = {}, tag len = {}", ct_len, tag_len);
+                                // kernel::debug!("[crypto] ct len = {}, tag len = {}", ct_len, tag_len);
 
                         // Copy the ciphertext and the AAD into their respective buffers.
                         let _ = args.result_buffer_n(
@@ -198,6 +205,7 @@ impl UserspaceServiceClient for ServiceInterface {
                                 tag_slice[0..tag_len].copy_to_slice(&mut tag_buf[0..tag_len])
                             });
 
+                        kernel::config::end_si_res();
                         // Notify the client of the operation completion.
                         self.client.map(
                             |client| {

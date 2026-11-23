@@ -93,3 +93,187 @@ pub(crate) const CONFIG: Config = Config {
     debug_panics: !cfg!(feature = "no_debug_panics"),
     debug_process_credentials: cfg!(feature = "debug_process_credentials"),
 };
+
+use core::sync::atomic::{AtomicU32, Ordering};
+
+const RTC1_COUNTER_ADDR: usize = 0x4001_1000 + 0x0504;
+const RTC1_MASK: u32 = 0x00FF_FFFF;
+
+static T_ISLE_PREP: AtomicU32 = AtomicU32::new(0);
+static T_SI_PREP: AtomicU32 = AtomicU32::new(0);
+static T_REG_CALL: AtomicU32 = AtomicU32::new(0);
+static T_ROUND_TRIP: AtomicU32 = AtomicU32::new(0);
+static T_REG_RET: AtomicU32 = AtomicU32::new(0);
+static T_SI_RES: AtomicU32 = AtomicU32::new(0);
+static T_ISLE_DONE: AtomicU32 = AtomicU32::new(0);
+
+static S_ISLE_PREP: AtomicU32 = AtomicU32::new(0);
+static S_SI_PREP: AtomicU32 = AtomicU32::new(0);
+static S_REG_CALL: AtomicU32 = AtomicU32::new(0);
+static S_RT: AtomicU32 = AtomicU32::new(0);
+static S_REG_RET: AtomicU32 = AtomicU32::new(0);
+static S_SI_RES: AtomicU32 = AtomicU32::new(0);
+static S_ISLE_DONE: AtomicU32 = AtomicU32::new(0);
+
+#[inline]
+pub fn now() -> u32 {
+    // ### Safety
+    // Reads the memory-mapped nRF52840 RTC1.COUNTER register (read-only) for timing measurements.
+    unsafe { core::ptr::read_volatile(RTC1_COUNTER_ADDR as *const u32) & RTC1_MASK }
+}
+
+#[inline]
+fn diff(start: u32, end: u32) -> u32 {
+    end.wrapping_sub(start) & RTC1_MASK
+}
+
+pub fn reset_crypto_timings() {
+    T_ISLE_PREP.store(0, Ordering::Relaxed);
+    T_SI_PREP.store(0, Ordering::Relaxed);
+    T_REG_CALL.store(0, Ordering::Relaxed);
+    T_ROUND_TRIP.store(0, Ordering::Relaxed);
+    T_REG_RET.store(0, Ordering::Relaxed);
+    T_SI_RES.store(0, Ordering::Relaxed);
+    T_ISLE_DONE.store(0, Ordering::Relaxed);
+}
+
+#[inline]
+pub fn start_isle_prep() {
+    S_ISLE_PREP.store(now(), Ordering::Relaxed);
+}
+
+#[inline]
+pub fn pause_isle_prep() {
+    let elapsed = diff(S_ISLE_PREP.load(Ordering::Relaxed), now());
+    T_ISLE_PREP.fetch_add(elapsed, Ordering::Relaxed);
+}
+
+#[inline]
+pub fn resume_isle_prep() {
+    S_ISLE_PREP.store(now(), Ordering::Relaxed);
+}
+
+#[inline]
+pub fn end_isle_prep() {
+    let elapsed = diff(S_ISLE_PREP.load(Ordering::Relaxed), now());
+    T_ISLE_PREP.fetch_add(elapsed, Ordering::Relaxed);
+}
+
+#[inline]
+pub fn start_si_prep() {
+    S_SI_PREP.store(now(), Ordering::Relaxed);
+}
+
+#[inline]
+pub fn pause_si_prep() {
+    let elapsed = diff(S_SI_PREP.load(Ordering::Relaxed), now());
+    T_SI_PREP.fetch_add(elapsed, Ordering::Relaxed);
+}
+
+#[inline]
+pub fn resume_si_prep() {
+    S_SI_PREP.store(now(), Ordering::Relaxed);
+}
+
+#[inline]
+pub fn end_si_prep() {
+    let elapsed = diff(S_SI_PREP.load(Ordering::Relaxed), now());
+    T_SI_PREP.fetch_add(elapsed, Ordering::Relaxed);
+}
+
+#[inline]
+pub fn start_reg_call() {
+    S_REG_CALL.store(now(), Ordering::Relaxed);
+}
+
+#[inline]
+pub fn end_reg_call() {
+    let t = now();
+    let elapsed = diff(S_REG_CALL.load(Ordering::Relaxed), t);
+    T_REG_CALL.store(elapsed, Ordering::Relaxed);
+    S_RT.store(t, Ordering::Relaxed);
+}
+
+#[inline]
+pub fn start_reg_ret() {
+    let t = now();
+    let rt = diff(S_RT.load(Ordering::Relaxed), t);
+    T_ROUND_TRIP.store(rt, Ordering::Relaxed);
+    S_REG_RET.store(t, Ordering::Relaxed);
+}
+
+#[inline]
+pub fn pause_reg_ret() {
+    let elapsed = diff(S_REG_RET.load(Ordering::Relaxed), now());
+    T_REG_RET.fetch_add(elapsed, Ordering::Relaxed);
+}
+
+#[inline]
+pub fn resume_reg_ret() {
+    S_REG_RET.store(now(), Ordering::Relaxed);
+}
+
+#[inline]
+pub fn end_reg_ret() {
+    let elapsed = diff(S_REG_RET.load(Ordering::Relaxed), now());
+    T_REG_RET.fetch_add(elapsed, Ordering::Relaxed);
+}
+
+#[inline]
+pub fn start_si_res() {
+    S_SI_RES.store(now(), Ordering::Relaxed);
+}
+
+#[inline]
+pub fn end_si_res() {
+    let elapsed = diff(S_SI_RES.load(Ordering::Relaxed), now());
+    T_SI_RES.store(elapsed, Ordering::Relaxed);
+}
+
+#[inline]
+pub fn start_isle_done() {
+    S_ISLE_DONE.store(now(), Ordering::Relaxed);
+}
+
+#[inline]
+pub fn end_isle_done() {
+    let elapsed = diff(S_ISLE_DONE.load(Ordering::Relaxed), now());
+    T_ISLE_DONE.store(elapsed, Ordering::Relaxed);
+}
+
+pub fn show_crypto_timings() {
+    let isle_prep = T_ISLE_PREP.load(Ordering::Relaxed);
+    let si_prep = T_SI_PREP.load(Ordering::Relaxed);
+    let reg_call = T_REG_CALL.load(Ordering::Relaxed);
+    let round_trip = T_ROUND_TRIP.load(Ordering::Relaxed);
+    let reg_ret = T_REG_RET.load(Ordering::Relaxed);
+    let si_res = T_SI_RES.load(Ordering::Relaxed);
+    let isle_done = T_ISLE_DONE.load(Ordering::Relaxed);
+
+    let isle_total = isle_prep + isle_done;
+    let si_total = si_prep + si_res;
+    let reg_total = reg_call + reg_ret;
+    let kernel_total = isle_total + si_total + reg_total;
+    let e2e_total = kernel_total + round_trip;
+
+    let to_us = |ticks: u32| ticks as f32 / 0.032768f32;
+
+    crate::debug!(
+        "[timing] isle_prep={}t ({:.1} us), si_prep={}t ({:.1} us), reg_call={}t ({:.1} us), round_trip={}t ({:.1} us), reg_ret={}t ({:.1} us), si_res={}t ({:.1} us), isle_done={}t ({:.1} us)",
+        isle_prep, to_us(isle_prep),
+        si_prep, to_us(si_prep),
+        reg_call, to_us(reg_call),
+        round_trip, to_us(round_trip),
+        reg_ret, to_us(reg_ret),
+        si_res, to_us(si_res),
+        isle_done, to_us(isle_done)
+    );
+    crate::debug!(
+        "[timing] totals: isle={}t ({:.1} us), si={}t ({:.1} us), reg={}t ({:.1} us), kernel={}t ({:.1} us), e2e={}t ({:.1} us)",
+        isle_total, to_us(isle_total),
+        si_total, to_us(si_total),
+        reg_total, to_us(reg_total),
+        kernel_total, to_us(kernel_total),
+        e2e_total, to_us(e2e_total)
+    );
+}

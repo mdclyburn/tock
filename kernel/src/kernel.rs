@@ -542,8 +542,9 @@ impl Kernel {
                     // memory inaccessible to kernel mode. When switching back
                     // to the kernel, we must first run `disable_app_mpu` before
                     // attempting to access any userspace memory.
-                    process.setup_mpu();
-                    chip.mpu().enable_app_mpu();
+                    // Temporarily disabled for userspace timing measurements (RTC1 MMIO access).
+                    // process.setup_mpu();
+                    // chip.mpu().enable_app_mpu();
 
                     scheduler_timer.arm();
                     let context_switch_reason = process.switch_to();

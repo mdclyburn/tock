@@ -269,7 +269,7 @@ impl Isle {
         let aad_len = self.build_aad(pid, realm_id, is_send)?;
 
         // Construct the nonce.
-        debug!("[isle] constructing nonce");
+        // debug!("[isle] constructing nonce");
         self.app_data.enter(
             pid,
             |ad, _kad| {
@@ -307,7 +307,7 @@ impl Isle {
 
         // Copy the message into the capsule buffer.
         // Assign the right buffer depending on if this is a send or receive.
-        debug!("[isle] copying payload to capsule buffer");
+        // debug!("[isle] copying payload to capsule buffer");
         let (src_buffer, _dst_buffer) = if is_send {
             (&self.pt_buffer, &self.ct_buffer)
         } else {
@@ -322,10 +322,10 @@ impl Isle {
                         // When sending a message, the entire buffer has the message.
                         // When receiving a message, the last TAG_LEN_MAX bytes are the authentication tag bytes.
                         if is_send {
-                            kernel::debug!("[isle] copying bytes to input buffer");
+                            // kernel::debug!("[isle] copying bytes to input buffer");
                             kad.get_readonly_processbuffer(ALLOW_RO_NO_IN_BUFFER)?
                                 .enter(|pbuf| pbuf.copy_to_slice(&mut src_buf[0..pbuf.len()]))?;
-                            kernel::debug!("[isle] copy finished");
+                            // kernel::debug!("[isle] copy finished");
                         } else {
                             kad.get_readonly_processbuffer(ALLOW_RO_NO_IN_BUFFER)?
                                 .enter(
@@ -352,7 +352,7 @@ impl Isle {
                     .flatten()
             })?;
 
-        debug!("[isle] prepare_crypt_op() done (AAD len.: {} B)", aad_len);
+        // debug!("[isle] prepare_crypt_op() done (AAD len.: {} B)", aad_len);
 
         Ok(aad_len)
     }
@@ -460,7 +460,7 @@ impl Isle {
         // Set up pending state here so that there cannot be a race between
         // setting up the pending state and completing the encryption operation.
         // debug!("[isle] setting up pending state");
-        let (raw_message_len, message_len) = self.app_data.enter(
+        let (_raw_message_len, message_len) = self.app_data.enter(
             pid,
             |_ad, kad| {
                 let padding_size = self.aead.padding_size();
@@ -468,14 +468,14 @@ impl Isle {
                     .map(|b| (b.len(), b.len() + (padding_size - b.len() % padding_size)))
             })
             .flatten()?;
-        debug!("[isle] encrypting {} B message ({} B padded)", raw_message_len, message_len);
+        // debug!("[isle] encrypting {} B message ({} B padded)", raw_message_len, message_len);
         self.pending_for.set(PendingState {
             pid,
             message_len: message_len as u8,
         });
 
         // Get the key from the application's grant data.
-        debug!("[isle] fetching ckey");
+        // debug!("[isle] fetching ckey");
         let mut ckey = [0u8; CKEY_LEN_MAX];
         self.app_data.enter(
             pid,
@@ -487,7 +487,8 @@ impl Isle {
             })??;
 
         // Perform the encryption.
-        debug!("[isle] calling encryption provider");
+        // debug!("[isle] calling encryption provider");
+        kernel::config::pause_isle_prep();
         let encrypt_result = self.aead.encrypt(
             &ckey,
             self.nonce_buffer.take().ok_or(Error::AlreadyInUse)?,
@@ -497,6 +498,7 @@ impl Isle {
             self.tag_buffer.take().ok_or(Error::AlreadyInUse)?,
             message_len,
             aad_len);
+        kernel::config::resume_isle_prep();
 
         if let Err((ec, (nonce_buf, pt_buf, aad_buf, ct_buf, tag_buf))) = encrypt_result {
             debug!("[isle] encryption provider failed {:?}", ec);
@@ -630,16 +632,19 @@ impl SyscallDriver for Isle {
                             let pad = self.aead.padding_size();
                             let padding_byte_count = pad - (pt_buffer_len % pad);
 
-                            debug!("[isle] {} >= {} + {} ?",
-                                   ct_buffer_len,
-                                   pt_buffer_len,
-                                   padding_byte_count);
+                            // debug!("[isle] {} >= {} + {} ?",
+                            //        ct_buffer_len,
+                            //        pt_buffer_len,
+                            //        padding_byte_count);
                             if ct_buffer_len >= pt_buffer_len + padding_byte_count {
                                 // Numbers from the network stack are big-endian.
                                 // So, the realm ID is actually in the lower two bytes.
                                 let realm_id = ((dst_host_lower & 0xFFFF) as u16).swap_bytes();
+                                kernel::config::reset_crypto_timings();
+                                kernel::config::start_isle_prep();
                                 let operation_res = self.prepare_crypt_op(pid, realm_id, true)
                                     .and_then(|aad_len| self.encrypt_send(pid, realm_id, aad_len));
+                                kernel::config::end_isle_prep();
                                 match operation_res {
                                     Ok(_msg_len) => CommandReturn::success(),
 
@@ -798,6 +803,7 @@ impl AEADProviderClient for Isle {
         tag_buffer: &'static mut [u8; TAG_LEN_MAX],
     )
     {
+        kernel::config::start_isle_done();
         self.pending_for.map(|current_state| {
             let _enter_result = self.app_data.enter(
                 current_state.pid,
@@ -840,6 +846,8 @@ impl AEADProviderClient for Isle {
         self.tag_buffer.put(Some(tag_buffer));
 
         self.pending_for.clear();
+        kernel::config::end_isle_done();
+        kernel::config::show_crypto_timings();
     }
 
     fn decrypt_done(
