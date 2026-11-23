@@ -97,6 +97,11 @@ pub fn syscall_from_register_arguments_trd104(
             operand: r0,
             arg0: r1.as_usize(),
         }),
+        Ok(SyscallClass::MultiAllow) => Some(Syscall::MultiAllow {
+            driver_number: r0,
+            descriptors: r1.as_capability_ptr().as_ptr::<u8>().cast_mut(),
+            descriptors_count: r2.as_usize(),
+        }),
         Ok(SyscallClass::Exit) => Some(Syscall::Exit {
             which: r0,
             completion_code: r1.as_usize(),
@@ -163,6 +168,11 @@ pub fn syscall_from_register_arguments_trd64bit(
             subdriver_number: r1.as_usize_32bit(),
             allow_address: r2.as_capability_ptr().as_ptr(),
             allow_size: r3.as_usize(),
+        }),
+        Ok(SyscallClass::MultiAllow) => Some(Syscall::MultiAllow {
+            driver_number: r0 as u32 as usize,
+            descriptors: r1.as_capability_ptr().as_ptr::<u8>().cast_mut(),
+            descriptors_count: r2.as_usize(),
         }),
         Ok(SyscallClass::Memop) => Some(Syscall::Memop {
             operand: r0 as u32 as usize,
@@ -261,6 +271,7 @@ impl TRD104SyscallReturn {
             SyscallReturn::AllowReadOnlyFailure(a, b, c) => {
                 TRD104SyscallReturn::AllowReadOnlyFailure(a, b, c)
             }
+            SyscallReturn::MultiAllowFailure(a) => TRD104SyscallReturn::Failure(a),
             SyscallReturn::SubscribeSuccess(a, b) => TRD104SyscallReturn::SubscribeSuccess(a, b),
             SyscallReturn::SubscribeFailure(a, b, c) => {
                 TRD104SyscallReturn::SubscribeFailure(a, b, c)

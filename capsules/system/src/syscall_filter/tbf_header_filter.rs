@@ -92,6 +92,16 @@ impl SyscallFilter for TbfHeaderFilterDefaultAllow {
                 CommandPermissions::Mask(_allowed) => Ok(()),
             },
 
+            syscall::Syscall::MultiAllow {
+                driver_number,
+                descriptors: _,
+                descriptors_count: _,
+            } => match process.get_command_permissions(*driver_number, 0) {
+                CommandPermissions::NoPermsAtAll => Ok(()),
+                CommandPermissions::NoPermsThisDriver => Err(errorcode::ErrorCode::NODEVICE),
+                CommandPermissions::Mask(_allowed) => Ok(()),
+            },
+
             // Non-filterable system calls
             syscall::Syscall::Yield { .. }
             | syscall::Syscall::Memop { .. }

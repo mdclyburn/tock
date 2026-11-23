@@ -93,6 +93,7 @@ pub enum SyscallClass {
     Memop = 5,
     Exit = 6,
     UserspaceReadableAllow = 7,
+    MultiAllow = 8,
 }
 
 // Required as long as no solution to
@@ -111,6 +112,7 @@ impl TryFrom<u8> for SyscallClass {
             5 => Ok(SyscallClass::Memop),
             6 => Ok(SyscallClass::Exit),
             7 => Ok(SyscallClass::UserspaceReadableAllow),
+            8 => Ok(SyscallClass::MultiAllow),
             i => Err(i),
         }
     }
@@ -226,6 +228,16 @@ pub enum Syscall {
         arg0: usize,
     },
 
+    /// Structure representing an invocation of the MultiAllow system call class.
+    MultiAllow {
+        /// The driver identifier.
+        driver_number: usize,
+        /// The addresses of the buffers.
+        descriptors: *mut u8,
+        /// The number of buffers.
+        descriptors_count: usize,
+    },
+
     /// Structure representing an invocation of the Exit system call class.
     Exit {
         /// The exit identifier.
@@ -269,6 +281,11 @@ impl Syscall {
                 allow_address: _,
                 allow_size: _,
             } => Some(driver_number),
+            Syscall::MultiAllow {
+                driver_number,
+                descriptors: _,
+                descriptors_count: _,
+            } => Some(driver_number),
             _ => None,
         }
     }
@@ -307,6 +324,11 @@ impl Syscall {
                 allow_address: _,
                 allow_size: _,
             } => Some(subdriver_number),
+            Syscall::MultiAllow {
+                driver_number: _,
+                descriptors: _,
+                descriptors_count: _,
+            } => Some(0),
             _ => None,
         }
     }
@@ -398,6 +420,8 @@ pub enum SyscallReturn {
     /// to the process.
     AllowReadOnlyFailure(ErrorCode, *const u8, usize),
 
+    MultiAllowFailure(ErrorCode),
+
     /// Subscribe success case, returns the previous upcall function pointer and
     /// application data.
     SubscribeSuccess(*const (), usize),
@@ -447,6 +471,7 @@ impl SyscallReturn {
             SyscallReturn::AllowReadWriteFailure(_, _, _) => false,
             SyscallReturn::UserspaceReadableAllowFailure(_, _, _) => false,
             SyscallReturn::AllowReadOnlyFailure(_, _, _) => false,
+            SyscallReturn::MultiAllowFailure(_) => false,
             SyscallReturn::SubscribeFailure(_, _, _) => false,
             SyscallReturn::YieldWaitFor(_, _, _) => true,
         }
