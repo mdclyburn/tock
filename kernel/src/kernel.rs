@@ -1409,11 +1409,50 @@ impl Kernel {
                                         // Use the access to the buffer here not to swap in a buffer into an existing RW slot,
                                         // but to build buffers described by the data in the buffer, placing _those_ in the RW and RO slots.
 
-                                        // Check all buffers to ensure they are valid for the allow operation.
-                                        let mut all_buffers_valid = true;
-                                        for buffer_no in 0..descriptors_count {
-                                            let res = rw_descriptor_pbuf.enter(
-                                                |descriptors_slice| {
+                                        match rw_descriptor_pbuf.enter(|descriptors_slice| {
+                                            // Check all buffers to ensure they are valid for the allow operation.
+                                            const RW_BIT: usize = 1 << (usize::BITS - 1);
+                                            let mut all_buffers_valid = true;
+                                            for buffer_no in 0..descriptors_count {
+                                                let addr_idx = buffer_no * 8 + 0;    // 0 == ADDR
+                                                let len_idx = buffer_no * 8 + 4;     // 4 == LEN
+                                                let mut read_buffer = [0; 4];
+                                                descriptors_slice[addr_idx..addr_idx + 4]
+                                                    .copy_to_slice(&mut read_buffer);
+                                                let buffer_address = usize::from_le_bytes(read_buffer);
+
+                                                descriptors_slice[len_idx..len_idx + 4]
+                                                    .copy_to_slice(&mut read_buffer);
+                                                let buffer_length = usize::from_le_bytes(read_buffer);
+
+                                                let is_rw = (buffer_length & RW_BIT) != 0;
+                                                let buffer_length = buffer_length & !RW_BIT;
+
+                                                if is_rw {
+                                                    // debug!("[kernel] check multiallow: rw @ 0x{:x}, {} B", buffer_address, buffer_length);
+                                                    if process.build_readwrite_process_buffer(
+                                                        buffer_address as *mut u8,
+                                                        buffer_length).is_err() {
+                                                        all_buffers_valid = false;
+                                                        break;
+                                                    }
+                                                } else {
+                                                    // debug!("[kernel] check multiallow: ro @ 0x{:x}, {} B", buffer_address, buffer_length);
+                                                    if process.build_readonly_process_buffer(
+                                                        buffer_address as *mut u8,
+                                                        buffer_length).is_err() {
+                                                        all_buffers_valid = false;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+
+                                            if all_buffers_valid {
+                                                // Track the allow numbers of the buffers being provided.
+                                                let mut rw_allow_no = 0;
+                                                let mut ro_allow_no = 0;
+                                                // Now actually take ownership of the buffers being provided.
+                                                for buffer_no in 0..descriptors_count {
                                                     let addr_idx = buffer_no * 8 + 0;    // 0 == ADDR
                                                     let len_idx = buffer_no * 8 + 4;     // 4 == LEN
                                                     let mut read_buffer = [0; 4];
@@ -1425,93 +1464,48 @@ impl Kernel {
                                                         .copy_to_slice(&mut read_buffer);
                                                     let buffer_length = usize::from_le_bytes(read_buffer);
 
-                                                    let is_rw = buffer_length & 0b1000_0000 != 0;
-                                                    let buffer_length = buffer_length & 0b0111_1111;
-
-                                                    if is_rw {
-                                                        // debug!("[kernel] check multiallow: rw @ 0x{:x}, {} B", buffer_address, buffer_length);
-                                                        if let Err(_) = process.build_readwrite_process_buffer(
+                                                    let buffer_is_rw = (buffer_length & RW_BIT) != 0;
+                                                    let buffer_length = buffer_length & !RW_BIT;
+                                                    if buffer_is_rw {
+                                                        // debug!("[kernel] apply multiallow: rw @ 0x{:x}, {} B", buffer_address, buffer_length);
+                                                        let in_pbuf = process.build_readwrite_process_buffer(
                                                             buffer_address as *mut u8,
-                                                            buffer_length) {
-                                                            all_buffers_valid = false;
-                                                        }
+                                                            buffer_length)
+                                                            .unwrap();
+                                                        let _out_pbuf = crate::grant::allow_rw(
+                                                            process,
+                                                            driver_number,
+                                                            rw_allow_no,
+                                                            in_pbuf);
+
+                                                        rw_allow_no += 1;
                                                     } else {
-                                                        // debug!("[kernel] check multiallow: ro @ 0x{:x}, {} B", buffer_address, buffer_length);
-                                                        if let Err(_) = process.build_readonly_process_buffer(
+                                                        // debug!("[kernel] apply multiallow: ro @ 0x{:x}, {} B", buffer_address, buffer_length);
+                                                        let in_pbuf = process.build_readonly_process_buffer(
                                                             buffer_address as *mut u8,
-                                                            buffer_length) {
-                                                            all_buffers_valid = false;
-                                                        }
+                                                            buffer_length)
+                                                            .unwrap();
+                                                        let _out_pbuf = crate::grant::allow_ro(
+                                                            process,
+                                                            driver_number,
+                                                            ro_allow_no,
+                                                            in_pbuf);
+                                                        ro_allow_no += 1;
                                                     }
                                                 }
-                                            );
 
-                                            match res {
-                                                Ok(_) => {},
-                                                Err(_) => {
-                                                    all_buffers_valid = false;
-                                                }
+                                                SyscallReturn::Success
+                                            } else {
+                                                SyscallReturn::MultiAllowFailure(ErrorCode::NOMEM)
                                             }
-                                        }
-
-                                        if all_buffers_valid {
-                                            // Track the allow numbers of the buffers being provided.
-                                            let mut rw_allow_no = 0;
-                                            let mut ro_allow_no = 0;
-                                            // Now actually take ownership of the buffers being provided.
-                                            for buffer_no in 0..descriptors_count {
-                                                let _res = rw_descriptor_pbuf.enter(
-                                                    |descriptors_slice| {
-                                                        let addr_idx = buffer_no * 8 + 0;    // 0 == ADDR
-                                                        let len_idx = buffer_no * 8 + 4;     // 4 == LEN
-                                                        let mut read_buffer = [0; 4];
-                                                        descriptors_slice[addr_idx..addr_idx + 4]
-                                                            .copy_to_slice(&mut read_buffer);
-                                                        let buffer_address = usize::from_le_bytes(read_buffer);
-
-                                                        descriptors_slice[len_idx..len_idx + 4]
-                                                            .copy_to_slice(&mut read_buffer);
-                                                        let buffer_length = usize::from_le_bytes(read_buffer);
-
-                                                        let buffer_is_rw = buffer_length & 0b1000_0000 != 0;
-                                                        let buffer_length = buffer_length & 0b0111_1111;
-                                                        if buffer_is_rw {
-                                                            // debug!("[kernel] apply multiallow: rw @ 0x{:x}, {} B", buffer_address, buffer_length);
-                                                            let in_pbuf = process.build_readwrite_process_buffer(
-                                                                buffer_address as *mut u8,
-                                                                buffer_length)
-                                                                .unwrap();
-                                                            let _out_pbuf = crate::grant::allow_rw(
-                                                                process,
-                                                                driver_number,
-                                                                rw_allow_no,
-                                                                in_pbuf);
-
-                                                            rw_allow_no += 1;
-                                                        } else {
-                                                            // debug!("[kernel] apply multiallow: ro @ 0x{:x}, {} B", buffer_address, buffer_length);
-                                                            let in_pbuf = process.build_readonly_process_buffer(
-                                                                buffer_address as *mut u8,
-                                                                buffer_length)
-                                                                .unwrap();
-                                                            let _out_pbuf = crate::grant::allow_ro(
-                                                                process,
-                                                                driver_number,
-                                                                ro_allow_no,
-                                                                in_pbuf);
-                                                            ro_allow_no += 1;
-                                                        }
-                                                    }
-                                                );
-                                            }
-
-                                            SyscallReturn::Success
-                                        } else {
-                                            SyscallReturn::MultiAllowFailure(ErrorCode::NOMEM)
+                                        }) {
+                                            Ok(syscall_ret) => syscall_ret,
+                                            Err(err) => SyscallReturn::MultiAllowFailure(err.into()),
                                         }
                                     },
 
-                                    Err(_) => unimplemented!(),
+                                    // Could not create a valid descriptor buffer from what userspace provided.
+                                    Err(_) => SyscallReturn::MultiAllowFailure(ErrorCode::INVAL),
                                 }
                             },
 
